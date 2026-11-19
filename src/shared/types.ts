@@ -113,4 +113,6 @@ export interface SaveRequest {
   crop: Rect | null
   fileName: string
   saveAs: boolean
+  /** For 4:4:4 recordings: convert to 4:2:0 so Windows' player, phones and the web can play it. */
+  compatible: boolean
 }

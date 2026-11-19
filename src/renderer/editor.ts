@@ -16,6 +16,7 @@ const cropBox = $('crop-box')
 const cropSize = $('crop-size')
 const aspectSel = $<HTMLSelectElement>('aspect')
 const nameInput = $<HTMLInputElement>('name')
+const compat = $<HTMLInputElement>('compat')
 const busy = $('busy')
 const busyTitle = $('busy-title')
 const busyBar = $('busy-bar')
@@ -335,7 +336,7 @@ async function save(saveAs: boolean): Promise<void> {
   if (!src || saving) return
   saving = true
   video.pause()
-  const edited = !isFullRange(keep, duration) || (!!crop && cropOn)
+  const edited = !isFullRange(keep, duration) || (!!crop && cropOn) || (compat.checked && !!src.meta.yuv444)
   showBusy(
     edited ? 'Exporting your edit…' : 'Saving…',
     edited ? 'Re-encoding at the same quality as the recording.' : 'Moving the original — no re-encode, no quality loss.',
@@ -347,7 +348,8 @@ async function save(saveAs: boolean): Promise<void> {
     segments: keep,
     crop: cropOn ? crop : null,
     fileName: nameInput.value,
-    saveAs
+    saveAs,
+    compatible: compat.checked
   })
   saving = false
   if (res.ok) return // The main process closes this window.
@@ -501,6 +503,7 @@ async function init(): Promise<void> {
   duration = m.duration
   keep = [[0, duration]]
   nameInput.value = src.defaultName
+  $('compat-row').hidden = !m.yuv444
   $('dest').textContent = `Saves to ${src.outputDir}`
   $('info').textContent = [
     `${m.width}×${m.height}`,

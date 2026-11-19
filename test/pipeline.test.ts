@@ -154,3 +154,16 @@ test('preview proxy is small 4:2:0 H.264', { timeout: 120000 }, () =>
     assert.match(info, /yuv420p/)
     assert.match(info, /1280x720/)
   }))
+
+test('a 4:4:4 recording converts to a play-everywhere 4:2:0 H.264 file', { timeout: 120000 }, () =>
+  inTemp((dir) => {
+    const src = record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, quality: 'maximum' })
+    assert.match(probe(src), /High 4:4:4/)
+    const out = join(dir, 'compatible.mp4')
+    run(buildExportArgs({
+      input: src, output: out, segments: [[0, 1]], crop: null, hasAudio: false, fps: 30, quality: 'veryhigh', encoder: 'libx264', pixelRate: 0
+    }))
+    const info = probe(out)
+    assert.match(info, /h264 \(High\)/)
+    assert.match(info, /yuv420p\(tv, bt709/)
+  }))

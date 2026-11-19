@@ -160,12 +160,13 @@ export class EditorController {
 
     const segments = req.segments.length ? req.segments : [[0, meta.duration] as [number, number]]
     const crop = cropToPixels(req.crop, meta.width, meta.height)
+    const convert = meta.yuv444 && req.compatible
     try {
-      if (!crop && isFullRange(segments, meta.duration)) {
+      if (!crop && !convert && isFullRange(segments, meta.duration)) {
         // Untouched recording: move it as-is — no re-encode, zero quality loss.
         moveFile(file, target)
       } else {
-        await this.export(file, target, meta, segments, crop)
+        await this.export(file, target, meta, segments, crop, convert)
       }
     } catch (err) {
       rmSync(target, { force: true })
@@ -178,8 +179,10 @@ export class EditorController {
     return { ok: true, path: target }
   }
 
-  private async export(file: string, target: string, meta: RecordingMeta, segments: [number, number][], crop: Rect | null): Promise<void> {
-    const quality = meta.yuv444 ? 'maximum' : 'veryhigh'
+  private async export(
+    file: string, target: string, meta: RecordingMeta, segments: [number, number][], crop: Rect | null, compatible: boolean
+  ): Promise<void> {
+    const quality = meta.yuv444 && !compatible ? 'maximum' : 'veryhigh'
     const s = this.deps.settings()
     const encoder = chooseEncoder(await this.deps.encoders(), s.encoder, quality)
     const w = crop?.width ?? meta.width

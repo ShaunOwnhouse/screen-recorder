@@ -187,7 +187,7 @@ function renderHints(): void {
 
   const hints: Record<Settings['quality'], string> = {
     veryhigh: 'Indistinguishable from the screen for most content. Plays everywhere.',
-    maximum: 'Keeps full colour detail so coloured text and thin lines stay crisp. Larger files; some phones and web players can’t play 4:4:4 — use VLC or a desktop editor.',
+    maximum: 'Sharpest coloured text and thin lines. Won’t play in Windows Media Player, phones or most websites — use VLC, or tick “Make it play everywhere” when saving.',
     high: 'Great quality at roughly half the size of Very high.',
     lossless: 'Bit-for-bit identical to the screen. Very large files.'
   }
