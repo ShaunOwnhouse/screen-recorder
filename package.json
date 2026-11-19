@@ -7,11 +7,14 @@
   "author": "ShaunOwnhouse",
   "license": "MIT",
   "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "test": "node --test test/*.test.ts",
     "dist": "electron-vite build && electron-builder --win"
   },
   "dependencies": {

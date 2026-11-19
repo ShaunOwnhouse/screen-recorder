@@ -10,9 +10,9 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -23,7 +23,7 @@ jobs:
       - run: npm run build
       - run: npx electron-builder --win --publish never
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screen-recorder-windows
           path: dist/*.exe
@@ -32,9 +32,9 @@ jobs:
   mac:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -68,7 +68,7 @@ jobs:
           file node_modules/ffmpeg-static/ffmpeg | tee /dev/stderr | grep -q x86_64
           npx electron-builder --mac --x64 --publish never
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: screen-recorder-mac
           path: dist/*.dmg

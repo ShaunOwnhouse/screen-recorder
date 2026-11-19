@@ -63,7 +63,7 @@ On first recording, macOS asks for **Screen & System Audio Recording** permissio
 
 ## Development
 
-Requires Node.js 22+.
+Requires Node.js 22.18 or newer.
 
 ```bash
 npm install
