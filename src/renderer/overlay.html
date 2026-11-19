@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:"
+    />
+    <title>Select region</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        cursor: crosshair;
+        user-select: none;
+        font: 13px 'Segoe UI', system-ui, sans-serif;
+      }
+      #shade {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.4);
+      }
+      #shade.dragging {
+        background: transparent;
+      }
+      #box {
+        position: fixed;
+        border: 2px solid #ef4444;
+        box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+      }
+      #size {
+        position: absolute;
+        top: -26px;
+        left: -2px;
+        background: #ef4444;
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      #help {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(16, 18, 22, 0.92);
+        color: #e8eaee;
+        padding: 8px 16px;
+        border-radius: 999px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shade"></div>
+    <div id="box" hidden><span id="size"></span></div>
+    <div id="help">Drag to select the area to record · Esc to cancel</div>
+    <script type="module" src="./overlay.ts"></script>
+  </body>
+</html>

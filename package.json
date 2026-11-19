@@ -1,0 +1,28 @@
+{
+  "name": "screen-recorder",
+  "productName": "Screen Recorder",
+  "version": "1.0.0",
+  "description": "High quality HD / 4K screen recorder for Windows",
+  "main": "out/main/index.js",
+  "author": "ShaunOwnhouse",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "dependencies": {
+    "ffmpeg-static": "5.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.6",
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8",
+    "electron-vite": "2.3.0",
+    "typescript": "5.6.3",
+    "vite": "5.4.11"
+  }
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:"
+    />
+    <title>Screen Recorder</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <h1>Screen Recorder</h1>
+        </div>
+        <span id="chip" class="chip">Ready</span>
+      </header>
+
+      <div id="banner" class="banner" hidden></div>
+
+      <section class="hero">
+        <div id="idle-view" class="idle-view">
+          <button id="record" class="record-btn" type="button" aria-label="Start recording">
+            <span class="dot"></span>
+          </button>
+          <div class="hero-text">
+            <strong id="record-label">Start recording</strong>
+            <span id="hotkey-hint" class="muted"></span>
+          </div>
+        </div>
+
+        <div id="rec-view" class="rec-view" hidden>
+          <div class="rec-row">
+            <span class="pulse" aria-hidden="true"></span>
+            <span id="timer" class="timer">00:00</span>
+          </div>
+          <div id="rec-meta" class="rec-meta muted"></div>
+          <div id="rec-warn" class="rec-warn" hidden></div>
+          <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop &amp; save</button>
+        </div>
+      </section>
+
+      <section id="last" class="card last" hidden>
+        <div class="last-info">
+          <span class="label">Last recording</span>
+          <span id="last-name" class="last-name"></span>
+        </div>
+        <div class="last-actions">
+          <button id="play" type="button" class="ghost">Play</button>
+          <button id="reveal" type="button" class="ghost">Show</button>
+        </div>
+      </section>
+
+      <section class="card settings" id="settings">
+        <div class="field">
+          <span class="label">Capture</span>
+          <div class="seg" role="radiogroup" data-key="mode">
+            <button type="button" data-value="fullscreen">Full screen</button>
+            <button type="button" data-value="region">Select region</button>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="label">Display</span>
+          <select id="display"></select>
+        </label>
+
+        <label class="field">
+          <span class="label">Output resolution</span>
+          <select id="resolution">
+            <option value="native">Native — exact pixels, no scaling</option>
+            <option value="1080">1080p (Full HD)</option>
+            <option value="1440">1440p (QHD)</option>
+            <option value="2160">2160p (4K UHD)</option>
+          </select>
+          <span id="res-hint" class="hint"></span>
+        </label>
+
+        <div class="field">
+          <span class="label">Frame rate</span>
+          <div class="seg" role="radiogroup" data-key="fps">
+            <button type="button" data-value="30">30 fps</button>
+            <button type="button" data-value="60">60 fps</button>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="label">Quality</span>
+          <select id="quality">
+            <option value="veryhigh">Very high — visually lossless</option>
+            <option value="high">High — smaller files</option>
+            <option value="lossless">Lossless — huge files, archival</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="label">Encoder</span>
+          <select id="encoder"></select>
+        </label>
+
+        <label class="field">
+          <span class="label">Audio</span>
+          <select id="audio"></select>
+          <span class="hint">For computer sound, enable “Stereo Mix” in Windows sound settings.</span>
+        </label>
+
+        <label class="field row">
+          <span class="label">Show mouse cursor</span>
+          <input id="cursor" type="checkbox" class="toggle" />
+        </label>
+
+        <div class="field">
+          <span class="label">Save to</span>
+          <div class="path-row">
+            <span id="outdir" class="path" title=""></span>
+            <button id="choose-dir" type="button" class="ghost">Change</button>
+            <button id="open-dir" type="button" class="ghost">Open</button>
+          </div>
+        </div>
+      </section>
+
+      <footer id="footer" class="footer muted"></footer>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
