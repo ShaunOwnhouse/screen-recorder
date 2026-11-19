@@ -90,7 +90,11 @@ function redPixels(file, at, region) {
       if (y > y1) y1 = y
     }
   }
-  return { count: n, bbox: n ? { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 } : null }
+  const bbox = n ? { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 } : null
+  // Our UI is a solid red button (the bar's Stop) or ring (the countdown): hundreds of pixels in a block at
+  // least button-sized. A thin strip of red at an edge is something else on the desktop (e.g. an icon).
+  const ui = !!bbox && n >= 300 && bbox.w >= 30 && bbox.h >= 14
+  return { count: n, bbox, ui }
 }
 
 /** Opens the file with Windows' own media stack (the one Media Player and Photos use). */
@@ -310,14 +314,13 @@ async function save(app, editor, name) {
           x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
         const found = redPixels(file, 3, region)
-        const red = found.count
-        const detail = `${red} bright-red UI pixels where the bar was (${JSON.stringify(b)})`
-        if (red >= 20 && process.env.E2E_CAPTURE_EXCLUSION === 'informational') {
+        const detail = `${found.count} bright-red pixels, bbox ${JSON.stringify(found.bbox)}, where the bar was (${JSON.stringify(b)})`
+        if (found.ui && process.env.E2E_CAPTURE_EXCLUSION === 'informational') {
           // CI's virtual display has no graphics card and is captured with the old GDI method, which doesn't
           // honour Windows' "exclude from capture" flag there. Real PCs use Desktop Duplication; check there.
           warn('Maximum whole screen: bar hidden from capture by Windows — NOT VERIFIABLE on this virtual display', detail)
         } else {
-          check('Maximum whole screen: recording bar is NOT in the video', red < 20, detail)
+          check('Maximum whole screen: recording bar is NOT in the video', !found.ui, detail)
         }
       }
       log('recorded with', status.backend, '/', status.encoder)
@@ -368,8 +371,7 @@ async function save(app, editor, name) {
       const full = { x: 0, y: 0, w: evenFloor(Math.round(e.w * display.f)), h: evenFloor(Math.round(e.h * display.f)) }
       const samples = [0.2, 1, 2, 3].map((t) => ({ t, ...redPixels(file, t, full) }))
       log('red pixels over time:', JSON.stringify(samples))
-      const red = samples.find((x) => x.t === 2).count
-      check('Region: no recording-bar pixels anywhere in the video', red < 20, `${red} bright-red UI pixels in the frame; over time ${JSON.stringify(samples)}`)
+      check('Region: no recording-bar or countdown UI anywhere in the video', !samples.some((x) => x.ui), `red pixels over time ${JSON.stringify(samples)}`)
     }
 
     // 5) Cancel during the countdown leaves nothing behind
