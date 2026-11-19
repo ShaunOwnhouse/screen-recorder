@@ -14,6 +14,7 @@ export interface Api {
   playLastRecording(): Promise<void>
   openReview(): Promise<void>
   testAudio(on: boolean): Promise<string[]>
+  fitHeight(height: number): Promise<void>
   onStatus(cb: (status: RecordingStatus) => void): () => void
   onLevels(cb: (levels: AudioLevels) => void): () => void
   onCapsChanged(cb: () => void): () => void
@@ -43,7 +44,7 @@ export interface AudioConfigPayload {
 export interface AudioBridgeApi {
   onStart(fn: (cfg: AudioConfigPayload) => Promise<{ started: string[]; errors: string[] }>): void
   onStop(fn: () => Promise<void>): void
-  onListDevices(fn: () => Promise<MicInfo[]>): void
+  onListDevices(fn: (opts?: { prime?: boolean }) => Promise<MicInfo[]>): void
   pcm(chunk: Float32Array): void
   levels(levels: AudioLevels): void
 }

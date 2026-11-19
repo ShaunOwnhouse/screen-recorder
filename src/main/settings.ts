@@ -18,7 +18,8 @@ function defaults(): Settings {
     outputDir: join(app.getPath('videos'), 'Screen Recordings'),
     systemAudio: true,
     systemVolume: 1,
-    micDevice: null,
+    micEnabled: false,
+    micDevice: 'default',
     micLabel: null,
     micVolume: 1,
     noiseSuppression: true
@@ -30,7 +31,13 @@ let current: Settings | null = null
 export function getSettings(): Settings {
   if (!current) {
     try {
-      current = { ...defaults(), ...JSON.parse(readFileSync(file(), 'utf8')) }
+      const saved = JSON.parse(readFileSync(file(), 'utf8'))
+      // Earlier versions used micDevice: null to mean "no microphone".
+      if (saved.micEnabled === undefined && 'micDevice' in saved) {
+        saved.micEnabled = saved.micDevice !== null
+        saved.micDevice = saved.micDevice ?? 'default'
+      }
+      current = { ...defaults(), ...saved }
     } catch {
       current = defaults()
     }

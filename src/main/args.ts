@@ -5,23 +5,42 @@ export interface DdaTarget {
   output: number
 }
 
+export interface AvfTarget {
+  /** avfoundation device index (or name) of the "Capture screen N" device. */
+  device: number | string
+  /** Request full-colour BGRA frames; null leaves the device default. */
+  pixelFormat: string | null
+}
+
+/** A pipe/socket URL carrying 48 kHz stereo f32le PCM, and the gain to apply to it. */
+export interface AudioInput {
+  url: string
+  volume: number
+}
+
 export interface RecordArgsInput {
-  backend: 'ddagrab' | 'gdigrab'
+  backend: 'ddagrab' | 'gdigrab' | 'avfoundation'
   /** Required for ddagrab: which GPU adapter and output (monitor) to duplicate. */
   dda?: DdaTarget
-  /** Physical pixels. gdigrab: virtual-desktop coords. ddagrab: relative to the output's top-left. */
+  /** Required for avfoundation (macOS). */
+  avf?: AvfTarget
+  /**
+   * Physical pixels. gdigrab: virtual-desktop coords. ddagrab: relative to the output's top-left.
+   * avfoundation: crop relative to the captured screen.
+   */
   rect: Rect
   fps: number
   outputHeight: number | null
   quality: Quality
   encoder: string
-  /** Named pipe / socket carrying 48 kHz stereo f32le PCM, or null for no audio. */
-  audioInput: string | null
+  audio: AudioInput[]
   showCursor: boolean
   outputPath: string
 }
 
-export const HARDWARE_ENCODERS = ['h264_nvenc', 'hevc_nvenc', 'h264_qsv', 'hevc_qsv', 'h264_amf', 'hevc_amf'] as const
+export const HARDWARE_ENCODERS = [
+  'h264_nvenc', 'hevc_nvenc', 'h264_qsv', 'hevc_qsv', 'h264_amf', 'hevc_amf', 'h264_videotoolbox', 'hevc_videotoolbox'
+] as const
 
 export const ENCODER_LABELS: Record<string, string> = {
   libx264: 'CPU (x264)',
@@ -30,7 +49,9 @@ export const ENCODER_LABELS: Record<string, string> = {
   h264_qsv: 'Intel H.264',
   hevc_qsv: 'Intel HEVC',
   h264_amf: 'AMD H.264',
-  hevc_amf: 'AMD HEVC'
+  hevc_amf: 'AMD HEVC',
+  h264_videotoolbox: 'Apple H.264',
+  hevc_videotoolbox: 'Apple HEVC'
 }
 
 /** Encoders that can be asked for full 4:4:4 chroma (hardware ones are also probed at runtime). */
@@ -87,6 +108,15 @@ export function encoderArgs(encoder: string, quality: Quality, pixelRate: number
       return ['-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', String(q), '-qp_p', String(q), '-qp_b', String(q)]
     case 'hevc_amf':
       return ['-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', hevcQ, '-qp_p', hevcQ, '-tag:v', 'hvc1']
+    case 'h264_videotoolbox':
+    case 'hevc_videotoolbox': {
+      // VideoToolbox constant quality is 1–100 (higher = better).
+      const vq = { high: 65, veryhigh: 75, maximum: 85 }[quality]
+      return [
+        '-c:v', encoder, '-q:v', String(vq), '-realtime', '1', '-allow_sw', '0',
+        ...(encoder === 'hevc_videotoolbox' ? ['-tag:v', 'hvc1'] : ['-profile:v', 'high'])
+      ]
+    }
     default: {
       // CRF fixes the quality; a faster preset only costs file size, which keeps 4K60 real-time on a CPU.
       const preset = pixelRate > 1920 * 1080 * 60 ? 'superfast' : 'veryfast'
@@ -109,6 +139,18 @@ function audioInputArgs(source: string): string[] {
   return ['-f', 'f32le', '-ar', String(AUDIO_RATE), '-ac', '2', '-thread_queue_size', '4096', '-i', source]
 }
 
+/** Audio graph: one untouched source maps straight through; otherwise apply gains and mix. */
+function audioGraph(inputs: AudioInput[], firstIndex: number): { graph: string | null; map: string | null } {
+  if (!inputs.length) return { graph: null, map: null }
+  if (inputs.length === 1 && inputs[0].volume === 1) return { graph: null, map: `${firstIndex}:a` }
+  const legs = inputs.map((a, i) => `[${firstIndex + i}:a]volume=${a.volume.toFixed(2)}[a${i}]`)
+  const mix =
+    inputs.length === 1
+      ? '[a0]alimiter=limit=0.95[aout]'
+      : `${inputs.map((_, i) => `[a${i}]`).join('')}amix=inputs=${inputs.length}:duration=longest:normalize=0,alimiter=limit=0.95[aout]`
+  return { graph: [...legs, mix].join(';'), map: '[aout]' }
+}
+
 export function buildRecordArgs(o: RecordArgsInput): string[] {
   const w = even(o.rect.width)
   const h = even(o.rect.height)
@@ -118,7 +160,8 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
 
   const args = ['-hide_banner', '-loglevel', 'warning', '-nostats', '-y']
   const filters: string[] = []
-  let audioIndex = 0
+  let videoLabel = '[0:v]'
+  let audioIndex = 1
 
   if (o.backend === 'ddagrab') {
     if (!o.dda) throw new Error('ddagrab needs an adapter/output target')
@@ -129,27 +172,38 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
       'hwdownload',
       'format=bgra'
     )
+    videoLabel = ''
+    audioIndex = 0
+  } else if (o.backend === 'avfoundation') {
+    if (!o.avf) throw new Error('avfoundation needs a screen device')
+    args.push(
+      '-f', 'avfoundation', '-capture_cursor', cursor, '-capture_mouse_clicks', '0', '-framerate', String(o.fps),
+      ...(o.avf.pixelFormat ? ['-pixel_format', o.avf.pixelFormat] : []),
+      '-thread_queue_size', '1024', '-i', `${o.avf.device}:none`
+    )
+    // avfoundation always captures the whole screen; regions are cropped out of it.
+    filters.push(`crop=${w}:${h}:${o.rect.x}:${o.rect.y}`)
   } else {
     args.push(
       '-f', 'gdigrab', '-thread_queue_size', '1024', '-framerate', String(o.fps), '-draw_mouse', cursor,
       '-offset_x', String(o.rect.x), '-offset_y', String(o.rect.y), '-video_size', `${w}x${h}`, '-i', 'desktop'
     )
-    audioIndex = 1
   }
 
-  if (o.audioInput) args.push(...audioInputArgs(o.audioInput))
+  for (const a of o.audio) args.push(...audioInputArgs(a.url))
 
   const size = out.height !== h ? `w=${out.width}:h=${out.height}:flags=lanczos:` : ''
   // Tag and convert as BT.709 so colours don't shift in players that assume HD colourimetry.
   filters.push(`scale=${size}out_color_matrix=bt709:out_range=tv`, `format=${pixelFormatFor(encoder, o.quality)}`)
-  const graph = o.backend === 'ddagrab' ? `${filters.join(',')}[v]` : `[0:v]${filters.join(',')}[v]`
+  const audio = audioGraph(o.audio, audioIndex)
+  const graph = [`${videoLabel}${filters.join(',')}[v]`, audio.graph].filter(Boolean).join(';')
 
   args.push('-filter_complex', graph, '-map', '[v]')
-  if (o.audioInput) args.push('-map', `${audioIndex}:a`)
+  if (audio.map) args.push('-map', audio.map)
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
   args.push(...encoderArgs(encoder, o.quality, out.width * out.height * o.fps), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
-  if (o.audioInput) args.push(...AUDIO_ENCODE)
+  if (audio.map) args.push(...AUDIO_ENCODE)
   // Fragmented MP4 stays playable up to the last keyframe if the app or PC crashes mid-recording.
   args.push('-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof')
   args.push('-stats_period', '1', '-progress', 'pipe:1', o.outputPath)

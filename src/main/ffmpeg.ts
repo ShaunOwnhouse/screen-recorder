@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { app } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import { buildEncoderProbeArgs, ENCODER_LABELS, HARDWARE_ENCODERS, YUV444_CAPABLE } from './args.ts'
+import { parseAvfoundationScreens } from './parse.ts'
 import type { EncoderInfo, Quality } from '../shared/types.ts'
 
 export function ffmpegPath(): string {
@@ -65,5 +66,12 @@ export function chooseEncoder(available: EncoderInfo[], requested: string, quali
   const usable = available.filter((e) => !needs444 || e.yuv444)
   if (requested !== 'auto' && usable.some((e) => e.id === requested)) return requested
   const ids = usable.map((e) => e.id)
-  return ['h264_nvenc', 'h264_qsv', 'h264_amf', 'hevc_nvenc'].find((e) => ids.includes(e)) ?? 'libx264'
+  return ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'hevc_nvenc'].find((e) => ids.includes(e)) ?? 'libx264'
+}
+
+/** macOS: "Capture screen N" → avfoundation device index (cameras are numbered first). */
+export async function avfoundationScreens(): Promise<Map<number, number>> {
+  if (process.platform !== 'darwin') return new Map()
+  const { stderr } = await runFfmpeg(['-hide_banner', '-f', 'avfoundation', '-list_devices', 'true', '-i', ''], 15000)
+  return parseAvfoundationScreens(stderr)
 }

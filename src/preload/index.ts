@@ -19,6 +19,7 @@ const api: Api = {
   playLastRecording: () => ipcRenderer.invoke('shell:playLast'),
   openReview: () => ipcRenderer.invoke('rec:review'),
   testAudio: (on) => ipcRenderer.invoke('audio:test', on),
+  fitHeight: (height) => ipcRenderer.invoke('window:fit', height),
   onStatus: (cb) => subscribe('rec:status', cb),
   onLevels: (cb) => subscribe('audio:levels', cb),
   onCapsChanged: (cb) => subscribe('caps:changed', () => cb())

@@ -15,8 +15,9 @@ export interface Settings {
   outputDir: string
   systemAudio: boolean
   systemVolume: number
-  /** A microphone deviceId, 'default', or null for no microphone. */
-  micDevice: string | null
+  micEnabled: boolean
+  /** A microphone deviceId, or 'default' for the Windows default microphone. */
+  micDevice: string
   micLabel: string | null
   micVolume: number
   noiseSuppression: boolean

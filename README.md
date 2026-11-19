@@ -1,6 +1,6 @@
 # Screen Recorder
 
-A Windows screen recorder that keeps full HD, 1440p and 4K quality all the way to the saved file.
+A screen recorder for Windows and macOS that keeps full HD, 1440p and 4K quality all the way to the saved file.
 
 ## Why the output stays sharp
 
@@ -28,18 +28,38 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 
   Unedited saves are moved as-is, with no re-encode. Edited saves are re-encoded at the original quality.
 - Unsaved recordings survive app restarts and crashes and wait for review
-- `Ctrl+Shift+R` global hotkey to start and stop
+- `Ctrl+Shift+R` (Windows) / `Cmd+Shift+R` (macOS) global hotkey to start and stop
+- Compact window: quick choices (screen, whole screen or region, audio on/off) sit under the record button, and everything else lives in a collapsible **Settings** section
 - Tray icon that shows when you're recording
 - The control window never appears in your recordings
 
 ## Download
 
-Every push to `main` builds the app on GitHub Actions. Open the **Actions** tab, select the latest **Build Windows app** run, and download `screen-recorder-windows`. It contains:
+Every push to `main` builds both apps on GitHub Actions. Open the **Actions** tab and select the latest **Build apps** run.
+
+**Windows**: download `screen-recorder-windows`. It contains:
 
 - `Screen Recorder-Setup-<version>.exe`: installer
 - `Screen Recorder-Portable-<version>.exe`: runs without installing
 
 The app isn't code-signed, so Windows SmartScreen may warn on first launch. Click **More info → Run anyway**.
+
+**macOS** (11 Big Sur or later): download `screen-recorder-mac`. Use `…-mac-arm64.dmg` on Apple Silicon (M1 or later) and `…-mac-x64.dmg` on Intel Macs. Open the DMG and drag **Screen Recorder** into **Applications**.
+
+The app isn't notarised by Apple yet, so the first launch is blocked. Try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. If macOS says the app "is damaged", run this once in Terminal:
+
+```bash
+xattr -cr "/Applications/Screen Recorder.app"
+```
+
+On first recording, macOS asks for **Screen & System Audio Recording** permission (and **Microphone**, if you turn it on). After granting screen permission, quit and reopen the app.
+
+| | Windows | macOS |
+| --- | --- | --- |
+| Capture | Desktop Duplication on every monitor | AVFoundation, every display |
+| Hardware encoding | NVIDIA / Intel / AMD | Apple VideoToolbox |
+| Computer sound | Built in | macOS 13 Ventura or later |
+| Microphone | Yes | Yes |
 
 ## Development
 
@@ -60,5 +80,6 @@ npm run dist       # build the Windows installer into dist/
 | `src/main/displays.ts` | Maps each monitor to its DXGI adapter/output for Desktop Duplication |
 | `src/main/audio.ts` | Computer-sound + mic capture, streamed to FFmpeg over a named pipe |
 | `src/main/editor.ts` | Review window: save / save as / discard, trim + crop export |
+| `src/main/mac-helper.ts`, `native/mac/MacHelper.swift` | macOS helper: display order for AVFoundation and computer sound via ScreenCaptureKit |
 | `src/main/index.ts` | Electron app: windows, tray, hotkey, region selection |
 | `src/renderer/` | Control panel, review editor, region overlay, audio capture page |

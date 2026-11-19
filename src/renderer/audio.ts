@@ -109,13 +109,15 @@ async function start(cfg: AudioConfigPayload): Promise<{ started: string[]; erro
   return { started, errors }
 }
 
-async function listDevices(): Promise<{ id: string; label: string }[]> {
+async function listDevices(opts: { prime?: boolean } | undefined): Promise<{ id: string; label: string }[]> {
   // Device labels are only exposed after microphone access has been granted once.
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: true })
-    s.getTracks().forEach((t) => t.stop())
-  } catch {
-    // Still list devices; labels may be generic.
+  if (opts?.prime !== false) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true })
+      s.getTracks().forEach((t) => t.stop())
+    } catch {
+      // Still list devices; labels may be generic.
+    }
   }
   const devices = await navigator.mediaDevices.enumerateDevices()
   return devices
@@ -125,4 +127,4 @@ async function listDevices(): Promise<{ id: string; label: string }[]> {
 
 bridge.onStart((cfg) => start(cfg))
 bridge.onStop(() => stop())
-bridge.onListDevices(() => listDevices())
+bridge.onListDevices((opts) => listDevices(opts))

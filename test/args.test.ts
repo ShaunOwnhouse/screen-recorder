@@ -4,7 +4,7 @@ import {
   buildExportArgs, buildRecordArgs, cropToPixels, effectiveEncoder, encoderArgs, even, outputSize, type RecordArgsInput
 } from '../src/main/args.ts'
 import { matchOutput, parseDxgiOutputs } from '../src/main/displays.ts'
-import { parseMediaInfo, parseRange, ProgressParser } from '../src/main/parse.ts'
+import { parseAvfoundationScreens, parseMediaInfo, parseRange, ProgressParser } from '../src/main/parse.ts'
 import { isFullRange, keepOnly, playablePosition, removeRange, totalDuration } from '../src/shared/segments.ts'
 
 const base: RecordArgsInput = {
@@ -14,7 +14,7 @@ const base: RecordArgsInput = {
   outputHeight: null,
   quality: 'veryhigh',
   encoder: 'libx264',
-  audioInput: null,
+  audio: [],
   showCursor: true,
   outputPath: 'out.mp4'
 }
@@ -54,15 +54,48 @@ test('ddagrab binds to the monitor’s own GPU adapter and output', () => {
   )
 })
 
-test('mixed audio is read from the pipe and mapped (index depends on capture input)', () => {
-  const gdi = buildRecordArgs({ ...base, audioInput: '\\\\.\\pipe\\a' })
+test('one pre-mixed audio pipe maps straight through (index depends on capture input)', () => {
+  const pipe = [{ url: '\\\\.\\pipe\\a', volume: 1 }]
+  const gdi = buildRecordArgs({ ...base, audio: pipe })
   assert.equal(after(gdi, '-f'), 'gdigrab')
   assert.ok(gdi.includes('f32le'))
   assert.ok(gdi.includes('1:a'))
   assert.equal(after(gdi, '-c:a'), 'aac')
 
-  const dda = buildRecordArgs({ ...base, backend: 'ddagrab', dda: { adapter: 0, output: 0 }, audioInput: '\\\\.\\pipe\\a' })
+  const dda = buildRecordArgs({ ...base, backend: 'ddagrab', dda: { adapter: 0, output: 0 }, audio: pipe })
   assert.ok(dda.includes('0:a'))
+})
+
+test('two audio sources (macOS mic + computer sound) are gain-adjusted and mixed', () => {
+  const args = buildRecordArgs({
+    ...base,
+    audio: [
+      { url: 'unix:/tmp/mic.sock', volume: 1 },
+      { url: 'unix:/tmp/sys.sock', volume: 0.5 }
+    ]
+  })
+  assert.match(
+    after(args, '-filter_complex')!,
+    /;\[1:a\]volume=1\.00\[a0\];\[2:a\]volume=0\.50\[a1\];\[a0\]\[a1\]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0\.95\[aout\]$/
+  )
+  assert.equal(args[args.lastIndexOf('-map') + 1], '[aout]')
+})
+
+test('macOS capture uses avfoundation and crops regions out of the full screen', () => {
+  const args = buildRecordArgs({
+    ...base,
+    backend: 'avfoundation',
+    avf: { device: 3, pixelFormat: 'bgr0' },
+    rect: { x: 200, y: 100, width: 1601, height: 901 },
+    encoder: 'h264_videotoolbox'
+  })
+  assert.equal(after(args, '-f'), 'avfoundation')
+  assert.equal(after(args, '-pixel_format'), 'bgr0')
+  assert.equal(after(args, '-i'), '3:none')
+  assert.match(after(args, '-filter_complex')!, /^\[0:v\]crop=1600:900:200:100,scale=/)
+  assert.equal(after(args, '-c:v'), 'h264_videotoolbox')
+  assert.equal(after(args, '-q:v'), '75')
+  assert.ok(!buildRecordArgs({ ...base, backend: 'avfoundation', avf: { device: 1, pixelFormat: null } }).includes('-pixel_format'))
 })
 
 test('maximum quality is 4:4:4 and falls back to x264 for encoders without it', () => {
@@ -150,6 +183,20 @@ test('media info is read from ffmpeg -i output', () => {
       '  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 256 kb/s\n'
   )
   assert.deepEqual(info, { width: 3840, height: 2160, fps: 60, duration: 62.5, yuv444: true, hasAudio: true })
+})
+
+test('avfoundation screen devices are found after cameras', () => {
+  const screens = parseAvfoundationScreens(
+    '[AVFoundation indev @ 0x1] AVFoundation video devices:\n' +
+      '[AVFoundation indev @ 0x1] [0] FaceTime HD Camera\n' +
+      '[AVFoundation indev @ 0x1] [1] Capture screen 0\n' +
+      '[AVFoundation indev @ 0x1] [2] Capture screen 1\n' +
+      '[AVFoundation indev @ 0x1] AVFoundation audio devices:\n' +
+      '[AVFoundation indev @ 0x1] [0] MacBook Pro Microphone\n'
+  )
+  assert.equal(screens.get(0), 1)
+  assert.equal(screens.get(1), 2)
+  assert.equal(screens.size, 2)
 })
 
 test('byte ranges for video seeking', () => {

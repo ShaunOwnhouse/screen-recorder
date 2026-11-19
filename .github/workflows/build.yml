@@ -1,4 +1,4 @@
-name: Build Windows app
+name: Build apps
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,4 +27,47 @@ jobs:
         with:
           name: screen-recorder-windows
           path: dist/*.exe
+          if-no-files-found: error
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Build native helper (universal)
+        run: |
+          mkdir -p build resources/mac
+          for arch in arm64 x86_64; do
+            swiftc -O -target $arch-apple-macos11.0 \
+              -Xlinker -weak_framework -Xlinker ScreenCaptureKit \
+              native/mac/MacHelper.swift -o build/mac-helper-$arch
+          done
+          lipo -create build/mac-helper-arm64 build/mac-helper-x86_64 -output resources/mac/mac-helper
+          codesign --force --sign - resources/mac/mac-helper
+          resources/mac/mac-helper displays
+
+      - run: npm run build
+
+      - name: Package Apple Silicon
+        run: npx electron-builder --mac --arm64 --publish never
+
+      - name: Package Intel
+        run: |
+          npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+          file node_modules/ffmpeg-static/ffmpeg
+          npx electron-builder --mac --x64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screen-recorder-mac
+          path: dist/*.dmg
           if-no-files-found: error

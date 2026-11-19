@@ -1,14 +1,15 @@
 import { mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
-  app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray,
-  type Display
+  app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, shell,
+  systemPreferences, Tray, type Display
 } from 'electron'
-import { buildRemuxArgs, type RecordArgsInput } from './args.ts'
+import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts'
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
 import { EditorController } from './editor.ts'
-import { chooseEncoder, detectFeatures, runFfmpeg } from './ffmpeg.ts'
+import { avfoundationScreens, chooseEncoder, detectFeatures, runFfmpeg } from './ffmpeg.ts'
+import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
 import { listPending, pendingDir, recoverInterrupted, resolvePending } from './pending.ts'
 import { Recorder } from './recorder.ts'
@@ -18,6 +19,9 @@ import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.
 const HOTKEY = 'CommandOrControl+Shift+R'
 const RESOURCES = join(__dirname, '../../resources')
 const ICON = join(RESOURCES, 'icon.png')
+const PANEL_WIDTH = 460
+const IS_MAC = process.platform === 'darwin'
+type Attempt = Omit<RecordArgsInput, 'outputPath'>
 type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'audio.html'
 
 registerMediaScheme()
@@ -75,8 +79,9 @@ function openReview(): void {
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 460,
-    height: Math.min(1000, screen.getPrimaryDisplay().workAreaSize.height - 40),
+    width: PANEL_WIDTH,
+    height: 640,
+    useContentSize: true,
     resizable: false,
     maximizable: false,
     show: false,
@@ -120,10 +125,16 @@ function hotkeyLabel(): string {
   return HOTKEY.replace('CommandOrControl', process.platform === 'darwin' ? 'Cmd' : 'Ctrl')
 }
 
+function trayImage(recording: boolean): Electron.NativeImage {
+  // macOS menu bar icons are 16pt "template" images that adapt to light/dark menu bars.
+  if (IS_MAC) return nativeImage.createFromPath(join(RESOURCES, recording ? 'mac/trayRec.png' : 'mac/trayTemplate.png'))
+  return nativeImage.createFromPath(join(RESOURCES, recording ? 'tray-rec.png' : 'tray-idle.png'))
+}
+
 function updateTray(): void {
   if (!tray) return
   const recording = recorder.getStatus().state === 'recording'
-  tray.setImage(nativeImage.createFromPath(join(RESOURCES, recording ? 'tray-rec.png' : 'tray-idle.png')))
+  tray.setImage(trayImage(recording))
   tray.setToolTip(recording ? 'Screen Recorder — recording' : 'Screen Recorder')
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -137,8 +148,8 @@ function updateTray(): void {
 }
 
 function createTray(): void {
-  tray = new Tray(nativeImage.createFromPath(join(RESOURCES, 'tray-idle.png')))
-  tray.on('click', showMainWindow)
+  tray = new Tray(trayImage(false))
+  if (!IS_MAC) tray.on('click', showMainWindow)
   updateTray()
 }
 
@@ -171,9 +182,11 @@ async function listDisplays(): Promise<DisplayInfo[]> {
 
 async function getCapabilities(refresh = false): Promise<Capabilities> {
   if (refresh) invalidateDxgiOutputs()
-  const [features, displays, microphones] = await Promise.all([detectFeatures(refresh), listDisplays(), audio.listMicrophones()])
+  // On macOS, only read mic names once access is granted so the app doesn't prompt at launch.
+  const primeMics = !IS_MAC || systemPreferences.getMediaAccessStatus('microphone') === 'granted'
+  const [features, displays, microphones] = await Promise.all([detectFeatures(refresh), listDisplays(), audio.listMicrophones(primeMics)])
   return {
-    platformSupported: process.platform === 'win32',
+    platformSupported: process.platform === 'win32' || IS_MAC,
     ffmpegVersion: features.version,
     ddagrab: features.ddagrab,
     displays,
@@ -204,6 +217,8 @@ function selectRegion(display: Display): Promise<Rect | null> {
       fullscreenable: false,
       hasShadow: false,
       show: false,
+      // macOS otherwise keeps windows below the menu bar, leaving that strip unselectable.
+      enableLargerThanScreen: true,
       webPreferences: { preload: join(__dirname, '../preload/overlay.js') }
     })
     win.setAlwaysOnTop(true, 'screen-saver')
@@ -239,7 +254,7 @@ function timestamp(): string {
 }
 
 async function audioConfig(s: Settings): Promise<AudioConfig> {
-  let mic = s.micDevice
+  let mic: string | null = s.micEnabled ? s.micDevice : null
   if (mic && mic !== 'default') {
     // Device ids can change when a headset is re-plugged; fall back to matching by name.
     const mics = await audio.listMicrophones()
@@ -254,12 +269,68 @@ function describeAudio(started: string[]): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
+/** macOS asks for Screen Recording permission once; recording can't work until it's granted. */
+async function ensureMacPermissions(s: Settings): Promise<void> {
+  if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+    // Asking for sources registers the app and shows the macOS prompt the first time.
+    await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }).catch(() => [])
+    if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+      void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+      throw new Error(
+        'Screen Recorder needs permission to record your screen. Turn it on in System Settings › Privacy & Security › ' +
+          'Screen & System Audio Recording, then quit and reopen Screen Recorder.'
+      )
+    }
+  }
+  if (s.micEnabled) await systemPreferences.askForMediaAccess('microphone')
+}
+
+function windowsAttempts(base: Omit<Attempt, 'backend' | 'rect'>, s: Settings, display: Display, rect: Rect, ddagrab: boolean, outputs: Awaited<ReturnType<typeof dxgiOutputs>>): Attempt[] {
+  const attempts: Attempt[] = []
+  const output = ddagrab ? matchOutput(outputs, toPhysical(display.bounds)) : null
+  if (output && s.backend !== 'gdigrab') {
+    attempts.push({
+      ...base,
+      backend: 'ddagrab',
+      dda: { adapter: output.adapter, output: output.output },
+      rect: { x: Math.max(0, rect.x - output.left), y: Math.max(0, rect.y - output.top), width: rect.width, height: rect.height }
+    })
+  }
+  attempts.push({ ...base, backend: 'gdigrab', rect })
+  if (base.encoder !== 'libx264') attempts.push({ ...base, backend: 'gdigrab', rect, encoder: 'libx264' })
+  return attempts
+}
+
+async function macAttempts(base: Omit<Attempt, 'backend' | 'rect'>, display: Display, dipRect: Rect): Promise<Attempt[]> {
+  const [order, screens] = await Promise.all([macDisplayOrder(), avfoundationScreens()])
+  const all = screen.getAllDisplays()
+  const primary = screen.getPrimaryDisplay()
+  // Without the helper, assume FFmpeg's order: main display first, then the rest.
+  const fallback = [primary, ...all.filter((d) => d.id !== primary.id)].map((d) => d.id)
+  const n = Math.max(0, (order ?? fallback).indexOf(display.id))
+  const device = screens.get(n) ?? `Capture screen ${n}`
+  const f = display.scaleFactor
+  const rect = {
+    x: Math.round((dipRect.x - display.bounds.x) * f),
+    y: Math.round((dipRect.y - display.bounds.y) * f),
+    width: Math.round(dipRect.width * f),
+    height: Math.round(dipRect.height * f)
+  }
+  const attempts: Attempt[] = [
+    { ...base, backend: 'avfoundation', avf: { device, pixelFormat: 'bgr0' }, rect },
+    { ...base, backend: 'avfoundation', avf: { device, pixelFormat: null }, rect }
+  ]
+  if (base.encoder !== 'libx264') attempts.push({ ...base, backend: 'avfoundation', avf: { device, pixelFormat: null }, rect, encoder: 'libx264' })
+  return attempts
+}
+
 async function startRecording(): Promise<void> {
-  if (process.platform !== 'win32') throw new Error('Recording is currently supported on Windows only.')
+  if (process.platform !== 'win32' && !IS_MAC) throw new Error('Recording is supported on Windows and macOS only.')
   const s = getSettings()
   const primary = screen.getPrimaryDisplay()
   const display = screen.getAllDisplays().find((d) => d.id === s.displayId) ?? primary
   recorder.update({ error: undefined, warning: undefined })
+  if (IS_MAC) await ensureMacPermissions(s)
 
   let dipRect: Rect = display.bounds
   if (s.mode === 'region') {
@@ -274,18 +345,20 @@ async function startRecording(): Promise<void> {
     await new Promise((r) => setTimeout(r, 250))
   }
 
-  const rect = toPhysical(dipRect)
-  const [features, outputs] = await Promise.all([detectFeatures(), s.backend === 'gdigrab' ? Promise.resolve([]) : dxgiOutputs()])
+  const [features, outputs] = await Promise.all([
+    detectFeatures(),
+    IS_MAC || s.backend === 'gdigrab' ? Promise.resolve([]) : dxgiOutputs()
+  ])
   const encoder = chooseEncoder(features.encoders, s.encoder, s.quality)
 
-  let audioInput: string | null = null
+  let audioInputs: AudioInput[] = []
   let audioLabel: string | undefined
   let warning: string | undefined
-  if (s.systemAudio || s.micDevice) {
+  if (s.systemAudio || s.micEnabled) {
     try {
       const res = await audio.start(await audioConfig(s), true)
-      if (res.started.length) {
-        audioInput = res.pipePath
+      if (res.inputs.length) {
+        audioInputs = res.inputs
         audioLabel = describeAudio(res.started)
       } else await audio.stop()
       if (res.errors.length) warning = `Some audio isn't being recorded — ${res.errors.join('; ')}`
@@ -295,19 +368,10 @@ async function startRecording(): Promise<void> {
     }
   }
 
-  const base = { fps: s.fps, outputHeight: s.outputHeight, quality: s.quality, encoder, audioInput, showCursor: s.showCursor }
-  const attempts: Omit<RecordArgsInput, 'outputPath'>[] = []
-  const output = features.ddagrab ? matchOutput(outputs, toPhysical(display.bounds)) : null
-  if (output && s.backend !== 'gdigrab') {
-    attempts.push({
-      ...base,
-      backend: 'ddagrab',
-      dda: { adapter: output.adapter, output: output.output },
-      rect: { x: Math.max(0, rect.x - output.left), y: Math.max(0, rect.y - output.top), width: rect.width, height: rect.height }
-    })
-  }
-  attempts.push({ ...base, backend: 'gdigrab', rect })
-  if (encoder !== 'libx264') attempts.push({ ...base, backend: 'gdigrab', rect, encoder: 'libx264' })
+  const base = { fps: s.fps, outputHeight: s.outputHeight, quality: s.quality, encoder, audio: audioInputs, showCursor: s.showCursor }
+  const attempts = IS_MAC
+    ? await macAttempts(base, display, dipRect)
+    : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
 
   try {
     await recorder.start(attempts, join(pendingDir(), `Recording ${timestamp()}.mp4`))
@@ -339,7 +403,12 @@ async function openOutputDir(): Promise<void> {
 function registerIpc(): void {
   ipcMain.handle('caps:get', (_e, refresh?: boolean) => getCapabilities(Boolean(refresh)))
   ipcMain.handle('settings:get', () => getSettings())
-  ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => updateSettings(patch))
+  ipcMain.handle('settings:set', async (_e, patch: Partial<Settings>) => {
+    if (IS_MAC && patch.micEnabled && systemPreferences.getMediaAccessStatus('microphone') !== 'granted') {
+      if (await systemPreferences.askForMediaAccess('microphone')) mainWindow?.webContents.send('caps:changed')
+    }
+    return updateSettings(patch)
+  })
   ipcMain.handle('settings:chooseDir', async () => {
     const res = await dialog.showOpenDialog(mainWindow!, {
       defaultPath: getSettings().outputDir,
@@ -350,6 +419,12 @@ function registerIpc(): void {
   ipcMain.handle('rec:toggle', () => toggleRecording())
   ipcMain.handle('rec:status', () => recorder.getStatus())
   ipcMain.handle('rec:review', () => openReview())
+  ipcMain.handle('window:fit', (e, height: number) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents || !Number.isFinite(height)) return
+    // Grow/shrink with the content (e.g. when Settings opens), but never past the screen.
+    const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+    mainWindow.setContentSize(PANEL_WIDTH, Math.round(Math.min(Math.max(height, 320), area.height - 40)))
+  })
   ipcMain.handle('audio:test', async (_e, on: boolean) => {
     if (recorder.getStatus().state !== 'idle') return []
     if (!on) {
@@ -385,6 +460,7 @@ recorder.on('recorded', (file: string) => {
 audio.on('levels', (levels) => mainWindow?.webContents.send('audio:levels', levels))
 
 app.on('second-instance', showMainWindow)
+app.on('activate', showMainWindow)
 
 app.on('before-quit', (e) => {
   quitting = true

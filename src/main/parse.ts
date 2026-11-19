@@ -85,3 +85,10 @@ export function parseRange(header: string | null, size: number): { start: number
   start = Math.min(start, end)
   return { start, end }
 }
+
+/** Maps "Capture screen N" → avfoundation device index from `ffmpeg -f avfoundation -list_devices true -i ""`. */
+export function parseAvfoundationScreens(stderr: string): Map<number, number> {
+  const screens = new Map<number, number>()
+  for (const m of stderr.matchAll(/\[(\d+)\] Capture screen (\d+)/g)) screens.set(Number(m[2]), Number(m[1]))
+  return screens
+}

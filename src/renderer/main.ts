@@ -4,6 +4,7 @@ const api = window.api
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
 
 const el = {
+  app: $('app'),
   chip: $('chip'),
   banner: $('banner'),
   warning: $('warning'),
@@ -11,6 +12,7 @@ const el = {
   pendingName: $('pending-name'),
   idleView: $('idle-view'),
   recView: $('rec-view'),
+  quick: $('quick'),
   record: $<HTMLButtonElement>('record'),
   recordLabel: $('record-label'),
   hotkeyHint: $('hotkey-hint'),
@@ -20,9 +22,12 @@ const el = {
   recWarn: $('rec-warn'),
   last: $('last'),
   lastName: $('last-name'),
-  settings: $('settings'),
-  audioSettings: $('audio-settings'),
+  settingsToggle: $<HTMLButtonElement>('settings-toggle'),
+  settingsBody: $('settings-body'),
+  settingsSummary: $('settings-summary'),
   screens: $('screens'),
+  pillSystem: $<HTMLButtonElement>('pill-system'),
+  pillMic: $<HTMLButtonElement>('pill-mic'),
   resolution: $<HTMLSelectElement>('resolution'),
   resHint: $('res-hint'),
   quality: $<HTMLSelectElement>('quality'),
@@ -30,9 +35,12 @@ const el = {
   encoder: $<HTMLSelectElement>('encoder'),
   cursor: $<HTMLInputElement>('cursor'),
   outdir: $('outdir'),
-  systemAudio: $<HTMLInputElement>('system-audio'),
+  systemSource: $('system-source'),
+  systemState: $('system-state'),
   systemVolume: $<HTMLInputElement>('system-volume'),
   systemVolumeLabel: $('system-volume-label'),
+  micSource: $('mic-source'),
+  micState: $('mic-state'),
   mic: $<HTMLSelectElement>('mic'),
   micVolume: $<HTMLInputElement>('mic-volume'),
   micVolumeLabel: $('mic-volume-label'),
@@ -42,10 +50,33 @@ const el = {
   footer: $('footer')
 }
 
+const QUALITY_SHORT: Record<Settings['quality'], string> = {
+  veryhigh: 'Very high',
+  maximum: 'Maximum 4:4:4',
+  high: 'High',
+  lossless: 'Lossless'
+}
+
 let settings: Settings
 let caps: Capabilities | null = null
 let status: RecordingStatus | null = null
 let testing = false
+
+function prefGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function prefSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Preference only; nothing to do.
+  }
+}
 
 function option(value: string, label: string): HTMLOptionElement {
   const o = document.createElement('option')
@@ -68,21 +99,28 @@ function formatBytes(b: number): string {
   return `${(b / 1024 ** 3).toFixed(2)} GB`
 }
 
+const AUDIO_KEYS: (keyof Settings)[] = ['systemAudio', 'micEnabled', 'micDevice', 'noiseSuppression', 'systemVolume', 'micVolume']
+
 async function save(patch: Partial<Settings>): Promise<void> {
   settings = await api.setSettings(patch)
   renderSettings()
-  if (testing && ('systemAudio' in patch || 'micDevice' in patch || 'noiseSuppression' in patch || 'systemVolume' in patch || 'micVolume' in patch)) {
-    void runAudioTest(true)
-  }
+  if (testing && AUDIO_KEYS.some((k) => k in patch)) void runAudioTest(true)
 }
 
 function selectedDisplay(): Capabilities['displays'][number] | undefined {
   return caps?.displays.find((d) => d.id === settings.displayId) ?? caps?.displays.find((d) => d.primary)
 }
 
+function setSettingsOpen(open: boolean): void {
+  el.settingsBody.hidden = !open
+  el.settingsToggle.setAttribute('aria-expanded', String(open))
+  prefSet('settingsOpen', open ? '1' : '0')
+}
+
 function renderScreens(): void {
   if (!caps) return
   const selected = selectedDisplay()
+  el.screens.classList.toggle('single', caps.displays.length === 1)
   el.screens.replaceChildren(
     ...caps.displays.map((d) => {
       const b = document.createElement('button')
@@ -98,17 +136,26 @@ function renderScreens(): void {
         img.alt = ''
         thumb.append(img)
       }
+      const text = document.createElement('div')
+      text.className = 'screen-text'
       const name = document.createElement('span')
       name.className = 'screen-name'
       name.textContent = d.label
       const res = document.createElement('span')
       res.className = 'screen-res'
       res.textContent = `${d.width}×${d.height}`
-      b.append(thumb, name, res)
+      text.append(name, res)
+      b.append(thumb, text)
       b.addEventListener('click', () => void save({ displayId: d.id }))
       return b
     })
   )
+}
+
+function renderSummary(): void {
+  const d = selectedDisplay()
+  const res = settings.outputHeight ? `${settings.outputHeight}p` : d ? `${d.height}p native` : 'Native'
+  el.settingsSummary.textContent = [res, `${settings.fps} fps`, QUALITY_SHORT[settings.quality]].join(' · ')
 }
 
 function renderSettings(): void {
@@ -122,14 +169,17 @@ function renderSettings(): void {
   el.outdir.textContent = settings.outputDir
   el.outdir.title = settings.outputDir
 
-  el.systemAudio.checked = settings.systemAudio
+  el.pillSystem.setAttribute('aria-pressed', String(settings.systemAudio))
+  el.pillMic.setAttribute('aria-pressed', String(settings.micEnabled))
+  el.systemSource.classList.toggle('off', !settings.systemAudio)
+  el.micSource.classList.toggle('off', !settings.micEnabled)
+  el.systemState.textContent = settings.systemAudio ? '' : '(off)'
+  el.micState.textContent = settings.micEnabled ? '' : '(off)'
   el.systemVolume.value = String(Math.round(settings.systemVolume * 100))
   el.systemVolumeLabel.textContent = `${Math.round(settings.systemVolume * 100)}%`
   el.micVolume.value = String(Math.round(settings.micVolume * 100))
   el.micVolumeLabel.textContent = `${Math.round(settings.micVolume * 100)}%`
   el.noise.checked = settings.noiseSuppression
-  document.querySelectorAll<HTMLElement>('[data-for="system"]').forEach((n) => (n.hidden = !settings.systemAudio))
-  document.querySelectorAll<HTMLElement>('[data-for="mic"]').forEach((n) => (n.hidden = !settings.micDevice))
 
   if (caps) {
     renderScreens()
@@ -140,12 +190,12 @@ function renderSettings(): void {
     el.encoder.value = caps.encoders.some((e) => e.id === settings.encoder) ? settings.encoder : 'auto'
 
     const mics = caps.microphones
-    el.mic.replaceChildren(option('', 'Off'), option('default', 'Windows default microphone'), ...mics.map((m) => option(m.id, m.label)))
-    const byId = settings.micDevice && (settings.micDevice === 'default' || mics.some((m) => m.id === settings.micDevice))
+    el.mic.replaceChildren(option('default', 'System default microphone'), ...mics.map((m) => option(m.id, m.label)))
     const byLabel = mics.find((m) => m.label === settings.micLabel)
-    el.mic.value = byId ? settings.micDevice! : byLabel ? byLabel.id : settings.micDevice ? 'default' : ''
+    el.mic.value = mics.some((m) => m.id === settings.micDevice) ? settings.micDevice : byLabel ? byLabel.id : 'default'
   }
   renderHints()
+  renderSummary()
 }
 
 function renderHints(): void {
@@ -172,8 +222,8 @@ function renderHints(): void {
   el.qualityHint.textContent = hints[settings.quality]
 
   el.audioHint.textContent =
-    !settings.systemAudio && !settings.micDevice
-      ? 'No audio will be recorded.'
+    !settings.systemAudio && !settings.micEnabled
+      ? 'No audio will be recorded. Turn sources on with the buttons under the record button.'
       : 'Computer sound and microphone are mixed into one track.'
 }
 
@@ -209,8 +259,9 @@ function renderStatus(s: RecordingStatus): void {
   const recording = s.state === 'recording'
   el.idleView.hidden = recording
   el.recView.hidden = !recording
-  el.settings.classList.toggle('locked', s.state !== 'idle')
-  el.audioSettings.classList.toggle('locked', s.state !== 'idle')
+  el.quick.hidden = recording
+  el.quick.classList.toggle('locked', s.state !== 'idle')
+  el.settingsBody.classList.toggle('locked', s.state !== 'idle')
   el.record.disabled = s.state !== 'idle' || !caps?.platformSupported
 
   el.chip.className = `chip ${s.state === 'selecting' ? 'saving' : s.state}`
@@ -224,7 +275,7 @@ function renderStatus(s: RecordingStatus): void {
     const slow = s.speed !== null && s.elapsed > 5 && s.speed < 0.95
     el.recWarn.hidden = !(slow || s.droppedFrames > 0)
     el.recWarn.textContent = slow
-      ? `Your PC is encoding slower than real time (${s.speed!.toFixed(2)}×). Try a GPU encoder, 30 fps, or "Very high" quality.`
+      ? `Your computer is encoding slower than real time (${s.speed!.toFixed(2)}×). Try a GPU encoder, 30 fps, or "Very high" quality.`
       : `${s.droppedFrames} frames dropped.`
   } else {
     el.recMeters.replaceChildren()
@@ -250,11 +301,11 @@ function renderStatus(s: RecordingStatus): void {
 function renderFooter(): void {
   if (!caps) return
   const gpus = caps.encoders.filter((e) => e.id !== 'libx264').length
-  el.footer.textContent = `FFmpeg ${caps.ffmpegVersion} · ${caps.ddagrab ? 'Desktop Duplication capture' : 'GDI capture'} · ${gpus} GPU encoder(s)`
+  el.footer.textContent = `FFmpeg ${caps.ffmpegVersion} · ${gpus} hardware encoder(s)`
   el.hotkeyHint.textContent = caps.hotkey ? `or press ${caps.hotkey} anywhere` : 'Global hotkey unavailable (in use by another app)'
   if (!caps.platformSupported) {
     el.banner.hidden = false
-    el.banner.textContent = 'Recording is supported on Windows only.'
+    el.banner.textContent = 'Recording is supported on Windows and macOS only.'
   }
 }
 
@@ -283,22 +334,24 @@ function bind(): void {
       void save(key === 'fps' ? { fps: Number(b.dataset.value) as 30 | 60 } : { mode: b.dataset.value as Settings['mode'] })
     })
   })
+  el.settingsToggle.addEventListener('click', () => setSettingsOpen(el.settingsBody.hidden))
+  el.pillSystem.addEventListener('click', () => void save({ systemAudio: !settings.systemAudio }))
+  el.pillMic.addEventListener('click', () => void save({ micEnabled: !settings.micEnabled }))
   el.resolution.addEventListener('change', () =>
     void save({ outputHeight: el.resolution.value === 'native' ? null : Number(el.resolution.value) })
   )
   el.quality.addEventListener('change', () => void save({ quality: el.quality.value as Settings['quality'] }))
   el.encoder.addEventListener('change', () => void save({ encoder: el.encoder.value }))
   el.cursor.addEventListener('change', () => void save({ showCursor: el.cursor.checked }))
-  el.systemAudio.addEventListener('change', () => void save({ systemAudio: el.systemAudio.checked }))
   el.systemVolume.addEventListener('input', () => (el.systemVolumeLabel.textContent = `${el.systemVolume.value}%`))
   el.systemVolume.addEventListener('change', () => void save({ systemVolume: Number(el.systemVolume.value) / 100 }))
   el.micVolume.addEventListener('input', () => (el.micVolumeLabel.textContent = `${el.micVolume.value}%`))
   el.micVolume.addEventListener('change', () => void save({ micVolume: Number(el.micVolume.value) / 100 }))
   el.noise.addEventListener('change', () => void save({ noiseSuppression: el.noise.checked }))
   el.mic.addEventListener('change', () => {
-    const id = el.mic.value || null
+    const id = el.mic.value
     const label = caps?.microphones.find((m) => m.id === id)?.label ?? null
-    void save({ micDevice: id, micLabel: label })
+    void save({ micDevice: id, micLabel: label, micEnabled: true })
   })
   el.testAudio.addEventListener('click', () => void runAudioTest(!testing))
   $('refresh-screens').addEventListener('click', () => void loadCapabilities(true))
@@ -312,10 +365,21 @@ function bind(): void {
   $('review').addEventListener('click', () => void api.openReview())
   el.record.addEventListener('click', () => void api.toggleRecording())
   $('stop').addEventListener('click', () => void api.toggleRecording())
+
+  // Size the window to its content, so it's compact with Settings closed and grows when opened.
+  let last = 0
+  new ResizeObserver(() => {
+    const h = Math.ceil(el.app.getBoundingClientRect().height)
+    if (h !== last) {
+      last = h
+      void api.fitHeight(h)
+    }
+  }).observe(el.app)
 }
 
 async function init(): Promise<void> {
   bind()
+  setSettingsOpen(prefGet('settingsOpen') === '1')
   settings = await api.getSettings()
   renderSettings()
   api.onStatus(renderStatus)
@@ -323,7 +387,7 @@ async function init(): Promise<void> {
   api.onCapsChanged(() => void loadCapabilities(false))
   renderStatus(await api.getStatus())
 
-  el.footer.textContent = 'Detecting screens and GPU encoders…'
+  el.footer.textContent = 'Detecting screens and encoders…'
   await loadCapabilities(false)
 }
 

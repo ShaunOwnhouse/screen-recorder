@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="app">
+    <main class="app" id="app">
       <header class="top">
         <div class="brand">
           <span class="logo" aria-hidden="true"></span>
@@ -51,6 +51,36 @@
           <div id="rec-warn" class="rec-warn" hidden></div>
           <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop recording</button>
         </div>
+
+        <div id="quick" class="quick">
+          <div class="label-row">
+            <span class="label">Screen</span>
+            <button id="refresh-screens" type="button" class="link">Refresh</button>
+          </div>
+          <div id="screens" class="screens" role="radiogroup" aria-label="Screen to record"></div>
+
+          <div class="seg" role="radiogroup" aria-label="What to record" data-key="mode">
+            <button type="button" data-value="fullscreen">Whole screen</button>
+            <button type="button" data-value="region">Select region</button>
+          </div>
+
+          <div class="pills" aria-label="Audio">
+            <button id="pill-system" type="button" class="pill" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 9v6h4l5 4V5L8 9H4z" />
+                <path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" />
+              </svg>
+              Computer sound
+            </button>
+            <button id="pill-mic" type="button" class="pill" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path class="wave" d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" />
+              </svg>
+              Microphone
+            </button>
+          </div>
+        </div>
       </section>
 
       <section id="last" class="card last" hidden>
@@ -64,107 +94,100 @@
         </div>
       </section>
 
-      <section class="card settings" id="settings">
-        <div class="field">
-          <div class="label-row">
-            <span class="label">Screen</span>
-            <button id="refresh-screens" type="button" class="link">Refresh</button>
-          </div>
-          <div id="screens" class="screens" role="radiogroup" aria-label="Screen to record"></div>
-        </div>
+      <section class="card drawer">
+        <button id="settings-toggle" type="button" class="drawer-head" aria-expanded="false" aria-controls="settings-body">
+          <svg class="gear" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zm7.4-2.5.1-1-.1-1 2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1l-.4-2.5h-4l-.4 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6-.1 1 .1 1-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6z"
+            />
+          </svg>
+          <span class="drawer-title">Settings</span>
+          <span id="settings-summary" class="summary"></span>
+          <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        </button>
 
-        <div class="field">
-          <span class="label">Capture</span>
-          <div class="seg" role="radiogroup" data-key="mode">
-            <button type="button" data-value="fullscreen">Whole screen</button>
-            <button type="button" data-value="region">Select region</button>
-          </div>
-        </div>
+        <div id="settings-body" class="drawer-body" hidden>
+          <h2 class="group-title">Video</h2>
 
-        <label class="field">
-          <span class="label">Output resolution</span>
-          <select id="resolution">
-            <option value="native">Native — exact pixels, no scaling</option>
-            <option value="1080">1080p (Full HD)</option>
-            <option value="1440">1440p (QHD)</option>
-            <option value="2160">2160p (4K UHD)</option>
-          </select>
-          <span id="res-hint" class="hint"></span>
-        </label>
-
-        <div class="field">
-          <span class="label">Frame rate</span>
-          <div class="seg" role="radiogroup" data-key="fps">
-            <button type="button" data-value="30">30 fps</button>
-            <button type="button" data-value="60">60 fps</button>
-          </div>
-        </div>
-
-        <label class="field">
-          <span class="label">Quality</span>
-          <select id="quality">
-            <option value="veryhigh">Very high — visually lossless</option>
-            <option value="maximum">Maximum — full 4:4:4 colour, sharpest text</option>
-            <option value="high">High — smaller files</option>
-            <option value="lossless">Lossless — huge files, archival</option>
-          </select>
-          <span id="quality-hint" class="hint"></span>
-        </label>
-
-        <label class="field">
-          <span class="label">Encoder</span>
-          <select id="encoder"></select>
-        </label>
-
-        <label class="field row">
-          <span class="label">Show mouse cursor</span>
-          <input id="cursor" type="checkbox" class="toggle" />
-        </label>
-
-        <div class="field">
-          <span class="label">Save to</span>
-          <div class="path-row">
-            <span id="outdir" class="path" title=""></span>
-            <button id="choose-dir" type="button" class="ghost">Change</button>
-            <button id="open-dir" type="button" class="ghost">Open</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card settings" id="audio-settings">
-        <div class="label-row">
-          <span class="section-title">Audio</span>
-          <button id="test-audio" type="button" class="ghost small">Test</button>
-        </div>
-
-        <div class="audio-source">
-          <label class="field row">
-            <span class="source-name">Computer sound</span>
-            <input id="system-audio" type="checkbox" class="toggle" />
-          </label>
-          <div class="volume-row" data-for="system">
-            <input id="system-volume" type="range" min="0" max="200" step="5" aria-label="Computer sound volume" />
-            <span id="system-volume-label" class="vol-label"></span>
-          </div>
-          <div class="meter" data-meter="system"><span></span></div>
-        </div>
-
-        <div class="audio-source">
           <label class="field">
-            <span class="source-name">Microphone / headset</span>
-            <select id="mic"></select>
+            <span class="label">Output resolution</span>
+            <select id="resolution">
+              <option value="native">Native — exact pixels, no scaling</option>
+              <option value="1080">1080p (Full HD)</option>
+              <option value="1440">1440p (QHD)</option>
+              <option value="2160">2160p (4K UHD)</option>
+            </select>
+            <span id="res-hint" class="hint"></span>
           </label>
-          <div class="volume-row" data-for="mic">
-            <input id="mic-volume" type="range" min="0" max="200" step="5" aria-label="Microphone volume" />
-            <span id="mic-volume-label" class="vol-label"></span>
+
+          <div class="field">
+            <span class="label">Frame rate</span>
+            <div class="seg" role="radiogroup" data-key="fps">
+              <button type="button" data-value="30">30 fps</button>
+              <button type="button" data-value="60">60 fps</button>
+            </div>
           </div>
-          <div class="meter" data-meter="mic"><span></span></div>
-          <label class="field row" data-for="mic">
-            <span class="hint">Reduce background noise</span>
-            <input id="noise" type="checkbox" class="toggle" />
+
+          <label class="field">
+            <span class="label">Quality</span>
+            <select id="quality">
+              <option value="veryhigh">Very high — visually lossless</option>
+              <option value="maximum">Maximum — full 4:4:4 colour, sharpest text</option>
+              <option value="high">High — smaller files</option>
+              <option value="lossless">Lossless — huge files, archival</option>
+            </select>
+            <span id="quality-hint" class="hint"></span>
           </label>
+
+          <label class="field">
+            <span class="label">Encoder</span>
+            <select id="encoder"></select>
+          </label>
+
+          <label class="field row">
+            <span class="label">Show mouse cursor</span>
+            <input id="cursor" type="checkbox" class="toggle" />
+          </label>
+
+          <div class="label-row group-head">
+            <h2 class="group-title">Audio</h2>
+            <button id="test-audio" type="button" class="ghost small">Test</button>
+          </div>
+
+          <div class="audio-source" id="system-source">
+            <span class="source-name">Computer sound <span id="system-state" class="state"></span></span>
+            <div class="volume-row">
+              <input id="system-volume" type="range" min="0" max="200" step="5" aria-label="Computer sound volume" />
+              <span id="system-volume-label" class="vol-label"></span>
+            </div>
+            <div class="meter" data-meter="system"><span></span></div>
+          </div>
+
+          <div class="audio-source" id="mic-source">
+            <span class="source-name">Microphone <span id="mic-state" class="state"></span></span>
+            <select id="mic" aria-label="Microphone device"></select>
+            <div class="volume-row">
+              <input id="mic-volume" type="range" min="0" max="200" step="5" aria-label="Microphone volume" />
+              <span id="mic-volume-label" class="vol-label"></span>
+            </div>
+            <div class="meter" data-meter="mic"><span></span></div>
+            <label class="field row">
+              <span class="hint">Reduce background noise</span>
+              <input id="noise" type="checkbox" class="toggle" />
+            </label>
+          </div>
+          <span id="audio-hint" class="hint"></span>
+
+          <h2 class="group-title">Saving</h2>
+          <div class="field">
+            <span class="label">Save to</span>
+            <div class="path-row">
+              <span id="outdir" class="path" title=""></span>
+              <button id="choose-dir" type="button" class="ghost">Change</button>
+              <button id="open-dir" type="button" class="ghost">Open</button>
+            </div>
+          </div>
         </div>
-        <span id="audio-hint" class="hint"></span>
       </section>
 
       <footer id="footer" class="footer muted"></footer>

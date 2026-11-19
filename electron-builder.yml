@@ -6,9 +6,12 @@ directories:
 files:
   - out/**
   - resources/**
+  - '!resources/mac/mac-helper'
   - package.json
 asarUnpack:
   - node_modules/ffmpeg-static/**
+afterPack: scripts/after-pack.cjs
+
 win:
   icon: resources/icon.png
   target:
@@ -20,3 +23,20 @@ nsis:
   artifactName: ${productName}-Setup-${version}.${ext}
 portable:
   artifactName: ${productName}-Portable-${version}.${ext}
+
+mac:
+  icon: resources/icon.png
+  category: public.app-category.video
+  # No Apple Developer ID yet: skip real signing; after-pack.cjs applies an ad-hoc signature instead.
+  identity: null
+  target:
+    - dmg
+  extraResources:
+    - from: resources/mac/mac-helper
+      to: bin/mac-helper
+  extendInfo:
+    NSMicrophoneUsageDescription: Screen Recorder uses your microphone when you choose to record your voice.
+    NSAudioCaptureUsageDescription: Screen Recorder records your computer's sound when you turn on Computer sound.
+  minimumSystemVersion: '11.0'
+dmg:
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
