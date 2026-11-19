@@ -19,6 +19,17 @@ export function runFfmpeg(args: string[], timeoutMs = 20000): Promise<{ ok: bool
   })
 }
 
+/** Like runFfmpeg, but returns stdout as raw bytes (for grabbing a frame of pixels). */
+export function runFfmpegBinary(args: string[], timeoutMs = 15000): Promise<{ ok: boolean; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      ffmpegPath(), args,
+      { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'buffer' },
+      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout as Buffer, stderr: String(stderr) })
+    )
+  })
+}
+
 export interface FfmpegFeatures {
   version: string
   ddagrab: boolean

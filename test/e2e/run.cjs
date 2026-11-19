@@ -129,6 +129,20 @@ function validate(label, file, want) {
   const seconds = dur ? +dur[1] * 3600 + +dur[2] * 60 + +dur[3] : 0
   if (want.minSeconds) check(`${label}: duration ≥ ${want.minSeconds}s`, seconds >= want.minSeconds, `${seconds.toFixed(2)}s`)
   if (want.maxSeconds) check(`${label}: duration ≤ ${want.maxSeconds}s`, seconds <= want.maxSeconds, `${seconds.toFixed(2)}s`)
+  if (want.fps) {
+    const f = /, (\d+(?:\.\d+)?) fps/.exec(video)
+    check(`${label}: ${want.fps} fps`, !!f && Math.abs(+f[1] - want.fps) < 1, f ? f[0] : 'no frame rate')
+  }
+  if (want.syncAv) {
+    const decoded = (map) => {
+      const r = ff(['-hide_banner', '-i', file, '-map', map, '-f', 'null', '-'])
+      const t = [...r.stderr.matchAll(/time=(\d+):(\d+):(\d+\.\d+)/g)].pop()
+      return t ? +t[1] * 3600 + +t[2] * 60 + +t[3] : NaN
+    }
+    const v = decoded('0:v:0')
+    const a = decoded('0:a:0')
+    check(`${label}: audio and video stay in sync`, Math.abs(v - a) <= 0.6, `video ${v.toFixed(2)}s, audio ${a.toFixed(2)}s`)
+  }
   check(`${label}: starts instantly (moov before mdat)`, isFaststart(file))
   const d = fullDecode(file)
   check(`${label}: every frame decodes cleanly`, d.ok, d.stderr.slice(0, 200))
@@ -183,7 +197,7 @@ async function setSettings(main, over) {
 }
 
 /** Starts a recording, returns the review window once it has opened. */
-async function record(app, main, label, { seconds, region }) {
+async function record(app, main, label, { seconds, region, checkAffinity }) {
   log(`--- recording: ${label} ---`)
   await setSettings(main, { mode: region ? 'region' : 'fullscreen' })
   await main.click('#record')
@@ -221,12 +235,23 @@ async function record(app, main, label, { seconds, region }) {
     BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.isVisible() === false)
   check(`${label}: control panel hidden while recording`, hidden)
 
-  const barBounds = await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('bar.html'))?.getBounds())
+  const barInfo = await app.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('bar.html'))
+    return { bounds: w.getBounds(), visible: w.isVisible(), handle: w.getNativeWindowHandle().length === 8 ? w.getNativeWindowHandle().readBigUInt64LE(0).toString() : '0' }
+  })
+  const barBounds = barInfo.bounds
+  log(`bar window: ${barInfo.visible ? 'shown on screen' : 'HIDDEN by the app (it could see itself in the capture)'} at ${JSON.stringify(barBounds)}`)
+  if (isWin && checkAffinity) {
+    // Whatever the capture method does, the app must at least ask Windows to exclude the bar (WDA_EXCLUDEFROMCAPTURE = 0x11).
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'affinity.ps1'), '-Handle', barInfo.handle], { encoding: 'utf8', timeout: 60000 })
+    check(`${label}: the app asks Windows to exclude the bar from capture`, r.status === 0, `${r.stdout || ''}${r.stderr || ''}`.trim().slice(0, 200))
+  }
   await sleep(seconds * 1000)
   const barText = await bar.textContent('#text')
   check(`${label}: timer is running`, /^\d\d:\d\d/.test(barText), barText)
-  await bar.click('#stop')
+  // Stop exactly as a user would: the bar's Stop button, or (when the bar is hidden) the hotkey/tray command.
+  if (barInfo.visible) await bar.click('#stop')
+  else await main.evaluate(() => window.api.toggleRecording())
 
   const editor = await waitForWindow(app, 'editor.html', 120000)
   await editor.waitForFunction(
@@ -243,7 +268,7 @@ async function record(app, main, label, { seconds, region }) {
     .then(() => check(`${label}: review window can play the video`, true))
     .catch(() => check(`${label}: review window can play the video`, false, 'preview never became ready'))
   await shot(editor, `${label}-editor`)
-  return { editor, status: st, infoLine, barBounds }
+  return { editor, status: st, infoLine, barBounds, barVisible: barInfo.visible }
 }
 
 async function save(app, editor, name) {
@@ -301,7 +326,7 @@ async function save(app, editor, name) {
 
     // 1) Whole screen, Maximum, with audio → save untouched
     {
-      const { editor, status, barBounds } = await record(app, main, 'maximum', { seconds: 5 })
+      const { editor, status, barBounds, barVisible } = await record(app, main, 'maximum', { seconds: 5, checkAffinity: true })
       const file = await save(app, editor, 'e2e-maximum')
       validate('Maximum whole screen', file, {
         width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 4, maxSeconds: 12
@@ -314,14 +339,8 @@ async function save(app, editor, name) {
           x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
         const found = redPixels(file, 3, region)
-        const detail = `${found.count} bright-red pixels, bbox ${JSON.stringify(found.bbox)}, where the bar was (${JSON.stringify(b)})`
-        if (found.ui && process.env.E2E_CAPTURE_EXCLUSION === 'informational') {
-          // CI's virtual display has no graphics card and is captured with the old GDI method, which doesn't
-          // honour Windows' "exclude from capture" flag there. Real PCs use Desktop Duplication; check there.
-          warn('Maximum whole screen: bar hidden from capture by Windows — NOT VERIFIABLE on this virtual display', detail)
-        } else {
-          check('Maximum whole screen: recording bar is NOT in the video', !found.ui, detail)
-        }
+        const detail = `${found.count} bright-red pixels, bbox ${JSON.stringify(found.bbox)}, where the bar was (${JSON.stringify(b)}); bar ${barVisible ? 'was shown' : 'was hidden by the app'}`
+        check('Maximum whole screen: recording bar is NOT in the video', !found.ui, detail)
       }
       log('recorded with', status.backend, '/', status.encoder)
     }
@@ -374,7 +393,52 @@ async function save(app, editor, name) {
       check('Region: no recording-bar or countdown UI anywhere in the video', !samples.some((x) => x.ui), `red pixels over time ${JSON.stringify(samples)}`)
     }
 
-    // 5) Cancel during the countdown leaves nothing behind
+    // 5) Other quality/frame-rate settings also produce playable files
+    {
+      await setSettings(main, { quality: 'veryhigh', fps: 30 })
+      const { editor } = await record(app, main, 'veryhigh30', { seconds: 4 })
+      const file = await save(app, editor, 'e2e-veryhigh-30fps')
+      validate('Very high 30 fps', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 3, fps: 30 })
+      await setSettings(main, { quality: 'maximum', fps: 60 })
+    }
+
+    // 6) A longer recording: stays in sync and stops cleanly
+    {
+      const { editor } = await record(app, main, 'long', { seconds: 30 })
+      const file = await save(app, editor, 'e2e-long')
+      validate('Long recording (30 s)', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 29, maxSeconds: 45, fps: 60, syncAv: true })
+    }
+
+    // 7) Save as… writes to the chosen path
+    {
+      const target = path.join(outDir, 'chosen-elsewhere.mp4')
+      await app.evaluate(({ dialog }, t) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: t }) }, target)
+      const { editor } = await record(app, main, 'saveas', { seconds: 3 })
+      await editor.fill('#name', 'ignored-name')
+      await editor.click('#save-as')
+      await waitGone(app, 'editor.html', 120000)
+      validate('Save as', target, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 2 })
+    }
+
+    // 8) Discard deletes the recording and leaves nothing to review
+    {
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      const { editor } = await record(app, main, 'discard', { seconds: 3 })
+      await editor.click('#discard')
+      await waitGone(app, 'editor.html', 30000)
+      const st = await main.evaluate(() => window.api.getStatus())
+      const left = fs.readdirSync(path.join(userData, 'pending')).filter((f) => /\.mp4$/i.test(f))
+      check('Discard: recording deleted and nothing left to review', !st.pending && left.length === 0, `pending=${st.pending}, files=${left.join(',')}`)
+      check('Discard: nothing was saved to the output folder', !fs.existsSync(path.join(outDir, 'Recording discard.mp4')))
+    }
+
+    // 9) The global hotkey is registered
+    {
+      const hk = await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+R'))
+      check('Global hotkey (Ctrl/Cmd+Shift+R) is registered', hk === true)
+    }
+
+    // 10) Cancel during the countdown leaves nothing behind
     {
       log('--- cancel during countdown ---')
       await setSettings(main, { countdown: 5, mode: 'fullscreen' })

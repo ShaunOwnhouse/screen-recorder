@@ -8,7 +8,8 @@ import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
 import { EditorController } from './editor.ts'
-import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
+import { buildGrabArgs, compareBar } from './barprobe.ts'
+import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
 import { listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
@@ -42,6 +43,7 @@ let bar: BrowserWindow | null = null
 let panelHiddenForRecording = false
 let cancelSelection: (() => void) | null = null
 let cancelCountdown: (() => void) | null = null
+let startAborted = false
 
 if (!app.requestSingleInstanceLock()) app.quit()
 
@@ -282,17 +284,18 @@ function chooseTarget(mode: Settings['mode']): Promise<Target | null> {
 }
 
 /** Big 3-2-1 centred on the area being recorded. Resolves false if cancelled. */
-function runCountdown(target: Target, seconds: number): Promise<boolean> {
+function runCountdown(target: Target, seconds: number, note?: string): Promise<boolean> {
   if (seconds <= 0) return Promise.resolve(true)
   return new Promise((resolve) => {
-    const size = 220
+    const width = 320
+    const height = 290
     const cx = target.rect.x + target.rect.width / 2
     const cy = target.rect.y + target.rect.height / 2
     const win = new BrowserWindow({
-      x: Math.round(cx - size / 2),
-      y: Math.round(cy - size / 2),
-      width: size,
-      height: size,
+      x: Math.round(cx - width / 2),
+      y: Math.round(cy - height / 2),
+      width,
+      height,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
@@ -327,7 +330,7 @@ function runCountdown(target: Target, seconds: number): Promise<boolean> {
       win.showInactive()
       tick()
     })
-    loadPage(win, 'countdown.html', { s: String(seconds) })
+    loadPage(win, 'countdown.html', { s: String(seconds), ...(note ? { note } : {}) })
   })
 }
 
@@ -409,6 +412,42 @@ function showBar(target: Target): void {
 function closeBar(): void {
   if (bar && !bar.isDestroyed()) bar.destroy()
   bar = null
+}
+
+/**
+ * Does the bar show up in a screen capture of its own area? Windows' "exclude from capture" flag isn't
+ * honoured everywhere (virtual displays, some capture methods, newer macOS), so rather than trust it the app
+ * grabs one frame the same way the recording will and compares it with what the bar actually looks like.
+ * Anything uncertain counts as "leaks" — hiding the bar unnecessarily is harmless, showing it in a video isn't.
+ */
+async function barLeaksIntoCapture(win: BrowserWindow, attemptsFor: (dipRect: Rect) => Promise<Attempt[]>): Promise<boolean> {
+  try {
+    if (win.webContents.isLoading()) await new Promise<void>((r) => win.webContents.once('did-finish-load', () => r()))
+    await new Promise((r) => setTimeout(r, 800)) // let it paint and appear on screen
+    const attempts = await attemptsFor(win.getBounds())
+    const tried = new Set<string>()
+    for (const attempt of attempts) {
+      const key = JSON.stringify([attempt.backend, attempt.dda, attempt.avf])
+      if (tried.has(key)) continue
+      tried.add(key)
+      const { width, height } = attempt.rect
+      // The bar's text changes once a second, so compare against its look both before and after the grab.
+      const before = await win.webContents.capturePage()
+      const grab = await runFfmpegBinary(buildGrabArgs(attempt))
+      const after = await win.webContents.capturePage()
+      if (!grab.ok || grab.stdout.length < width * height * 3) continue
+      const results = [before, after].map((img) => {
+        const size = img.getSize()
+        return size.width === width && size.height === height ? compareBar(img.toBitmap(), width, height, grab.stdout) : null
+      })
+      const decided = results.filter((r) => r !== null)
+      if (!decided.length) return true
+      return decided.some((r) => r!.visible)
+    }
+    return true
+  } catch {
+    return true
+  }
 }
 
 /** The control panel is hidden while choosing and recording so it can never end up in the video. */
@@ -525,6 +564,7 @@ async function macAttempts(base: Omit<Attempt, 'backend' | 'rect'>, display: Dis
 async function startRecording(): Promise<void> {
   if (!['win32', 'darwin', 'linux'].includes(process.platform)) throw new Error('Recording is supported on Windows and macOS only.')
   const s = getSettings()
+  startAborted = false
   recorder.update({ error: undefined, warning: undefined })
   if (IS_MAC) await ensureMacPermissions(s)
 
@@ -571,20 +611,30 @@ async function startRecording(): Promise<void> {
     audio: audioInputs,
     showCursor: s.showCursor
   }
-  const attempts = IS_MAC
-    ? await macAttempts(base, display, dipRect)
-    : process.platform === 'linux'
-      ? [{ ...base, backend: 'x11grab' as const, x11Display: process.env.DISPLAY ?? ':0', rect: toPhysical(dipRect) }]
-      : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
+  const attemptsFor = async (rect: Rect): Promise<Attempt[]> =>
+    IS_MAC
+      ? macAttempts(base, display, rect)
+      : process.platform === 'linux'
+        ? [{ ...base, backend: 'x11grab' as const, x11Display: process.env.DISPLAY ?? ':0', rect: toPhysical(rect) }]
+        : windowsAttempts(base, s, display, toPhysical(rect), features.ddagrab, outputs)
+  const attempts = await attemptsFor(dipRect)
 
   showBar(target)
-  if (!(await runCountdown(target, s.countdown))) {
+  recorder.update({ state: 'countdown', countdown: undefined })
+  let hideBar = false
+  if (bar && overlaps(bar.getBounds(), target.rect, 0)) hideBar = await barLeaksIntoCapture(bar, attemptsFor)
+  const note = hideBar
+    ? `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
+    : undefined
+
+  if (startAborted || !(await runCountdown(target, s.countdown, note)) || startAborted) {
     await audio.stop()
     closeBar()
     recorder.update({ state: 'idle', countdown: undefined })
     restorePanel()
     return
   }
+  if (hideBar) bar?.hide()
   // Capture starts now; FFmpeg's start-up check takes a moment before the state flips to 'recording'.
   recorder.update({ state: 'countdown', countdown: 0 })
 
@@ -601,7 +651,10 @@ async function startRecording(): Promise<void> {
 async function toggleRecording(): Promise<void> {
   const { state } = recorder.getStatus()
   if (state === 'recording') return recorder.stop()
-  if (state === 'countdown') return cancelCountdown?.()
+  if (state === 'countdown') {
+    startAborted = true // also covers the moment before the countdown window exists
+    return cancelCountdown?.()
+  }
   if (state === 'selecting') return cancelSelection?.()
   if (state !== 'idle') return
   try {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   buildExportArgs, buildRecordArgs, cropToPixels, effectiveEncoder, encoderArgs, even, outputSize, type RecordArgsInput
 } from '../src/main/args.ts'
+import { buildGrabArgs, compareBar } from '../src/main/barprobe.ts'
 import { matchOutput, parseDxgiOutputs } from '../src/main/displays.ts'
 import { parseAvfoundationScreens, parseMediaInfo, parseRange, ProgressParser } from '../src/main/parse.ts'
 import { isFullRange, keepOnly, playablePosition, removeRange, totalDuration } from '../src/shared/segments.ts'
@@ -231,4 +232,60 @@ test('byte ranges for video seeking', () => {
   assert.deepEqual(parseRange('bytes=-100', 1000), { start: 900, end: 999 })
   assert.deepEqual(parseRange('bytes=500-5000', 1000), { start: 500, end: 999 })
   assert.equal(parseRange(null, 1000), null)
+})
+
+/** A fake 60x20 "bar": dark background with a block of white (text-like) pixels and a red dot. */
+function fakeBar(): { bgra: Uint8Array; rgb: Uint8Array } {
+  const w = 60
+  const h = 20
+  const bgra = new Uint8Array(w * h * 4)
+  const rgb = new Uint8Array(w * h * 3)
+  for (let p = 0; p < w * h; p++) {
+    const x = p % w
+    const y = Math.floor(p / w)
+    let c = [24, 27, 33]
+    if (y > 5 && y < 14 && x > 10 && x < 40) c = [255, 255, 255]
+    if (y > 7 && y < 12 && x > 44 && x < 52) c = [239, 68, 68]
+    bgra.set([c[2], c[1], c[0], 255], p * 4)
+    rgb.set(c, p * 3)
+  }
+  return { bgra, rgb }
+}
+
+test('bar probe: a capture containing the bar is detected as leaking', () => {
+  const { bgra, rgb } = fakeBar()
+  const r = compareBar(bgra, 60, 20, rgb)
+  assert.equal(r.visible, true)
+  assert.ok(r.compared > 100 && r.matched > 0.95)
+})
+
+test('bar probe: a capture of the plain desktop (bar excluded) is not a leak', () => {
+  const { bgra } = fakeBar()
+  const desktop = new Uint8Array(60 * 20 * 3).fill(70)
+  assert.equal(compareBar(bgra, 60, 20, desktop).visible, false)
+  // Even a desktop exactly the bar's background colour must not fool it: the text/dot don't match.
+  const same = new Uint8Array(60 * 20 * 3)
+  for (let p = 0; p < 60 * 20; p++) same.set([24, 27, 33], p * 3)
+  assert.equal(compareBar(bgra, 60, 20, same).visible, false)
+})
+
+test('bar probe: when it cannot judge, it assumes the bar leaks', () => {
+  const blank = new Uint8Array(60 * 20 * 4)
+  for (let p = 0; p < 60 * 20; p++) blank.set([33, 27, 24, 255], p * 4)
+  assert.equal(compareBar(blank, 60, 20, new Uint8Array(60 * 20 * 3)).visible, true)
+  assert.equal(compareBar(new Uint8Array(4), 60, 20, new Uint8Array(3)).visible, true)
+})
+
+test('single-frame grab args mirror each capture backend', () => {
+  const rect = { x: 362, y: 12, width: 300, height: 44 }
+  const gdi = buildGrabArgs({ backend: 'gdigrab', rect })
+  assert.equal(gdi[gdi.indexOf('-f') + 1], 'gdigrab')
+  assert.equal(gdi[gdi.indexOf('-video_size') + 1], '300x44')
+  assert.ok(gdi.includes('-frames:v') && gdi.includes('rgb24'))
+  const dda = buildGrabArgs({ backend: 'ddagrab', dda: { adapter: 1, output: 0 }, rect })
+  assert.equal(dda[dda.indexOf('-init_hw_device') + 1], 'd3d11va=dda:1')
+  assert.match(dda[dda.indexOf('-filter_complex') + 1], /^ddagrab=output_idx=0:framerate=10:draw_mouse=0:offset_x=362:offset_y=12:video_size=300x44,hwdownload/)
+  const avf = buildGrabArgs({ backend: 'avfoundation', avf: { device: 2, pixelFormat: 'bgr0' }, rect })
+  assert.ok(avf.includes('2:none') && avf.includes('crop=300:44:362:12'))
+  assert.ok(buildGrabArgs({ backend: 'x11grab', x11Display: ':1', rect }).includes(':1+362,12'))
 })

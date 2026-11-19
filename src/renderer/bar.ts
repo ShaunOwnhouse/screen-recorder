@@ -16,12 +16,14 @@ function formatTime(seconds: number): string {
 function render(s: RecordingStatus): void {
   bar.className = `bar ${s.state}`
   stop.hidden = s.state !== 'recording'
-  cancel.hidden = s.state !== 'countdown' || !s.countdown
+  cancel.hidden = s.state !== 'countdown' || s.countdown === 0
   text.textContent =
     s.state === 'countdown'
-      ? s.countdown
-        ? `Starting in ${s.countdown}…`
-        : 'Recording…'
+      ? s.countdown === undefined
+        ? 'Getting ready…'
+        : s.countdown
+          ? `Starting in ${s.countdown}…`
+          : 'Recording…'
       : s.state === 'recording'
         ? formatTime(s.elapsed)
         : s.state === 'saving'

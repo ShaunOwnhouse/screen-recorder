@@ -12,8 +12,11 @@
         height: 100%;
         overflow: hidden;
         background: transparent;
-        display: grid;
-        place-items: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
         font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         user-select: none;
       }
@@ -26,6 +29,17 @@
         display: grid;
         place-items: center;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+      }
+      .note {
+        max-width: 290px;
+        text-align: center;
+        font-size: 12.5px;
+        line-height: 1.4;
+        color: #e8eaee;
+        background: rgba(16, 18, 22, 0.88);
+        border: 1px solid #2a2f39;
+        border-radius: 10px;
+        padding: 7px 12px;
       }
       #n {
         color: #fff;
@@ -58,6 +72,7 @@
   </head>
   <body>
     <div class="ring"><span id="n"></span></div>
+    <div id="note" class="note" hidden></div>
     <script type="module" src="./countdown.ts"></script>
   </body>
 </html>
