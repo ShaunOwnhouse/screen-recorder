@@ -19,7 +19,8 @@ export interface RecordedInfo {
 const BACKEND_LABELS: Record<Attempt['backend'], string> = {
   ddagrab: 'Desktop Duplication',
   gdigrab: 'GDI',
-  avfoundation: 'AVFoundation'
+  avfoundation: 'AVFoundation',
+  x11grab: 'X11'
 }
 
 const STARTUP_GRACE_MS = 1500
@@ -110,7 +111,7 @@ export class Recorder extends EventEmitter {
         this.startedAt = spawnedAt
         const out = outputSize(attempt.rect, attempt.outputHeight)
         this.update({
-          state: 'recording', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, error: undefined,
+          state: 'recording', elapsed: (Date.now() - spawnedAt) / 1000, bytes: 0, droppedFrames: 0, speed: null, error: undefined,
           encoder: ENCODER_LABELS[effectiveEncoder(attempt.encoder, attempt.quality)] ?? attempt.encoder,
           backend: BACKEND_LABELS[attempt.backend],
           resolution: `${out.width}×${out.height} @ ${attempt.fps}fps`

@@ -123,6 +123,14 @@ test('studio is 4:4:4 and falls back to x264 for encoders without it', () => {
   assert.equal(after(encoderArgs('libx264', 'studio', 0), '-profile:v'), 'high444')
 })
 
+test('audio: 320k AAC for playable tiers, lossless ALAC for studio/lossless', () => {
+  const pipe = [{ url: 'p', volume: 1 }]
+  const max = buildRecordArgs({ ...base, quality: 'maximum', audio: pipe })
+  assert.equal(after(max, '-c:a'), 'aac')
+  assert.equal(after(max, '-b:a'), '320k')
+  assert.equal(after(buildRecordArgs({ ...base, quality: 'studio', audio: pipe }), '-c:a'), 'alac')
+})
+
 test('lossless always uses x264 qp 0 in 4:4:4', () => {
   const args = buildRecordArgs({ ...base, quality: 'lossless', encoder: 'h264_nvenc' })
   assert.equal(after(args, '-c:v'), 'libx264')

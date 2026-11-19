@@ -190,7 +190,7 @@ async function getCapabilities(refresh = false): Promise<Capabilities> {
   const [features, microphones] = await Promise.all([detectFeatures(refresh), audio.listMicrophones(primeMics)])
   const displays = listDisplays()
   return {
-    platformSupported: process.platform === 'win32' || IS_MAC,
+    platformSupported: process.platform === 'win32' || IS_MAC || process.platform === 'linux',
     ffmpegVersion: features.version,
     ddagrab: features.ddagrab,
     displays,
@@ -482,7 +482,7 @@ async function macAttempts(base: Omit<Attempt, 'backend' | 'rect'>, display: Dis
 }
 
 async function startRecording(): Promise<void> {
-  if (process.platform !== 'win32' && !IS_MAC) throw new Error('Recording is supported on Windows and macOS only.')
+  if (!['win32', 'darwin', 'linux'].includes(process.platform)) throw new Error('Recording is supported on Windows and macOS only.')
   const s = getSettings()
   recorder.update({ error: undefined, warning: undefined })
   if (IS_MAC) await ensureMacPermissions(s)
@@ -500,7 +500,7 @@ async function startRecording(): Promise<void> {
   // Everything slow happens before the countdown, so recording starts right after "1".
   const [features, outputs] = await Promise.all([
     detectFeatures(),
-    IS_MAC || s.backend === 'gdigrab' ? Promise.resolve([]) : dxgiOutputs()
+    process.platform !== 'win32' || s.backend === 'gdigrab' ? Promise.resolve([]) : dxgiOutputs()
   ])
   const encoder = chooseEncoder(features.encoders, s.encoder, s.quality)
 
@@ -532,7 +532,9 @@ async function startRecording(): Promise<void> {
   }
   const attempts = IS_MAC
     ? await macAttempts(base, display, dipRect)
-    : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
+    : process.platform === 'linux'
+      ? [{ ...base, backend: 'x11grab' as const, x11Display: process.env.DISPLAY ?? ':0', rect: toPhysical(dipRect) }]
+      : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
 
   showBar(display)
   if (!(await runCountdown(target, s.countdown))) {

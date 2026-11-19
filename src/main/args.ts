@@ -19,11 +19,13 @@ export interface AudioInput {
 }
 
 export interface RecordArgsInput {
-  backend: 'ddagrab' | 'gdigrab' | 'avfoundation'
+  backend: 'ddagrab' | 'gdigrab' | 'avfoundation' | 'x11grab'
   /** Required for ddagrab: which GPU adapter and output (monitor) to duplicate. */
   dda?: DdaTarget
   /** Required for avfoundation (macOS). */
   avf?: AvfTarget
+  /** X display for x11grab (Linux), e.g. ":0". */
+  x11Display?: string
   /**
    * Physical pixels. gdigrab: virtual-desktop coords. ddagrab: relative to the output's top-left.
    * avfoundation: crop relative to the captured screen.
@@ -152,7 +154,13 @@ export function outputSize(rect: Rect, outputHeight: number | null): { width: nu
 }
 
 const COLOR_TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv']
-const AUDIO_ENCODE = ['-c:a', 'aac', '-b:a', '320k']
+/**
+ * Playable tiers use AAC-LC at 320 kb/s (transparent; plays everywhere). Studio/Lossless are already
+ * VLC/editor-only, so their audio is truly lossless ALAC.
+ */
+export function audioEncodeArgs(quality: Quality): string[] {
+  return is444(quality) ? ['-c:a', 'alac'] : ['-c:a', 'aac', '-b:a', '320k']
+}
 // Accurate rounding and full-resolution chroma interpolation keep coloured text edges clean when
 // converting the screen's RGB to video YUV (the default fast path smears them).
 const SWS_FLAGS = 'flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp'
@@ -205,6 +213,11 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
     )
     // avfoundation always captures the whole screen; regions are cropped out of it.
     filters.push(`crop=${w}:${h}:${o.rect.x}:${o.rect.y}`)
+  } else if (o.backend === 'x11grab') {
+    args.push(
+      '-f', 'x11grab', '-thread_queue_size', '1024', '-framerate', String(o.fps), '-draw_mouse', cursor,
+      '-video_size', `${w}x${h}`, '-i', `${o.x11Display ?? ':0'}+${o.rect.x},${o.rect.y}`
+    )
   } else {
     args.push(
       '-f', 'gdigrab', '-thread_queue_size', '1024', '-framerate', String(o.fps), '-draw_mouse', cursor,
@@ -225,7 +238,7 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
   args.push(...encoderArgs(encoder, o.quality, out.width * out.height * o.fps, o.basicTuning), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
-  if (audio.map) args.push(...AUDIO_ENCODE)
+  if (audio.map) args.push(...audioEncodeArgs(o.quality))
   // Fragmented MP4 stays playable up to the last keyframe if the app or PC crashes mid-recording.
   args.push('-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof')
   args.push('-stats_period', '1', '-progress', 'pipe:1', o.outputPath)
@@ -264,7 +277,7 @@ export function buildExportArgs(o: ExportArgsInput): string[] {
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
   args.push(...encoderArgs(encoder, o.quality, o.pixelRate, o.basicTuning), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
-  if (o.hasAudio) args.push(...AUDIO_ENCODE)
+  if (o.hasAudio) args.push(...audioEncodeArgs(o.quality))
   args.push('-movflags', '+faststart', '-progress', 'pipe:1', o.output)
   return args
 }

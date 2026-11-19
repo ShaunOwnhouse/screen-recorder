@@ -174,3 +174,13 @@ test('a 4:4:4 recording converts to a play-everywhere 4:2:0 H.264 file', { timeo
     assert.match(info, /h264 \(High\)/)
     assert.match(info, /yuv420p\(tv, bt709/)
   }))
+
+test('studio recordings keep lossless ALAC audio; maximum uses 320k AAC', { timeout: 120000 }, () =>
+  inTemp((dir) => {
+    const pcm = join(dir, 'a.f32')
+    run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-ac', '2', '-f', 'f32le', pcm])
+    const studio = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'studio', audio: [{ url: pcm, volume: 1 }] }, 2))
+    assert.match(studio, /Audio: alac/)
+    const max = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'maximum', audio: [{ url: pcm, volume: 1 }] }, 2))
+    assert.match(max, /Audio: aac \(LC\).*48000 Hz, stereo/)
+  }))
