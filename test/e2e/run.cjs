@@ -72,18 +72,33 @@ function isFaststart(file) {
 }
 
 /** Finds bright-red UI pixels (the recording bar's Stop button, the countdown ring) in a region of one video frame. */
-function redPixels(file, at, region) {
+function redPixels(file, at, region, baseline) {
   const r = ff(
     ['-hide_banner', '-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1',
       '-vf', `crop=${region.w}:${region.h}:${region.x}:${region.y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
     { encoding: 'buffer' }
   )
   const buf = r.stdout
-  let n = 0, x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1
+  const isRed = (b, i) => Math.abs(b[i] - 239) < 25 && Math.abs(b[i + 1] - 68) < 25 && Math.abs(b[i + 2] - 68) < 25
+  // Red that was already on the desktop before the app showed anything (an icon, say) is not our UI.
+  // `baseline` is a screenshot of the bare desktop; (ox, oy) is where this video's top-left sits on it.
+  const wasRed = (x, y) => {
+    if (!baseline) return false
+    const sx = baseline.ox + region.x + x, sy = baseline.oy + region.y + y
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const px = sx + dx, py = sy + dy
+        if (px >= 0 && py >= 0 && px < baseline.w && py < baseline.h && isRed(baseline.buf, (py * baseline.w + px) * 3)) return true
+      }
+    }
+    return false
+  }
+  let n = 0, ignored = 0, x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1
   for (let i = 0; i + 2 < buf.length; i += 3) {
-    if (Math.abs(buf[i] - 239) < 25 && Math.abs(buf[i + 1] - 68) < 25 && Math.abs(buf[i + 2] - 68) < 25) {
-      n++
+    if (isRed(buf, i)) {
       const p = i / 3, x = p % region.w, y = Math.floor(p / region.w)
+      if (wasRed(x, y)) { ignored++; continue }
+      n++
       if (x < x0) x0 = x
       if (x > x1) x1 = x
       if (y < y0) y0 = y
@@ -94,7 +109,18 @@ function redPixels(file, at, region) {
   // Our UI is a solid red button (the bar's Stop) or ring (the countdown): hundreds of pixels in a block at
   // least button-sized. A thin strip of red at an edge is something else on the desktop (e.g. an icon).
   const ui = !!bbox && n >= 300 && bbox.w >= 30 && bbox.h >= 14
-  return { count: n, bbox, ui }
+  return { count: n, ignored, bbox, ui }
+}
+
+/** One frame of the bare desktop (physical pixels) so desktop colours can be told apart from the app's UI. */
+function grabDesktop(w, h) {
+  if (!isWin) return null
+  const r = ff(
+    ['-hide_banner', '-v', 'error', '-f', 'gdigrab', '-framerate', '5', '-draw_mouse', '0', '-video_size', `${w}x${h}`, '-i', 'desktop',
+      '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+    { encoding: 'buffer' }
+  )
+  return r.stdout && r.stdout.length === w * h * 3 ? { buf: r.stdout, w, h } : null
 }
 
 /** Opens the file with Windows' own media stack (the one Media Player and Photos use). */
@@ -316,6 +342,21 @@ async function save(app, editor, name) {
     log('primary display (physical px):', `${display.w}×${display.h} @${display.f}x`)
     const evenFloor = (n) => Math.floor(n / 2) * 2
 
+    // A picture of the bare desktop (the app's own windows hidden), so a red desktop icon isn't mistaken for the app's UI.
+    let desktop = null
+    if (isWin) {
+      const shown = await app.evaluate(({ BrowserWindow }) => {
+        const ids = BrowserWindow.getAllWindows().filter((w) => w.isVisible()).map((w) => w.id)
+        for (const id of ids) BrowserWindow.fromId(id).hide()
+        return ids
+      })
+      await sleep(700)
+      desktop = grabDesktop(display.w, display.h)
+      await app.evaluate(({ BrowserWindow }, ids) => { for (const id of ids) BrowserWindow.fromId(id)?.show() }, shown)
+      await sleep(500)
+      log('bare desktop captured for comparison:', desktop ? `${desktop.w}×${desktop.h}` : 'not available')
+    }
+
     // 0) Prove the Windows playback check itself works: a normal 4:2:0 file must pass; the 4:4:4 format
     //    that Windows Media Player rejects (error 0x80004005) is reported for information.
     if (isWin) {
@@ -345,8 +386,8 @@ async function save(app, editor, name) {
           w: Math.round(b.width * display.f), h: Math.round(b.height * display.f),
           x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
-        const found = redPixels(file, 3, region)
-        const detail = `${found.count} bright-red pixels, bbox ${JSON.stringify(found.bbox)}, where the bar was (${JSON.stringify(b)}); bar ${barVisible ? 'was shown' : 'was hidden by the app'}`
+        const found = redPixels(file, 3, region, desktop && { ...desktop, ox: 0, oy: 0 })
+        const detail = `${found.count} bright-red pixels (${found.ignored} already on the desktop), bbox ${JSON.stringify(found.bbox)}, where the bar was (${JSON.stringify(b)}); bar ${barVisible ? 'was shown' : 'was hidden by the app'}`
         check('Maximum whole screen: recording bar is NOT in the video', !found.ui, detail)
       }
       log('recorded with', status.backend, '/', status.encoder)
@@ -395,7 +436,8 @@ async function save(app, editor, name) {
       const file = await save(app, editor, 'e2e-region')
       validate('Region', file, { width: evenFloor(Math.round(e.w * display.f)), height: evenFloor(Math.round(e.h * display.f)), audio: true, minSeconds: 2 })
       const full = { x: 0, y: 0, w: evenFloor(Math.round(e.w * display.f)), h: evenFloor(Math.round(e.h * display.f)) }
-      const samples = [0.2, 1, 2, 3].map((t) => ({ t, ...redPixels(file, t, full) }))
+      const origin = { ox: Math.round(e.x * display.f), oy: Math.round(e.y * display.f) }
+      const samples = [0.2, 1, 2, 3].map((t) => ({ t, ...redPixels(file, t, full, desktop && { ...desktop, ...origin }) }))
       log('red pixels over time:', JSON.stringify(samples))
       check('Region: no recording-bar or countdown UI anywhere in the video', !samples.some((x) => x.ui), `red pixels over time ${JSON.stringify(samples)}`)
     }
