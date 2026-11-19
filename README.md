@@ -16,7 +16,9 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 
 ## Features
 
-- Screen picker with live thumbnails; record a whole screen or a dragged region on any monitor
+- Snipping Tool–style start: an overlay covers every connected screen; drag an area on any screen, or click the screen to record
+- 3-2-1 countdown (Off / 3 / 5 / 10 s) centred on the area being recorded
+- The app stays out of your recordings: the panel hides while you record, and the floating timer/Stop bar, the countdown and the review window are all excluded from capture
 - Native, 1080p, 1440p or 4K output at 30 or 60 fps
 - Quality presets: Very high (visually lossless), Maximum (4:4:4), High (smaller files), Lossless (archival)
 - Audio: computer sound and/or any microphone or headset, each with its own on/off switch and volume, optional noise reduction, and live level meters. A *Test* button lets you check levels before recording.
@@ -31,7 +33,6 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 - `Ctrl+Shift+R` (Windows) / `Cmd+Shift+R` (macOS) global hotkey to start and stop
 - Compact window: quick choices (screen, whole screen or region, audio on/off) sit under the record button, and everything else lives in a collapsible **Settings** section
 - Tray icon that shows when you're recording
-- The control window never appears in your recordings
 
 ## Download
 

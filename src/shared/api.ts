@@ -29,8 +29,11 @@ export interface EditorApi {
   onProgress(cb: (fraction: number) => void): () => void
 }
 
+/** What the user picked on one screen's overlay: an area (region mode), the whole screen, or nothing. */
+export type OverlayResult = { rect: Rect } | { screen: true } | null
+
 export interface OverlayApi {
-  done(rect: Rect | null): void
+  done(result: OverlayResult): void
 }
 
 export interface AudioConfigPayload {

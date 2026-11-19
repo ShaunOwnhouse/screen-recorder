@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:" />
+    <title>Recording</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font: 13px 'Segoe UI', system-ui, -apple-system, sans-serif;
+        color: #e8eaee;
+        user-select: none;
+      }
+      .bar {
+        position: absolute;
+        inset: 4px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 6px 0 14px;
+        background: rgba(16, 18, 22, 0.95);
+        border: 1px solid #2a2f39;
+        border-radius: 999px;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+        -webkit-app-region: drag;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #ef4444;
+        flex: none;
+      }
+      .recording .dot {
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      .countdown .dot,
+      .saving .dot {
+        background: #f59e0b;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      #text {
+        flex: 1;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      button {
+        -webkit-app-region: no-drag;
+        font: inherit;
+        color: #fff;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        flex: none;
+      }
+      #stop {
+        background: #ef4444;
+        font-weight: 600;
+      }
+      #stop:hover {
+        background: #dc2626;
+      }
+      #stop .sq {
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        background: #fff;
+      }
+      #cancel {
+        background: #2a2f39;
+      }
+      #cancel:hover {
+        background: #3a404c;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar" class="bar">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="text"></span>
+      <button id="cancel" type="button" title="Cancel" hidden>✕ Cancel</button>
+      <button id="stop" type="button" title="Stop recording" hidden><span class="sq"></span>Stop</button>
+    </div>
+    <script type="module" src="./bar.ts"></script>
+  </body>
+</html>

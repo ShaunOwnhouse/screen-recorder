@@ -7,8 +7,8 @@ const file = (): string => join(app.getPath('userData'), 'settings.json')
 
 function defaults(): Settings {
   return {
-    displayId: null,
     mode: 'fullscreen',
+    countdown: 3,
     outputHeight: null,
     fps: 60,
     quality: 'veryhigh',

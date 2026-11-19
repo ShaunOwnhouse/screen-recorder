@@ -52,6 +52,8 @@ export class Recorder extends EventEmitter {
   private launch(attempt: Attempt): Promise<void> {
     const args = buildRecordArgs({ ...attempt, outputPath: this.tempPath })
     const proc = spawn(ffmpegPath(), args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    // Capture begins at spawn, not after the startup check, so time the recording from here.
+    const spawnedAt = Date.now()
     const parser = new ProgressParser()
     let stderrTail = ''
 
@@ -80,7 +82,7 @@ export class Recorder extends EventEmitter {
         if (settled) return
         settled = true
         this.proc = proc
-        this.startedAt = Date.now()
+        this.startedAt = spawnedAt
         const out = outputSize(attempt.rect, attempt.outputHeight)
         this.update({
           state: 'recording', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, error: undefined,

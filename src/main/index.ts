@@ -14,6 +14,7 @@ import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
 import { listPending, pendingDir, recoverInterrupted, resolvePending } from './pending.ts'
 import { Recorder } from './recorder.ts'
 import { getSettings, updateSettings } from './settings.ts'
+import type { OverlayResult } from '../shared/api.ts'
 import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
 
 const HOTKEY = 'CommandOrControl+Shift+R'
@@ -22,7 +23,12 @@ const ICON = join(RESOURCES, 'icon.png')
 const PANEL_WIDTH = 460
 const IS_MAC = process.platform === 'darwin'
 type Attempt = Omit<RecordArgsInput, 'outputPath'>
-type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'audio.html'
+type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'audio.html' | 'countdown.html' | 'bar.html'
+interface Target {
+  display: Display
+  /** DIP rectangle to record (the whole display, or a dragged region). */
+  rect: Rect
+}
 
 registerMediaScheme()
 
@@ -31,13 +37,18 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let hotkeyRegistered = false
 let quitting = false
+let bar: BrowserWindow | null = null
+let panelHiddenForRecording = false
+let cancelSelection: (() => void) | null = null
+let cancelCountdown: (() => void) | null = null
 
 if (!app.requestSingleInstanceLock()) app.quit()
 
-function loadPage(win: BrowserWindow, page: Page): void {
+function loadPage(win: BrowserWindow, page: Page, query: Record<string, string> = {}): void {
   const devUrl = process.env.ELECTRON_RENDERER_URL
-  if (!app.isPackaged && devUrl) void win.loadURL(`${devUrl}/${page}`)
-  else void win.loadFile(join(__dirname, '../renderer', page))
+  const search = new URLSearchParams(query).toString()
+  if (!app.isPackaged && devUrl) void win.loadURL(`${devUrl}/${page}${search ? `?${search}` : ''}`)
+  else void win.loadFile(join(__dirname, '../renderer', page), { query })
 }
 
 const audio = new AudioCapture(join(__dirname, '../preload/audio.js'), (w) => loadPage(w, 'audio.html'))
@@ -153,38 +164,31 @@ function createTray(): void {
   updateTray()
 }
 
-async function screenThumbnails(): Promise<Map<string, string>> {
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 180 } })
-    return new Map(sources.map((s) => [s.display_id, s.thumbnail.toDataURL()]))
-  } catch {
-    return new Map()
-  }
+function displayLabel(d: Display, index: number): string {
+  return d.id === screen.getPrimaryDisplay().id ? `Screen ${index + 1} (main)` : `Screen ${index + 1}`
 }
 
-async function listDisplays(): Promise<DisplayInfo[]> {
-  const thumbs = await screenThumbnails()
+function physicalSize(d: Display): { width: number; height: number } {
+  return { width: Math.round(d.size.width * d.scaleFactor), height: Math.round(d.size.height * d.scaleFactor) }
+}
+
+function listDisplays(): DisplayInfo[] {
   const primaryId = screen.getPrimaryDisplay().id
-  return screen.getAllDisplays().map((d, i) => {
-    const width = Math.round(d.size.width * d.scaleFactor)
-    const height = Math.round(d.size.height * d.scaleFactor)
-    return {
-      id: d.id,
-      label: d.id === primaryId ? `Screen ${i + 1} (main)` : `Screen ${i + 1}`,
-      width,
-      height,
-      scaleFactor: d.scaleFactor,
-      primary: d.id === primaryId,
-      thumbnail: thumbs.get(String(d.id)) ?? null
-    }
-  })
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id,
+    label: displayLabel(d, i),
+    ...physicalSize(d),
+    scaleFactor: d.scaleFactor,
+    primary: d.id === primaryId
+  }))
 }
 
 async function getCapabilities(refresh = false): Promise<Capabilities> {
   if (refresh) invalidateDxgiOutputs()
   // On macOS, only read mic names once access is granted so the app doesn't prompt at launch.
   const primeMics = !IS_MAC || systemPreferences.getMediaAccessStatus('microphone') === 'granted'
-  const [features, displays, microphones] = await Promise.all([detectFeatures(refresh), listDisplays(), audio.listMicrophones(primeMics)])
+  const [features, microphones] = await Promise.all([detectFeatures(refresh), audio.listMicrophones(primeMics)])
+  const displays = listDisplays()
   return {
     platformSupported: process.platform === 'win32' || IS_MAC,
     ffmpegVersion: features.version,
@@ -202,49 +206,181 @@ function toPhysical(rect: Rect): Rect {
   return { x: Math.round(rect.x * f), y: Math.round(rect.y * f), width: Math.round(rect.width * f), height: Math.round(rect.height * f) }
 }
 
-function selectRegion(display: Display): Promise<Rect | null> {
+/**
+ * Like the Snipping Tool: an overlay covers every screen. In region mode the user drags an area on
+ * any screen; in whole-screen mode they click the screen they want (skipped with a single screen).
+ */
+function chooseTarget(mode: Settings['mode']): Promise<Target | null> {
+  const displays = screen.getAllDisplays()
+  if (mode === 'fullscreen' && displays.length === 1) return Promise.resolve({ display: displays[0], rect: displays[0].bounds })
+
   return new Promise((resolve) => {
+    const cursorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    const overlays: { win: BrowserWindow; display: Display }[] = []
+    let done = false
+
+    const finish = (target: Target | null): void => {
+      if (done) return
+      done = true
+      cancelSelection = null
+      ipcMain.removeListener('overlay:done', onDone)
+      for (const o of overlays) if (!o.win.isDestroyed()) o.win.destroy()
+      resolve(target)
+    }
+    const onDone = (e: Electron.IpcMainEvent, result: OverlayResult): void => {
+      const o = overlays.find((x) => x.win.webContents === e.sender)
+      if (!o) return
+      if (!result) return finish(null)
+      if ('screen' in result) return finish({ display: o.display, rect: o.display.bounds })
+      const r = result.rect
+      const valid = [r.x, r.y, r.width, r.height].every(Number.isFinite) && r.width >= 16 && r.height >= 16
+      if (!valid) return finish(null)
+      const b = o.display.bounds
+      finish({ display: o.display, rect: { x: b.x + r.x, y: b.y + r.y, width: r.width, height: r.height } })
+    }
+    ipcMain.on('overlay:done', onDone)
+    cancelSelection = () => finish(null)
+
+    displays.forEach((d, i) => {
+      const win = new BrowserWindow({
+        ...d.bounds,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        hasShadow: false,
+        show: false,
+        // macOS otherwise keeps windows below the menu bar, leaving that strip unselectable.
+        enableLargerThanScreen: true,
+        webPreferences: { preload: join(__dirname, '../preload/overlay.js') }
+      })
+      win.setAlwaysOnTop(true, 'screen-saver')
+      overlays.push({ win, display: d })
+      win.on('closed', () => finish(null))
+      win.once('ready-to-show', () => {
+        win.setBounds(d.bounds)
+        if (d.id === cursorDisplay.id) {
+          win.show()
+          win.focus()
+        } else win.showInactive()
+      })
+      const size = physicalSize(d)
+      loadPage(win, 'overlay.html', {
+        mode: mode === 'fullscreen' ? 'screen' : 'region',
+        label: displayLabel(d, i),
+        size: `${size.width}×${size.height}`,
+        active: d.id === cursorDisplay.id ? '1' : '0'
+      })
+    })
+  })
+}
+
+/** Big 3-2-1 centred on the area being recorded. Resolves false if cancelled. */
+function runCountdown(target: Target, seconds: number): Promise<boolean> {
+  if (seconds <= 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const size = 220
+    const cx = target.rect.x + target.rect.width / 2
+    const cy = target.rect.y + target.rect.height / 2
     const win = new BrowserWindow({
-      ...display.bounds,
+      x: Math.round(cx - size / 2),
+      y: Math.round(cy - size / 2),
+      width: size,
+      height: size,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
       skipTaskbar: true,
+      focusable: false,
       resizable: false,
       movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
       hasShadow: false,
-      show: false,
-      // macOS otherwise keeps windows below the menu bar, leaving that strip unselectable.
-      enableLargerThanScreen: true,
-      webPreferences: { preload: join(__dirname, '../preload/overlay.js') }
+      show: false
     })
+    win.setIgnoreMouseEvents(true)
+    win.setContentProtection(true)
     win.setAlwaysOnTop(true, 'screen-saver')
 
-    let done = false
-    const finish = (rect: Rect | null): void => {
-      if (done) return
-      done = true
-      ipcMain.removeListener('overlay:done', onDone)
-      if (!win.isDestroyed()) win.close()
-      resolve(rect)
+    let left = seconds
+    let timer: NodeJS.Timeout | null = null
+    const finish = (ok: boolean): void => {
+      if (timer) clearTimeout(timer)
+      timer = null
+      cancelCountdown = null
+      if (!win.isDestroyed()) win.destroy()
+      resolve(ok)
     }
-    const onDone = (e: Electron.IpcMainEvent, rect: Rect | null): void => {
-      if (e.sender !== win.webContents) return
-      const valid = rect && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width >= 16 && rect.height >= 16
-      finish(valid ? rect : null)
+    cancelCountdown = () => finish(false)
+    const tick = (): void => {
+      if (left === 0) return finish(true)
+      recorder.update({ state: 'countdown', countdown: left })
+      left -= 1
+      timer = setTimeout(tick, 1000)
     }
-    ipcMain.on('overlay:done', onDone)
-    win.on('closed', () => finish(null))
     win.once('ready-to-show', () => {
-      win.setBounds(display.bounds)
-      win.show()
-      win.focus()
+      win.showInactive()
+      tick()
     })
-    loadPage(win, 'overlay.html')
+    loadPage(win, 'countdown.html', { s: String(seconds) })
   })
+}
+
+/** Small floating timer + Stop button, excluded from the recording like the Snipping Tool's bar. */
+function showBar(display: Display): void {
+  closeBar()
+  const width = 300
+  const height = 56
+  const area = display.workArea
+  bar = new BrowserWindow({
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: area.y + 12,
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    show: false,
+    webPreferences: { preload: join(__dirname, '../preload/index.js') }
+  })
+  bar.setContentProtection(true)
+  bar.setAlwaysOnTop(true, 'screen-saver')
+  if (IS_MAC) bar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  const win = bar
+  win.once('ready-to-show', () => win.showInactive())
+  win.on('closed', () => {
+    if (bar === win) bar = null
+  })
+  loadPage(win, 'bar.html')
+}
+
+function closeBar(): void {
+  if (bar && !bar.isDestroyed()) bar.destroy()
+  bar = null
+}
+
+/** The control panel is hidden while choosing and recording so it can never end up in the video. */
+function hidePanel(): void {
+  if (mainWindow?.isVisible()) {
+    panelHiddenForRecording = true
+    mainWindow.hide()
+  }
+}
+
+function restorePanel(): void {
+  if (panelHiddenForRecording && mainWindow && !mainWindow.isDestroyed()) mainWindow.showInactive()
+  panelHiddenForRecording = false
 }
 
 function timestamp(): string {
@@ -327,24 +463,20 @@ async function macAttempts(base: Omit<Attempt, 'backend' | 'rect'>, display: Dis
 async function startRecording(): Promise<void> {
   if (process.platform !== 'win32' && !IS_MAC) throw new Error('Recording is supported on Windows and macOS only.')
   const s = getSettings()
-  const primary = screen.getPrimaryDisplay()
-  const display = screen.getAllDisplays().find((d) => d.id === s.displayId) ?? primary
   recorder.update({ error: undefined, warning: undefined })
   if (IS_MAC) await ensureMacPermissions(s)
 
-  let dipRect: Rect = display.bounds
-  if (s.mode === 'region') {
-    recorder.update({ state: 'selecting', error: undefined, warning: undefined })
-    const sel = await selectRegion(display)
-    if (!sel) {
-      recorder.update({ state: 'idle' })
-      return
-    }
-    dipRect = { x: display.bounds.x + sel.x, y: display.bounds.y + sel.y, width: sel.width, height: sel.height }
-    // Give the compositor a moment to remove the overlay before the first frame is grabbed.
-    await new Promise((r) => setTimeout(r, 250))
+  hidePanel()
+  recorder.update({ state: 'selecting' })
+  const target = await chooseTarget(s.mode)
+  if (!target) {
+    recorder.update({ state: 'idle' })
+    restorePanel()
+    return
   }
+  const { display, rect: dipRect } = target
 
+  // Everything slow happens before the countdown, so recording starts right after "1".
   const [features, outputs] = await Promise.all([
     detectFeatures(),
     IS_MAC || s.backend === 'gdigrab' ? Promise.resolve([]) : dxgiOutputs()
@@ -373,23 +505,39 @@ async function startRecording(): Promise<void> {
     ? await macAttempts(base, display, dipRect)
     : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
 
+  showBar(display)
+  if (!(await runCountdown(target, s.countdown))) {
+    await audio.stop()
+    closeBar()
+    recorder.update({ state: 'idle', countdown: undefined })
+    restorePanel()
+    return
+  }
+  // Capture starts now; FFmpeg's start-up check takes a moment before the state flips to 'recording'.
+  recorder.update({ state: 'countdown', countdown: 0 })
+
   try {
     await recorder.start(attempts, join(pendingDir(), `Recording ${timestamp()}.mp4`))
   } catch (err) {
     await audio.stop()
     throw err
   }
-  recorder.update({ audio: audioLabel, warning })
+  recorder.update({ audio: audioLabel, warning, countdown: undefined })
 }
 
 async function toggleRecording(): Promise<void> {
   const { state } = recorder.getStatus()
   if (state === 'recording') return recorder.stop()
+  if (state === 'countdown') return cancelCountdown?.()
+  if (state === 'selecting') return cancelSelection?.()
   if (state !== 'idle') return
   try {
     await startRecording()
   } catch (err) {
-    recorder.update({ state: 'idle', error: (err as Error).message })
+    void audio.stop()
+    closeBar()
+    panelHiddenForRecording = false
+    recorder.update({ state: 'idle', countdown: undefined, error: (err as Error).message })
     showMainWindow()
   }
 }
@@ -447,11 +595,14 @@ function registerIpc(): void {
 
 recorder.on('status', (status) => {
   mainWindow?.webContents.send('rec:status', status)
+  if (bar && !bar.isDestroyed()) bar.webContents.send('rec:status', status)
   updateTray()
 })
 
 recorder.on('recorded', (file: string) => {
   void audio.stop()
+  closeBar()
+  restorePanel()
   recorder.update({ pending: basename(file) })
   // Don't yank the editor away from a recording the user is already reviewing; it opens next.
   if (!editor.isOpen()) editor.open(file)

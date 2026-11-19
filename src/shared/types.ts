@@ -3,8 +3,9 @@ export type CaptureMode = 'fullscreen' | 'region'
 export type Backend = 'auto' | 'ddagrab' | 'gdigrab'
 
 export interface Settings {
-  displayId: number | null
   mode: CaptureMode
+  /** Seconds of 3-2-1 countdown before recording starts; 0 = start immediately. */
+  countdown: number
   /** null keeps the captured (native) resolution — no scaling at all. */
   outputHeight: number | null
   fps: 30 | 60
@@ -30,7 +31,6 @@ export interface DisplayInfo {
   height: number
   scaleFactor: number
   primary: boolean
-  thumbnail: string | null
 }
 
 export interface EncoderInfo {
@@ -54,10 +54,12 @@ export interface Capabilities {
   hotkey: string | null
 }
 
-export type RecordingState = 'idle' | 'selecting' | 'recording' | 'saving'
+export type RecordingState = 'idle' | 'selecting' | 'countdown' | 'recording' | 'saving'
 
 export interface RecordingStatus {
   state: RecordingState
+  /** Seconds left while state is 'countdown'. */
+  countdown?: number
   elapsed: number
   bytes: number
   droppedFrames: number

@@ -6,7 +6,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:"
     />
-    <title>Select region</title>
+    <title>Choose what to record</title>
     <style>
       html,
       body {
@@ -15,22 +15,33 @@
         height: 100%;
         overflow: hidden;
         background: transparent;
-        cursor: crosshair;
         user-select: none;
-        font: 13px 'Segoe UI', system-ui, sans-serif;
+        font: 14px 'Segoe UI', system-ui, -apple-system, sans-serif;
+        color: #e8eaee;
+      }
+      body.region {
+        cursor: crosshair;
+      }
+      body.screen {
+        cursor: pointer;
       }
       #shade {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.4);
+        background: rgba(0, 0, 0, 0.45);
+        transition: background 0.12s;
       }
       #shade.dragging {
         background: transparent;
       }
+      body.screen.hover #shade {
+        background: rgba(239, 68, 68, 0.08);
+        box-shadow: inset 0 0 0 4px #ef4444;
+      }
       #box {
         position: fixed;
         border: 2px solid #ef4444;
-        box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.4);
+        box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
         pointer-events: none;
       }
       #size {
@@ -41,26 +52,57 @@
         color: #fff;
         padding: 2px 8px;
         border-radius: 4px;
+        font-size: 13px;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
       }
-      #help {
+      .pill {
         position: fixed;
-        top: 24px;
         left: 50%;
         transform: translateX(-50%);
-        background: rgba(16, 18, 22, 0.92);
-        color: #e8eaee;
-        padding: 8px 16px;
+        background: rgba(16, 18, 22, 0.94);
+        border: 1px solid #2a2f39;
+        padding: 9px 18px;
         border-radius: 999px;
         pointer-events: none;
+        white-space: nowrap;
+      }
+      #help {
+        top: 24px;
+      }
+      #card {
+        top: 50%;
+        transform: translate(-50%, -50%);
+        border-radius: 14px;
+        padding: 18px 26px;
+        text-align: center;
+        display: none;
+      }
+      body.screen.hover #card {
+        display: block;
+        border-color: #ef4444;
+      }
+      #card strong {
+        display: block;
+        font-size: 18px;
+        margin-bottom: 4px;
+      }
+      #card span {
+        color: #8b93a1;
+      }
+      kbd {
+        font: 12px ui-monospace, Consolas, monospace;
+        border: 1px solid #2a2f39;
+        border-radius: 4px;
+        padding: 0 5px;
       }
     </style>
   </head>
   <body>
     <div id="shade"></div>
     <div id="box" hidden><span id="size"></span></div>
-    <div id="help">Drag to select the area to record · Esc to cancel</div>
+    <div id="help" class="pill"></div>
+    <div id="card" class="pill"><strong id="card-title"></strong><span id="card-detail"></span></div>
     <script type="module" src="./overlay.ts"></script>
   </body>
 </html>

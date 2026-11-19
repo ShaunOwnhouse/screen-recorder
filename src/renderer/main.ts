@@ -25,7 +25,8 @@ const el = {
   settingsToggle: $<HTMLButtonElement>('settings-toggle'),
   settingsBody: $('settings-body'),
   settingsSummary: $('settings-summary'),
-  screens: $('screens'),
+  modeHint: $('mode-hint'),
+  countdown: $<HTMLSelectElement>('countdown'),
   pillSystem: $<HTMLButtonElement>('pill-system'),
   pillMic: $<HTMLButtonElement>('pill-mic'),
   resolution: $<HTMLSelectElement>('resolution'),
@@ -107,54 +108,19 @@ async function save(patch: Partial<Settings>): Promise<void> {
   if (testing && AUDIO_KEYS.some((k) => k in patch)) void runAudioTest(true)
 }
 
-function selectedDisplay(): Capabilities['displays'][number] | undefined {
-  return caps?.displays.find((d) => d.id === settings.displayId) ?? caps?.displays.find((d) => d.primary)
-}
-
 function setSettingsOpen(open: boolean): void {
   el.settingsBody.hidden = !open
   el.settingsToggle.setAttribute('aria-expanded', String(open))
   prefSet('settingsOpen', open ? '1' : '0')
 }
 
-function renderScreens(): void {
-  if (!caps) return
-  const selected = selectedDisplay()
-  el.screens.classList.toggle('single', caps.displays.length === 1)
-  el.screens.replaceChildren(
-    ...caps.displays.map((d) => {
-      const b = document.createElement('button')
-      b.type = 'button'
-      b.className = 'screen'
-      b.setAttribute('role', 'radio')
-      b.setAttribute('aria-checked', String(d.id === selected?.id))
-      const thumb = document.createElement('div')
-      thumb.className = 'thumb'
-      if (d.thumbnail) {
-        const img = document.createElement('img')
-        img.src = d.thumbnail
-        img.alt = ''
-        thumb.append(img)
-      }
-      const text = document.createElement('div')
-      text.className = 'screen-text'
-      const name = document.createElement('span')
-      name.className = 'screen-name'
-      name.textContent = d.label
-      const res = document.createElement('span')
-      res.className = 'screen-res'
-      res.textContent = `${d.width}×${d.height}`
-      text.append(name, res)
-      b.append(thumb, text)
-      b.addEventListener('click', () => void save({ displayId: d.id }))
-      return b
-    })
-  )
+/** Tallest connected screen, for the "upscaling adds no detail" hint. */
+function largestDisplayHeight(): number | null {
+  return caps?.displays.length ? Math.max(...caps.displays.map((d) => d.height)) : null
 }
 
 function renderSummary(): void {
-  const d = selectedDisplay()
-  const res = settings.outputHeight ? `${settings.outputHeight}p` : d ? `${d.height}p native` : 'Native'
+  const res = settings.outputHeight ? `${settings.outputHeight}p` : 'Native'
   el.settingsSummary.textContent = [res, `${settings.fps} fps`, QUALITY_SHORT[settings.quality]].join(' · ')
 }
 
@@ -165,6 +131,7 @@ function renderSettings(): void {
   })
   el.resolution.value = settings.outputHeight ? String(settings.outputHeight) : 'native'
   el.quality.value = settings.quality
+  el.countdown.value = String(settings.countdown)
   el.cursor.checked = settings.showCursor
   el.outdir.textContent = settings.outputDir
   el.outdir.title = settings.outputDir
@@ -182,7 +149,6 @@ function renderSettings(): void {
   el.noise.checked = settings.noiseSuppression
 
   if (caps) {
-    renderScreens()
     el.encoder.replaceChildren(
       option('auto', 'Auto — best available'),
       ...caps.encoders.map((e) => option(e.id, settings.quality === 'maximum' && !e.yuv444 ? `${e.label} (no 4:4:4)` : e.label))
@@ -199,15 +165,20 @@ function renderSettings(): void {
 }
 
 function renderHints(): void {
-  const d = selectedDisplay()
+  const multi = (caps?.displays.length ?? 1) > 1
+  el.modeHint.textContent =
+    settings.mode === 'region'
+      ? 'You’ll drag the area to record — on any screen.'
+      : multi
+        ? 'You’ll click the screen to record when you start.'
+        : 'Records your whole screen.'
+
+  const tallest = largestDisplayHeight()
   el.resHint.classList.remove('warn')
-  if (!d) {
-    el.resHint.textContent = ''
-  } else if (!settings.outputHeight) {
-    el.resHint.textContent =
-      settings.mode === 'region' ? 'Records the selected area at its exact pixel size.' : `Records at ${d.width}×${d.height}, exactly what's on screen.`
-  } else if (settings.outputHeight > d.height) {
-    el.resHint.textContent = `This screen is ${d.height}p — upscaling adds pixels, not detail. Native is sharper per byte.`
+  if (!settings.outputHeight) {
+    el.resHint.textContent = 'Records the exact pixels of the screen or area you pick.'
+  } else if (tallest && settings.outputHeight > tallest) {
+    el.resHint.textContent = `Your screens are ${tallest}p — upscaling adds pixels, not detail. Native is sharper per byte.`
     el.resHint.classList.add('warn')
   } else {
     el.resHint.textContent = `Scaled to ${settings.outputHeight}p with high-quality Lanczos filtering.`
@@ -265,9 +236,9 @@ function renderStatus(s: RecordingStatus): void {
   el.record.disabled = s.state !== 'idle' || !caps?.platformSupported
 
   el.chip.className = `chip ${s.state === 'selecting' ? 'saving' : s.state}`
-  el.chip.textContent = { idle: 'Ready', selecting: 'Select an area…', recording: 'Recording', saving: 'Finishing…' }[s.state]
+  el.chip.textContent = { idle: 'Ready', selecting: 'Choose what to record…', countdown: 'Starting…', recording: 'Recording', saving: 'Finishing…' }[s.state]
   el.recordLabel.textContent =
-    s.state === 'saving' ? 'Finishing recording…' : s.state === 'selecting' ? 'Drag to select an area' : 'Start recording'
+    s.state === 'saving' ? 'Finishing recording…' : s.state === 'selecting' ? 'Choose what to record' : 'Start recording'
 
   if (recording) {
     el.timer.textContent = formatTime(s.elapsed)
@@ -354,7 +325,7 @@ function bind(): void {
     void save({ micDevice: id, micLabel: label, micEnabled: true })
   })
   el.testAudio.addEventListener('click', () => void runAudioTest(!testing))
-  $('refresh-screens').addEventListener('click', () => void loadCapabilities(true))
+  el.countdown.addEventListener('change', () => void save({ countdown: Number(el.countdown.value) }))
   $('choose-dir').addEventListener('click', async () => {
     settings = await api.chooseOutputDir()
     renderSettings()
