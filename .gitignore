@@ -4,3 +4,4 @@ dist/
 build/
 resources/mac/mac-helper
 *.log
+test-results/
