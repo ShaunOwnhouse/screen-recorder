@@ -3,6 +3,7 @@ import type { EditorApi } from '../shared/api.ts'
 
 const editor: EditorApi = {
   load: () => ipcRenderer.invoke('editor:load'),
+  reveal: () => ipcRenderer.invoke('editor:reveal'),
   makeProxy: () => ipcRenderer.invoke('editor:proxy'),
   save: (req) => ipcRenderer.invoke('editor:save', req),
   cancelExport: () => ipcRenderer.invoke('editor:cancel'),

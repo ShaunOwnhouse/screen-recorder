@@ -7,6 +7,7 @@ const el = {
   app: $('app'),
   chip: $('chip'),
   banner: $('banner'),
+  bannerWrap: $('banner-wrap'),
   warning: $('warning'),
   pending: $('pending'),
   pendingName: $('pending-name'),
@@ -252,7 +253,7 @@ function renderStatus(s: RecordingStatus): void {
     el.recMeters.replaceChildren()
   }
 
-  el.banner.hidden = !s.error
+  el.bannerWrap.hidden = !s.error
   el.banner.textContent = s.error ?? ''
   el.warning.hidden = !s.warning
   el.warning.textContent = s.warning ?? ''
@@ -275,7 +276,7 @@ function renderFooter(): void {
   el.footer.textContent = `FFmpeg ${caps.ffmpegVersion} · ${gpus} hardware encoder(s)`
   el.hotkeyHint.textContent = caps.hotkey ? `or press ${caps.hotkey} anywhere` : 'Global hotkey unavailable (in use by another app)'
   if (!caps.platformSupported) {
-    el.banner.hidden = false
+    el.bannerWrap.hidden = false
     el.banner.textContent = 'Recording is supported on Windows and macOS only.'
   }
 }
@@ -331,6 +332,7 @@ function bind(): void {
     renderSettings()
   })
   $('open-dir').addEventListener('click', () => void api.openOutputDir())
+  $('open-logs').addEventListener('click', () => void api.openLogs())
   $('play').addEventListener('click', () => void api.playLastRecording())
   $('reveal').addEventListener('click', () => void api.showLastRecording())
   $('review').addEventListener('click', () => void api.openReview())

@@ -118,6 +118,12 @@ input:focus-visible {
   word-break: break-word;
 }
 
+.banner-link {
+  margin-top: 6px;
+  color: #fecaca;
+  text-decoration: underline;
+}
+
 .banner.warn {
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.35);

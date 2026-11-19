@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, shell,
@@ -7,12 +7,12 @@ import {
 import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts'
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
-import { EditorController } from './editor.ts'
+import { EditorController, probeMedia } from './editor.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, runFfmpeg } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
-import { listPending, pendingDir, recoverInterrupted, resolvePending } from './pending.ts'
-import { Recorder } from './recorder.ts'
+import { listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
+import { Recorder, type RecordedInfo } from './recorder.ts'
 import { getSettings, updateSettings } from './settings.ts'
 import type { OverlayResult } from '../shared/api.ts'
 import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
@@ -383,6 +383,27 @@ function restorePanel(): void {
   panelHiddenForRecording = false
 }
 
+function logsDir(): string {
+  const dir = app.getPath('logs')
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** A fresh log file for one recording; only the newest 20 are kept. */
+function newLogPath(stamp: string): string {
+  const dir = logsDir()
+  const old = readdirSync(dir)
+    .filter((n) => /^recording .*\.log$/i.test(n))
+    .map((n) => join(dir, n))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  for (const f of old.slice(19)) rmSync(f, { force: true })
+  return join(dir, `recording ${stamp}.log`)
+}
+
+function lastLine(text: string): string {
+  return text.trim().split(/\r?\n/).filter(Boolean).pop() ?? ''
+}
+
 function timestamp(): string {
   const d = new Date()
   const p = (n: number): string => String(n).padStart(2, '0')
@@ -517,7 +538,8 @@ async function startRecording(): Promise<void> {
   recorder.update({ state: 'countdown', countdown: 0 })
 
   try {
-    await recorder.start(attempts, join(pendingDir(), `Recording ${timestamp()}.mp4`))
+    const stamp = timestamp()
+    await recorder.start(attempts, join(pendingDir(), `Recording ${stamp}.mp4`), newLogPath(stamp))
   } catch (err) {
     await audio.stop()
     throw err
@@ -583,6 +605,7 @@ function registerIpc(): void {
     return res.errors
   })
   ipcMain.handle('shell:openDir', () => openOutputDir())
+  ipcMain.handle('shell:openLogs', () => shell.openPath(logsDir()))
   ipcMain.handle('shell:showLast', () => {
     const f = recorder.getStatus().lastFile
     if (f) shell.showItemInFolder(f)
@@ -599,10 +622,22 @@ recorder.on('status', (status) => {
   updateTray()
 })
 
-recorder.on('recorded', (file: string) => {
+recorder.on('recorded', async (file: string, info: RecordedInfo) => {
   void audio.stop()
   closeBar()
   restorePanel()
+  // Never open the review window on a file with no video in it — say what went wrong instead.
+  const meta = existsSync(file) ? await probeMedia(file) : null
+  if (!meta) {
+    removePending(file)
+    const reason = lastLine(info.stderr)
+    recorder.update({
+      pending: newestPending(),
+      error: `The recording failed — no video was captured.${reason ? `\nFFmpeg said: ${reason}` : ''}\nFull details: ${info.log}`
+    })
+    showMainWindow()
+    return
+  }
   recorder.update({ pending: basename(file) })
   // Don't yank the editor away from a recording the user is already reviewing; it opens next.
   if (!editor.isOpen()) editor.open(file)

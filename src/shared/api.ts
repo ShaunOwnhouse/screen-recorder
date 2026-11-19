@@ -10,6 +10,7 @@ export interface Api {
   toggleRecording(): Promise<void>
   getStatus(): Promise<RecordingStatus>
   openOutputDir(): Promise<void>
+  openLogs(): Promise<void>
   showLastRecording(): Promise<void>
   playLastRecording(): Promise<void>
   openReview(): Promise<void>
@@ -20,8 +21,11 @@ export interface Api {
   onCapsChanged(cb: () => void): () => void
 }
 
+export type EditorLoad = { source: EditorSource } | { error: string }
+
 export interface EditorApi {
-  load(): Promise<EditorSource | null>
+  load(): Promise<EditorLoad>
+  reveal(): Promise<void>
   makeProxy(): Promise<string>
   save(req: SaveRequest): Promise<{ ok: boolean; path?: string; error?: string }>
   cancelExport(): Promise<void>

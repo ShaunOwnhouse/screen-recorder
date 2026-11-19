@@ -465,14 +465,38 @@ video.addEventListener('error', async () => {
   }
 })
 
+function showLoadError(message: string): void {
+  stageMsg.replaceChildren()
+  const text = document.createElement('p')
+  text.textContent = message
+  const actions = document.createElement('div')
+  actions.className = 'msg-actions'
+  const discard = document.createElement('button')
+  discard.type = 'button'
+  discard.className = 'primary'
+  discard.textContent = 'Discard recording'
+  discard.addEventListener('click', () => void api.discard())
+  const reveal = document.createElement('button')
+  reveal.type = 'button'
+  reveal.className = 'ghost'
+  reveal.textContent = 'Show file'
+  reveal.addEventListener('click', () => void api.reveal())
+  actions.append(reveal, discard)
+  stageMsg.append(text, actions)
+  stageMsg.classList.add('interactive')
+  stageMsg.hidden = false
+  for (const id of ['save', 'save-as', 'play', 'mark-in', 'mark-out', 'crop-toggle']) ($(id) as HTMLButtonElement).disabled = true
+  nameInput.disabled = true
+}
+
 async function init(): Promise<void> {
   bind()
-  src = await api.load()
-  if (!src) {
-    stageMsg.textContent = 'This recording is no longer available.'
-    stageMsg.hidden = false
+  const loaded = await api.load()
+  if ('error' in loaded) {
+    showLoadError(loaded.error)
     return
   }
+  src = loaded.source
   const m = src.meta
   duration = m.duration
   keep = [[0, duration]]

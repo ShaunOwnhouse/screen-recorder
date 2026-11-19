@@ -15,6 +15,7 @@ const api: Api = {
   toggleRecording: () => ipcRenderer.invoke('rec:toggle'),
   getStatus: () => ipcRenderer.invoke('rec:status'),
   openOutputDir: () => ipcRenderer.invoke('shell:openDir'),
+  openLogs: () => ipcRenderer.invoke('shell:openLogs'),
   showLastRecording: () => ipcRenderer.invoke('shell:showLast'),
   playLastRecording: () => ipcRenderer.invoke('shell:playLast'),
   openReview: () => ipcRenderer.invoke('rec:review'),

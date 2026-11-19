@@ -1,14 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { buildExportArgs, buildProxyArgs, cropToPixels } from './args.ts'
 import { chooseEncoder, ffmpegPath, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl } from './media-protocol.ts'
 import { parseMediaInfo, ProgressParser } from './parse.ts'
 import { moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
 import { isFullRange, totalDuration } from '../shared/segments.ts'
-import type { EditorSource, EncoderInfo, Rect, RecordingMeta, SaveRequest, Settings } from '../shared/types.ts'
+import type { EditorLoad } from '../shared/api.ts'
+import type { EncoderInfo, Rect, RecordingMeta, SaveRequest, Settings } from '../shared/types.ts'
 
 interface Deps {
   preload: string
@@ -33,7 +34,10 @@ export class EditorController {
   private cancelled = false
 
   constructor(private readonly deps: Deps) {
-    ipcMain.handle('editor:load', (e) => (this.owns(e.sender) ? this.source() : null))
+    ipcMain.handle('editor:load', (e) => (this.owns(e.sender) ? this.source() : { error: 'Not available.' }))
+    ipcMain.handle('editor:reveal', (e) => {
+      if (this.owns(e.sender) && this.file && existsSync(this.file)) shell.showItemInFolder(this.file)
+    })
     ipcMain.handle('editor:proxy', (e) => (this.owns(e.sender) ? this.makeProxy() : ''))
     ipcMain.handle('editor:save', (e, req: SaveRequest) => (this.owns(e.sender) ? this.save(req) : { ok: false }))
     ipcMain.handle('editor:cancel', (e) => {
@@ -96,19 +100,23 @@ export class EditorController {
     if (this.win && !this.win.isDestroyed()) this.win.destroy()
   }
 
-  private async source(): Promise<EditorSource | null> {
+  private async source(): Promise<EditorLoad> {
     const file = this.file
-    if (!file || !existsSync(file)) return null
+    if (!file || !existsSync(file)) return { error: 'This recording has already been saved or deleted.' }
     const meta = await probeMedia(file)
-    if (!meta) return null
+    if (!meta) {
+      return { error: 'This recording can’t be opened — it has no video in it (the recording probably failed). You can discard it.' }
+    }
     const name = basename(file)
     return {
+      source: {
       name,
       url: mediaUrl(name),
       meta,
       sizeBytes: statSync(file).size,
       defaultName: name.replace(/\.mp4$/i, ''),
       outputDir: this.deps.settings().outputDir
+      }
     }
   }
 

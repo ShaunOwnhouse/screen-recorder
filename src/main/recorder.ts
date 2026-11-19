@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { rmSync } from 'node:fs'
+import { createWriteStream, existsSync, rmSync, type WriteStream } from 'node:fs'
 import { buildRecordArgs, buildRemuxArgs, effectiveEncoder, ENCODER_LABELS, outputSize, type RecordArgsInput } from './args.ts'
 import { ffmpegPath, runFfmpeg } from './ffmpeg.ts'
 import { ProgressParser } from './parse.ts'
@@ -8,6 +8,19 @@ import { moveFile, tempPathFor } from './pending.ts'
 import type { RecordingStatus } from '../shared/types.ts'
 
 type Attempt = Omit<RecordArgsInput, 'outputPath'>
+
+export interface RecordedInfo {
+  /** Last lines FFmpeg printed (warnings/errors). */
+  stderr: string
+  /** Full FFmpeg log for this recording. */
+  log: string
+}
+
+const BACKEND_LABELS: Record<Attempt['backend'], string> = {
+  ddagrab: 'Desktop Duplication',
+  gdigrab: 'GDI',
+  avfoundation: 'AVFoundation'
+}
 
 const STARTUP_GRACE_MS = 1500
 const STOP_TIMEOUT_MS = 15000
@@ -20,6 +33,9 @@ export class Recorder extends EventEmitter {
   private tempPath = ''
   private finalPath = ''
   private stopping: Promise<void> | null = null
+  private log: WriteStream | null = null
+  private logPath = ''
+  private stderrTail = ''
 
   getStatus(): RecordingStatus {
     return this.status
@@ -31,9 +47,13 @@ export class Recorder extends EventEmitter {
   }
 
   /** Tries each attempt in order (e.g. Desktop Duplication + GPU first, GDI + CPU last). */
-  async start(attempts: Attempt[], finalPath: string): Promise<void> {
+  async start(attempts: Attempt[], finalPath: string, logPath: string): Promise<void> {
     if (this.proc) throw new Error('Already recording.')
     this.finalPath = finalPath
+    this.logPath = logPath
+    this.stderrTail = ''
+    this.log?.end()
+    this.log = createWriteStream(logPath)
     // Recorded as crash-safe fragmented MP4, then remuxed losslessly to a normal MP4 on stop.
     this.tempPath = tempPathFor(finalPath)
 
@@ -46,7 +66,9 @@ export class Recorder extends EventEmitter {
         errors.push(`${attempt.backend}/${attempt.encoder}: ${(err as Error).message}`)
       }
     }
-    throw new Error(`FFmpeg could not start recording.\n${errors.join('\n')}`)
+    this.log?.end()
+    this.log = null
+    throw new Error(`FFmpeg could not start recording.\n${errors.join('\n')}\nLog: ${logPath}`)
   }
 
   private launch(attempt: Attempt): Promise<void> {
@@ -56,6 +78,7 @@ export class Recorder extends EventEmitter {
     const spawnedAt = Date.now()
     const parser = new ProgressParser()
     let stderrTail = ''
+    this.log?.write(`\n> ${attempt.backend} / ${attempt.encoder}\n> ffmpeg ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')}\n`)
 
     proc.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
       for (const p of parser.push(chunk)) {
@@ -64,6 +87,8 @@ export class Recorder extends EventEmitter {
     })
     proc.stderr!.setEncoding('utf8').on('data', (chunk: string) => {
       stderrTail = (stderrTail + chunk).slice(-2000)
+      this.stderrTail = stderrTail
+      this.log?.write(chunk)
     })
 
     return new Promise((resolve, reject) => {
@@ -87,7 +112,7 @@ export class Recorder extends EventEmitter {
         this.update({
           state: 'recording', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, error: undefined,
           encoder: ENCODER_LABELS[effectiveEncoder(attempt.encoder, attempt.quality)] ?? attempt.encoder,
-          backend: attempt.backend === 'ddagrab' ? 'Desktop Duplication' : 'GDI',
+          backend: BACKEND_LABELS[attempt.backend],
           resolution: `${out.width}×${out.height} @ ${attempt.fps}fps`
         })
         this.ticker = setInterval(() => this.update({ elapsed: (Date.now() - this.startedAt) / 1000 }), 500)
@@ -126,12 +151,17 @@ export class Recorder extends EventEmitter {
     }
     this.proc = null
 
-    const remux = await runFfmpeg(buildRemuxArgs(this.tempPath, this.finalPath), 10 * 60 * 1000)
-    if (remux.ok) rmSync(this.tempPath, { force: true })
-    // The fragmented file is still a valid MP4, just less seek-friendly, so keep it rather than lose the take.
-    else moveFile(this.tempPath, this.finalPath)
+    if (existsSync(this.tempPath)) {
+      const remux = await runFfmpeg(buildRemuxArgs(this.tempPath, this.finalPath), 10 * 60 * 1000)
+      if (remux.ok) rmSync(this.tempPath, { force: true })
+      // The fragmented file is still a valid MP4, just less seek-friendly, so keep it rather than lose the take.
+      else moveFile(this.tempPath, this.finalPath)
+    }
+    this.log?.end()
+    this.log = null
     this.stopping = null
     this.update({ state: 'idle', error })
-    this.emit('recorded', this.finalPath)
+    const info: RecordedInfo = { stderr: this.stderrTail, log: this.logPath }
+    this.emit('recorded', this.finalPath, info)
   }
 }
