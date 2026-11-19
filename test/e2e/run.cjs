@@ -205,6 +205,8 @@ async function record(app, main, label, { seconds, region }) {
     BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.isVisible() === false)
   check(`${label}: control panel hidden while recording`, hidden)
 
+  const barBounds = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('bar.html'))?.getBounds())
   await sleep(seconds * 1000)
   const barText = await bar.textContent('#text')
   check(`${label}: timer is running`, /^\d\d:\d\d/.test(barText), barText)
@@ -225,7 +227,7 @@ async function record(app, main, label, { seconds, region }) {
     .then(() => check(`${label}: review window can play the video`, true))
     .catch(() => check(`${label}: review window can play the video`, false, 'preview never became ready'))
   await shot(editor, `${label}-editor`)
-  return { editor, status: st, infoLine }
+  return { editor, status: st, infoLine, barBounds }
 }
 
 async function save(app, editor, name) {
@@ -268,20 +270,20 @@ async function save(app, editor, name) {
 
     // 1) Whole screen, Maximum, with audio → save untouched
     {
-      const { editor, status } = await record(app, main, 'maximum', { seconds: 5 })
+      const { editor, status, barBounds } = await record(app, main, 'maximum', { seconds: 5 })
       const file = await save(app, editor, 'e2e-maximum')
       validate('Maximum whole screen', file, {
         width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 4, maxSeconds: 12
       })
       if (isWin) {
-        // The bar sits at the top-centre of the work area; it must not appear in the recording.
-        const bw = 300, bh = 56
+        // Wherever the bar was placed, none of its pixels may appear in the video.
+        const b = barBounds
         const region = {
-          w: Math.round(bw * display.f), h: Math.round(bh * display.f),
-          x: Math.round((display.work.x + (display.work.width - bw) / 2) * display.f), y: Math.round((display.work.y + 12) * display.f)
+          w: Math.round(b.width * display.f), h: Math.round(b.height * display.f),
+          x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
         const red = redPixels(file, 3, region)
-        check('Maximum whole screen: recording bar is NOT in the video', red < 20, `${red} bright-red UI pixels where the bar was`)
+        check('Maximum whole screen: recording bar is NOT in the video', red < 20, `${red} bright-red UI pixels where the bar was (${JSON.stringify(b)})`)
       }
       log('recorded with', status.backend, '/', status.encoder)
     }

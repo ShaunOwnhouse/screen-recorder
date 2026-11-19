@@ -331,19 +331,59 @@ function runCountdown(target: Target, seconds: number): Promise<boolean> {
   })
 }
 
+const BAR_WIDTH = 300
+const BAR_HEIGHT = 44
+
+const overlaps = (a: Rect, b: Rect, pad: number): boolean =>
+  a.x < b.x + b.width + pad && a.x + a.width + pad > b.x && a.y < b.y + b.height + pad && a.y + a.height + pad > b.y
+
+/**
+ * Where the recording bar goes. Content protection should hide it from the video, but the surest way
+ * to keep it out of a recording is to not put it in the recorded area at all: on another screen when
+ * there is one, or beside the selected region.
+ */
+export function barPlacement(target: Target): { display: Display; x: number; y: number } {
+  const gap = 12
+  const rec = target.rect
+  const home = target.display
+  const whole = rec.width >= home.bounds.width - 2 && rec.height >= home.bounds.height - 2
+  const other = screen.getAllDisplays().find((d) => d.id !== home.id)
+  const topCentre = (d: Display): { display: Display; x: number; y: number } => ({
+    display: d,
+    x: Math.round(d.workArea.x + (d.workArea.width - BAR_WIDTH) / 2),
+    y: d.workArea.y + gap
+  })
+  if (whole) return other ? topCentre(other) : topCentre(home)
+
+  const a = home.workArea
+  const cx = Math.round(a.x + (a.width - BAR_WIDTH) / 2)
+  const candidates = [
+    { x: cx, y: a.y + gap },
+    { x: cx, y: a.y + a.height - BAR_HEIGHT - gap },
+    { x: a.x + gap, y: a.y + gap },
+    { x: a.x + a.width - BAR_WIDTH - gap, y: a.y + gap },
+    { x: a.x + gap, y: a.y + a.height - BAR_HEIGHT - gap },
+    { x: a.x + a.width - BAR_WIDTH - gap, y: a.y + a.height - BAR_HEIGHT - gap }
+  ]
+  const free = candidates.find((c) => !overlaps({ x: c.x, y: c.y, width: BAR_WIDTH, height: BAR_HEIGHT }, rec, 8))
+  if (free) return { display: home, ...free }
+  return other ? topCentre(other) : { display: home, ...candidates[0] }
+}
+
 /** Small floating timer + Stop button, excluded from the recording like the Snipping Tool's bar. */
-function showBar(display: Display): void {
+function showBar(target: Target): void {
   closeBar()
-  const width = 300
-  const height = 56
-  const area = display.workArea
+  const place = barPlacement(target)
   bar = new BrowserWindow({
-    x: Math.round(area.x + (area.width - width) / 2),
-    y: area.y + 12,
-    width,
-    height,
+    x: place.x,
+    y: place.y,
+    width: BAR_WIDTH,
+    height: BAR_HEIGHT,
     frame: false,
-    transparent: true,
+    // Opaque on purpose: Windows' capture exclusion is far more dependable for ordinary windows than
+    // for see-through (layered/composition-alpha) ones.
+    transparent: false,
+    backgroundColor: '#181b21',
     alwaysOnTop: true,
     skipTaskbar: true,
     focusable: false,
@@ -537,7 +577,7 @@ async function startRecording(): Promise<void> {
       ? [{ ...base, backend: 'x11grab' as const, x11Display: process.env.DISPLAY ?? ':0', rect: toPhysical(dipRect) }]
       : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
 
-  showBar(display)
+  showBar(target)
   if (!(await runCountdown(target, s.countdown))) {
     await audio.stop()
     closeBar()

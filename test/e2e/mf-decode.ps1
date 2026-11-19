@@ -30,7 +30,7 @@ try {
   # 2) Can it actually decode a frame?
   $clip = Await ([Windows.Media.Editing.MediaClip]::CreateFromFileAsync($file)) ([Windows.Media.Editing.MediaClip])
   $composition = New-Object Windows.Media.Editing.MediaComposition
-  $composition.Clips.Add($clip)
+  $composition.Clips.Append($clip)
   $method = [Windows.Media.Editing.MediaComposition].GetMethod('GetThumbnailAsync', [Type[]]@([TimeSpan], [int], [int], [Windows.Media.Editing.VideoFramePrecision]))
   $thumbType = $method.ReturnType.GenericTypeArguments[0]
   $op = $composition.GetThumbnailAsync([TimeSpan]::FromSeconds(1), 320, 180, [Windows.Media.Editing.VideoFramePrecision]::NearestFrame)
