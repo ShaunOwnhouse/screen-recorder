@@ -71,7 +71,7 @@ function isFaststart(file) {
   }
 }
 
-/** Counts bright-red UI pixels (the recording bar's Stop button) inside a region of one video frame. */
+/** Finds bright-red UI pixels (the recording bar's Stop button, the countdown ring) in a region of one video frame. */
 function redPixels(file, at, region) {
   const r = ff(
     ['-hide_banner', '-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1',
@@ -79,11 +79,18 @@ function redPixels(file, at, region) {
     { encoding: 'buffer' }
   )
   const buf = r.stdout
-  let n = 0
+  let n = 0, x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1
   for (let i = 0; i + 2 < buf.length; i += 3) {
-    if (Math.abs(buf[i] - 239) < 25 && Math.abs(buf[i + 1] - 68) < 25 && Math.abs(buf[i + 2] - 68) < 25) n++
+    if (Math.abs(buf[i] - 239) < 25 && Math.abs(buf[i + 1] - 68) < 25 && Math.abs(buf[i + 2] - 68) < 25) {
+      n++
+      const p = i / 3, x = p % region.w, y = Math.floor(p / region.w)
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+    }
   }
-  return n
+  return { count: n, bbox: n ? { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 } : null }
 }
 
 /** Opens the file with Windows' own media stack (the one Media Player and Photos use). */
@@ -302,7 +309,8 @@ async function save(app, editor, name) {
           w: Math.round(b.width * display.f), h: Math.round(b.height * display.f),
           x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
-        const red = redPixels(file, 3, region)
+        const found = redPixels(file, 3, region)
+        const red = found.count
         const detail = `${red} bright-red UI pixels where the bar was (${JSON.stringify(b)})`
         if (red >= 20 && process.env.E2E_CAPTURE_EXCLUSION === 'informational') {
           // CI's virtual display has no graphics card and is captured with the old GDI method, which doesn't
@@ -357,8 +365,11 @@ async function save(app, editor, name) {
       check('Region: recording bar moved outside the recorded area', !overlaps, `bar ${JSON.stringify(barBounds)} vs region ${JSON.stringify(rect)}`)
       const file = await save(app, editor, 'e2e-region')
       validate('Region', file, { width: evenFloor(Math.round(e.w * display.f)), height: evenFloor(Math.round(e.h * display.f)), audio: true, minSeconds: 2 })
-      const red = redPixels(file, 2, { x: 0, y: 0, w: evenFloor(Math.round(e.w * display.f)), h: evenFloor(Math.round(e.h * display.f)) })
-      check('Region: no recording-bar pixels anywhere in the video', red < 20, `${red} bright-red UI pixels in the frame`)
+      const full = { x: 0, y: 0, w: evenFloor(Math.round(e.w * display.f)), h: evenFloor(Math.round(e.h * display.f)) }
+      const samples = [0.2, 1, 2, 3].map((t) => ({ t, ...redPixels(file, t, full) }))
+      log('red pixels over time:', JSON.stringify(samples))
+      const red = samples.find((x) => x.t === 2).count
+      check('Region: no recording-bar pixels anywhere in the video', red < 20, `${red} bright-red UI pixels in the frame; over time ${JSON.stringify(samples)}`)
     }
 
     // 5) Cancel during the countdown leaves nothing behind
