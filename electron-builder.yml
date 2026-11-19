@@ -23,6 +23,15 @@ nsis:
   artifactName: ${productName}-Setup-${version}.${ext}
 portable:
   artifactName: ${productName}-Portable-${version}.${ext}
+# Microsoft Store package. identityName / publisher / publisherDisplayName / displayName come from
+# Partner Center → Product identity, passed in by CI from repository variables.
+appx:
+  applicationId: ScreenRecorder
+  backgroundColor: '#101216'
+  languages:
+    - en-US
+  showNameOnTiles: true
+  artifactName: ${productName}-Store-${version}.${ext}
 
 mac:
   icon: resources/icon.png

@@ -20,20 +20,23 @@ const chunk = (type, data) => {
   crc.writeUInt32BE(crc32(td))
   return Buffer.concat([len, td, crc])
 }
-function png(size, pixel) {
-  const raw = Buffer.alloc((size * 4 + 1) * size)
-  for (let y = 0; y < size; y++) {
-    raw[y * (size * 4 + 1)] = 0
-    for (let x = 0; x < size; x++) {
+/** Renders pixel(u, v) to a PNG; u and v are in units of the image height (u runs to width/height). */
+function png(width, pixelOrHeight, maybePixel) {
+  const height = typeof pixelOrHeight === 'number' ? pixelOrHeight : width
+  const pixel = typeof pixelOrHeight === 'function' ? pixelOrHeight : maybePixel
+  const raw = Buffer.alloc((width * 4 + 1) * height)
+  for (let y = 0; y < height; y++) {
+    raw[y * (width * 4 + 1)] = 0
+    for (let x = 0; x < width; x++) {
       // 4x4 supersampling for smooth edges
       let acc = [0, 0, 0, 0]
       for (let sy = 0; sy < 4; sy++)
         for (let sx = 0; sx < 4; sx++) {
-          const p = pixel((x + (sx + 0.5) / 4) / size, (y + (sy + 0.5) / 4) / size)
+          const p = pixel((x + (sx + 0.5) / 4) / height, (y + (sy + 0.5) / 4) / height)
           acc = acc.map((v, i) => v + (i === 3 ? p[3] : p[i] * p[3]))
         }
       const a = acc[3] / 16
-      const o = y * (size * 4 + 1) + 1 + x * 4
+      const o = y * (width * 4 + 1) + 1 + x * 4
       raw[o] = a ? Math.round(acc[0] / acc[3]) : 0
       raw[o + 1] = a ? Math.round(acc[1] / acc[3]) : 0
       raw[o + 2] = a ? Math.round(acc[2] / acc[3]) : 0
@@ -41,8 +44,8 @@ function png(size, pixel) {
     }
   }
   const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(size, 0)
-  ihdr.writeUInt32BE(size, 4)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
   ihdr[8] = 8
   ihdr[9] = 6
   return Buffer.concat([
@@ -100,4 +103,17 @@ writeFileSync(`${out}/mac/trayTemplate.png`, png(16, recolor(trayIdle, BLACK)))
 writeFileSync(`${out}/mac/trayTemplate@2x.png`, png(32, recolor(trayIdle, BLACK)))
 writeFileSync(`${out}/mac/trayRec.png`, png(16, trayRec))
 writeFileSync(`${out}/mac/trayRec@2x.png`, png(32, trayRec))
+// Microsoft Store (MSIX) tile assets; the manifest's background colour fills behind them.
+const mark = (u, v) => {
+  const d = dist(u, v)
+  if (d < 0.17) return RED
+  if (d > 0.27 && d < 0.33) return RED
+  return NONE
+}
+const wide = (u, v) => mark(u - (310 / 150 - 1) / 2, v)
+mkdirSync(`${out}/appx`, { recursive: true })
+writeFileSync(`${out}/appx/StoreLogo.png`, png(50, app))
+writeFileSync(`${out}/appx/Square44x44Logo.png`, png(44, app))
+writeFileSync(`${out}/appx/Square150x150Logo.png`, png(150, mark))
+writeFileSync(`${out}/appx/Wide310x150Logo.png`, png(310, 150, wide))
 console.log('icons written to', out)

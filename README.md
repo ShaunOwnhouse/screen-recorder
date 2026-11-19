@@ -75,7 +75,7 @@ Windows SmartScreen ("Windows protected your PC") and macOS Gatekeeper warn abou
 
 | Option | Cost (approx., check current pricing) | Notes |
 | --- | --- | --- |
-| **Microsoft Store** | Free for individual developers | Microsoft signs Store apps, so there's no warning at all, plus automatic updates. Needs an MSIX package and Store review (ask Claude to add the MSIX build). |
+| **Microsoft Store** | Free for individual developers | Microsoft signs Store apps, so there's no warning at all, plus automatic updates. The build already makes the Store package; follow [store/README.md](store/README.md). |
 | **Azure Trusted Signing** | ~US$10 / month | Cheapest signing for direct downloads. Microsoft must verify your identity; check that your country and account type are eligible. |
 | **OV code-signing certificate** (e.g. SSL.com, Sectigo, Certum) | ~US$100–400 / year | The certificate lives on a hardware token or in a cloud HSM. SmartScreen can still warn for the first weeks while the certificate builds reputation. |
 

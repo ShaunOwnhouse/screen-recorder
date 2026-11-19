@@ -57,6 +57,61 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      # Microsoft Store package. Microsoft signs it during certification, so no certificate is needed.
+      # Uses the app identity from Partner Center (repository variables); without them it still builds
+      # a test package with a placeholder identity to prove packaging works, but doesn't upload it.
+      - name: Package for Microsoft Store
+        shell: bash
+        env:
+          STORE_IDENTITY_NAME: ${{ vars.STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.STORE_PUBLISHER_DISPLAY_NAME }}
+          STORE_DISPLAY_NAME: ${{ vars.STORE_DISPLAY_NAME }}
+        run: |
+          if [ -n "$STORE_IDENTITY_NAME" ]; then
+            echo "STORE_READY=1" >> "$GITHUB_ENV"
+          else
+            echo "No Store identity variables yet: building a placeholder test package"
+            STORE_IDENTITY_NAME=Placeholder.ScreenRecorder
+            STORE_PUBLISHER="CN=00000000-0000-0000-0000-000000000000"
+            STORE_PUBLISHER_DISPLAY_NAME=Placeholder
+            STORE_DISPLAY_NAME="Screen Recorder"
+          fi
+          npx electron-builder --win appx --publish never \
+            "-c.appx.identityName=$STORE_IDENTITY_NAME" \
+            "-c.appx.publisher=$STORE_PUBLISHER" \
+            "-c.appx.publisherDisplayName=$STORE_PUBLISHER_DISPLAY_NAME" \
+            "-c.appx.displayName=${STORE_DISPLAY_NAME:-Screen Recorder}"
+
+      - name: Declare microphone in Store package
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem dist -Filter *.appx | Select-Object -First 1
+          $makeappx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe |
+            Where-Object FullName -like '*\x64\*' | Sort-Object FullName -Descending | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'appx'
+          & $makeappx.FullName unpack /p $pkg.FullName /d $dir /o | Out-Null
+          # makeappx regenerates these on pack and refuses to pack them; brackets need -LiteralPath.
+          foreach ($f in 'AppxBlockMap.xml', '[Content_Types].xml', 'AppxSignature.p7x') {
+            Remove-Item -LiteralPath (Join-Path $dir $f) -ErrorAction SilentlyContinue
+          }
+          $manifest = Join-Path $dir 'AppxManifest.xml'
+          $xml = Get-Content $manifest -Raw
+          if ($xml -notmatch 'DeviceCapability Name="microphone"') {
+            $xml = $xml -replace '</Capabilities>', '  <DeviceCapability Name="microphone"/></Capabilities>'
+            Set-Content -Path $manifest -Value $xml -Encoding UTF8
+          }
+          & $makeappx.FullName pack /d $dir /p $pkg.FullName /o | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "makeappx pack failed" }
+          Select-String -Path $manifest -Pattern 'Capability'
+
+      - uses: actions/upload-artifact@v7
+        if: env.STORE_READY == '1'
+        with:
+          name: screen-recorder-microsoft-store
+          path: dist/*.appx
+          if-no-files-found: error
+
   mac:
     runs-on: macos-latest
     steps:
