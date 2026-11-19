@@ -40,6 +40,13 @@ export class Recorder extends EventEmitter {
   private log: WriteStream | null = null
   private logPath = ''
   private stderrTail = ''
+  private pendingNotes: string[] = []
+
+  /** Adds a diagnostic line to this recording's log (queued until the log exists). */
+  addNote(text: string): void {
+    if (this.log) this.log.write(`# ${text}\n`)
+    else this.pendingNotes.push(text)
+  }
 
   getStatus(): RecordingStatus {
     return this.status
@@ -58,6 +65,8 @@ export class Recorder extends EventEmitter {
     this.stderrTail = ''
     this.log?.end()
     this.log = createWriteStream(logPath)
+    for (const n of this.pendingNotes) this.log.write(`# ${n}\n`)
+    this.pendingNotes = []
     // Recorded as crash-safe fragmented MP4, then remuxed losslessly to a normal MP4 on stop.
     this.tempPath = tempPathFor(finalPath)
 

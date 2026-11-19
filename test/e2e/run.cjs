@@ -243,8 +243,15 @@ async function record(app, main, label, { seconds, region, checkAffinity }) {
   log(`bar window: ${barInfo.visible ? 'shown on screen' : 'HIDDEN by the app (it could see itself in the capture)'} at ${JSON.stringify(barBounds)}`)
   if (isWin && checkAffinity) {
     // Whatever the capture method does, the app must at least ask Windows to exclude the bar (WDA_EXCLUDEFROMCAPTURE = 0x11).
-    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'affinity.ps1'), '-Handle', barInfo.handle], { encoding: 'utf8', timeout: 60000 })
+    const readAffinity = () => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'affinity.ps1'), '-Handle', barInfo.handle], { encoding: 'utf8', timeout: 60000 })
+    const r = readAffinity()
     check(`${label}: the app asks Windows to exclude the bar from capture`, r.status === 0, `${r.stdout || ''}${r.stderr || ''}`.trim().slice(0, 200))
+    if (r.status !== 0) {
+      // Diagnostic: does asking again now (window fully shown) take effect?
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('bar.html'))?.setContentProtection(true))
+      const r2 = readAffinity()
+      log('affinity after the test calls setContentProtection(true) again:', `${r2.stdout || ''}${r2.stderr || ''}`.trim())
+    }
   }
   await sleep(seconds * 1000)
   const barText = await bar.textContent('#text')

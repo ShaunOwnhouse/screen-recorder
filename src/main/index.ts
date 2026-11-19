@@ -44,6 +44,7 @@ let panelHiddenForRecording = false
 let cancelSelection: (() => void) | null = null
 let cancelCountdown: (() => void) | null = null
 let startAborted = false
+let countdownWin: BrowserWindow | null = null
 
 if (!app.requestSingleInstanceLock()) app.quit()
 
@@ -284,6 +285,14 @@ function chooseTarget(mode: Settings['mode']): Promise<Target | null> {
 }
 
 /** Big 3-2-1 centred on the area being recorded. Resolves false if cancelled. */
+function setCountdownNote(text: string): void {
+  if (countdownWin && !countdownWin.isDestroyed()) {
+    void countdownWin.webContents.executeJavaScript(
+      `(() => { const n = document.getElementById('note'); if (n) { n.textContent = ${JSON.stringify(text)}; n.hidden = false } })()`
+    ).catch(() => undefined)
+  }
+}
+
 function runCountdown(target: Target, seconds: number, note?: string): Promise<boolean> {
   if (seconds <= 0) return Promise.resolve(true)
   return new Promise((resolve) => {
@@ -309,6 +318,7 @@ function runCountdown(target: Target, seconds: number, note?: string): Promise<b
     win.setIgnoreMouseEvents(true)
     win.setContentProtection(true)
     win.setAlwaysOnTop(true, 'screen-saver')
+    countdownWin = win
 
     let left = seconds
     let timer: NodeJS.Timeout | null = null
@@ -316,6 +326,7 @@ function runCountdown(target: Target, seconds: number, note?: string): Promise<b
       if (timer) clearTimeout(timer)
       timer = null
       cancelCountdown = null
+      if (countdownWin === win) countdownWin = null
       if (!win.isDestroyed()) win.destroy()
       resolve(ok)
     }
@@ -328,6 +339,7 @@ function runCountdown(target: Target, seconds: number, note?: string): Promise<b
     }
     win.once('ready-to-show', () => {
       win.showInactive()
+      win.setContentProtection(true) // re-apply now that the window really exists on screen
       tick()
     })
     loadPage(win, 'countdown.html', { s: String(seconds), ...(note ? { note } : {}) })
@@ -402,7 +414,13 @@ function showBar(target: Target): void {
   bar.setAlwaysOnTop(true, 'screen-saver')
   if (IS_MAC) bar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   const win = bar
-  win.once('ready-to-show', () => win.showInactive())
+  win.once('ready-to-show', () => {
+    win.showInactive()
+    // Re-apply once the window is really on screen, and again shortly after: on Windows the flag was found
+    // switched off when set only at creation.
+    win.setContentProtection(true)
+    setTimeout(() => !win.isDestroyed() && win.setContentProtection(true), 400)
+  })
   win.on('closed', () => {
     if (bar === win) bar = null
   })
@@ -417,35 +435,59 @@ function closeBar(): void {
 /**
  * Does the bar show up in a screen capture of its own area? Windows' "exclude from capture" flag isn't
  * honoured everywhere (virtual displays, some capture methods, newer macOS), so rather than trust it the app
- * grabs one frame the same way the recording will and compares it with what the bar actually looks like.
- * Anything uncertain counts as "leaks" — hiding the bar unnecessarily is harmless, showing it in a video isn't.
+ * grabs a frame the same way the recording will and compares it with what the bar actually looks like.
+ * It samples several times because a window can take a moment to appear on screen, stops (and calls
+ * `onLeak`) the moment the bar is seen, and treats "couldn't tell" as a leak: hiding the bar unnecessarily
+ * is harmless, showing it in a video isn't.
  */
-async function barLeaksIntoCapture(win: BrowserWindow, attemptsFor: (dipRect: Rect) => Promise<Attempt[]>): Promise<boolean> {
+async function barLeaksIntoCapture(
+  win: BrowserWindow,
+  attemptsFor: (dipRect: Rect) => Promise<Attempt[]>,
+  onLeak: () => void
+): Promise<boolean> {
+  const note = (t: string): void => recorder.addNote(`bar check: ${t}`)
   try {
     if (win.webContents.isLoading()) await new Promise<void>((r) => win.webContents.once('did-finish-load', () => r()))
-    await new Promise((r) => setTimeout(r, 800)) // let it paint and appear on screen
-    const attempts = await attemptsFor(win.getBounds())
-    const tried = new Set<string>()
-    for (const attempt of attempts) {
-      const key = JSON.stringify([attempt.backend, attempt.dda, attempt.avf])
-      if (tried.has(key)) continue
-      tried.add(key)
-      const { width, height } = attempt.rect
-      // The bar's text changes once a second, so compare against its look both before and after the grab.
-      const before = await win.webContents.capturePage()
-      const grab = await runFfmpegBinary(buildGrabArgs(attempt))
-      const after = await win.webContents.capturePage()
-      if (!grab.ok || grab.stdout.length < width * height * 3) continue
-      const results = [before, after].map((img) => {
-        const size = img.getSize()
-        return size.width === width && size.height === height ? compareBar(img.toBitmap(), width, height, grab.stdout) : null
-      })
-      const decided = results.filter((r) => r !== null)
-      if (!decided.length) return true
-      return decided.some((r) => r!.visible)
+    const bounds = win.getBounds()
+    const attempts = (await attemptsFor(bounds)).filter(
+      (a, i, all) => all.findIndex((b) => JSON.stringify([b.backend, b.dda, b.avf]) === JSON.stringify([a.backend, a.dda, a.avf])) === i
+    )
+    note(`bar at ${JSON.stringify(bounds)}; capture methods: ${attempts.map((a) => `${a.backend} ${JSON.stringify(a.rect)}`).join(' | ')}`)
+    let decidedAny = false
+    for (let i = 1; i <= 3; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      if (win.isDestroyed() || startAborted) return false
+      for (const attempt of attempts) {
+        const { width, height } = attempt.rect
+        const before = await win.webContents.capturePage()
+        const grab = await runFfmpegBinary(buildGrabArgs(attempt))
+        const after = await win.webContents.capturePage()
+        if (!grab.ok || grab.stdout.length < width * height * 3) {
+          note(`sample ${i} ${attempt.backend}: no frame (${grab.stderr.trim().split(/\r?\n/).pop() ?? ''})`)
+          continue
+        }
+        const results = [before, after].map((img) => {
+          const size = img.getSize()
+          return size.width === width && size.height === height ? compareBar(img.toBitmap(), width, height, grab.stdout) : null
+        })
+        note(`sample ${i} ${attempt.backend}: page ${before.getSize().width}x${before.getSize().height} vs grab ${width}x${height}; ` +
+          results.map((r) => (r ? `${r.compared} px compared, ${(r.matched * 100).toFixed(0)}% match` : 'size mismatch')).join(' / '))
+        if (results.every((r) => r === null)) continue
+        decidedAny = true
+        if (results.some((r) => r?.visible)) {
+          note(`the bar IS visible in the capture (sample ${i}) — hiding it`)
+          onLeak()
+          return true
+        }
+        break // this capture method worked; no need to try the others this round
+      }
     }
-    return true
-  } catch {
+    note(decidedAny ? 'the bar never showed up in the capture — keeping it on screen' : 'could not capture to compare — hiding the bar to be safe')
+    if (!decidedAny) onLeak()
+    return !decidedAny
+  } catch (err) {
+    note(`check failed (${(err as Error).message}) — hiding the bar to be safe`)
+    onLeak()
     return true
   }
 }
@@ -621,13 +663,19 @@ async function startRecording(): Promise<void> {
 
   showBar(target)
   recorder.update({ state: 'countdown', countdown: undefined })
-  let hideBar = false
-  if (bar && overlaps(bar.getBounds(), target.rect, 0)) hideBar = await barLeaksIntoCapture(bar, attemptsFor)
-  const note = hideBar
-    ? `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
-    : undefined
+  const barNote = `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
+  // The check runs while the countdown plays; the moment it sees the bar in the capture the bar is hidden.
+  const check =
+    bar && overlaps(bar.getBounds(), target.rect, 0)
+      ? barLeaksIntoCapture(bar, attemptsFor, () => {
+          bar?.hide()
+          setCountdownNote(barNote)
+        })
+      : Promise.resolve(false)
 
-  if (startAborted || !(await runCountdown(target, s.countdown, note)) || startAborted) {
+  const counted = await runCountdown(target, s.countdown)
+  const hideBar = await check
+  if (startAborted || !counted || startAborted) {
     await audio.stop()
     closeBar()
     recorder.update({ state: 'idle', countdown: undefined })
