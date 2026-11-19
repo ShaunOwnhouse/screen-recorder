@@ -10,7 +10,8 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 - **Constant-quality encoding.** It uses a quality target (CRF/CQ) rather than a bitrate cap, so busy scenes get the bits they need.
 - **GPU encoding.** It detects NVIDIA (NVENC), Intel (Quick Sync) and AMD (AMF) encoders and uses the best one, so 4K60 runs in real time. NVENC uses adaptive quantisation, which puts bits into text and edges. If no GPU encoder is available it falls back to x264 on the CPU.
 - **Fast capture on every monitor.** Each screen is matched to its own graphics adapter and output, so Desktop Duplication (`ddagrab`) works on any monitor, including mixed-scaling setups and laptops with two GPUs. GDI is only a fallback.
-- **Optional 4:4:4 colour.** The *Maximum* preset keeps full chroma resolution, so coloured text and thin lines stay crisp.
+- **Clean colour conversion.** RGB is converted to video colour with accurate rounding and full-resolution chroma interpolation, so coloured text edges don't smear.
+- **Optional 4:4:4 colour.** The *Studio* preset keeps full chroma resolution for VLC and video editors. The review window can convert these recordings to a play-everywhere copy.
 - **Correct colour.** Video is converted and tagged as BT.709, so colours match your screen in every player.
 - **Crash-safe files.** Recordings are written as fragmented MP4 and turned into a standard MP4 on stop. If the PC crashes mid-recording, the file is still playable.
 
@@ -20,7 +21,11 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 - 3-2-1 countdown (Off / 3 / 5 / 10 s) centred on the area being recorded
 - The app stays out of your recordings: the panel hides while you record, and the floating timer/Stop bar, the countdown and the review window are all excluded from capture
 - Native, 1080p, 1440p or 4K output at 30 or 60 fps
-- Quality presets: Very high (visually lossless), Maximum (4:4:4), High (smaller files), Lossless (archival)
+- Quality presets:
+  - **Maximum** (default): near-lossless H.264 using the encoder's slowest, best settings. Plays everywhere, including Windows Media Player.
+  - **Very high** and **High**: smaller files that also play everywhere.
+  - **Studio 4:4:4** and **Lossless**: for colour-critical work in VLC or a video editor.
+- 30, 60 or 120 fps
 - Audio: computer sound and/or any microphone or headset, each with its own on/off switch and volume, optional noise reduction, and live level meters. A *Test* button lets you check levels before recording.
 - **Nothing is saved without your approval.** When you stop, the recording opens in a review window where you can:
   - preview it
@@ -61,6 +66,32 @@ On first recording, macOS asks for **Screen & System Audio Recording** permissio
 | Hardware encoding | NVIDIA / Intel / AMD | Apple VideoToolbox |
 | Computer sound | Built in | macOS 13 Ventura or later |
 | Microphone | Yes | Yes |
+
+## Removing the security warning
+
+Windows SmartScreen ("Windows protected your PC") and macOS Gatekeeper warn about any app that isn't **code-signed** by a verified publisher. Only a signing certificate removes the warning. The build is already set up for it: add the secrets below under **GitHub → Settings → Secrets and variables → Actions**, push, and the next build is signed automatically.
+
+### Windows (pick one)
+
+| Option | Cost (approx., check current pricing) | Notes |
+| --- | --- | --- |
+| **Microsoft Store** | Free for individual developers | Microsoft signs Store apps, so there's no warning at all, plus automatic updates. Needs an MSIX package and Store review (ask Claude to add the MSIX build). |
+| **Azure Trusted Signing** | ~US$10 / month | Cheapest signing for direct downloads. Microsoft must verify your identity; check that your country and account type are eligible. |
+| **OV code-signing certificate** (e.g. SSL.com, Sectigo, Certum) | ~US$100–400 / year | The certificate lives on a hardware token or in a cloud HSM. SmartScreen can still warn for the first weeks while the certificate builds reputation. |
+
+Secrets for **Azure Trusted Signing**: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` (an app registration with the *Trusted Signing Certificate Profile Signer* role), `AZURE_SIGN_ENDPOINT` (e.g. `https://eus.codesigning.azure.net/`), `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`.
+
+Secrets for a **.pfx certificate**: `WIN_CSC_LINK` (the .pfx file, base64-encoded) and `WIN_CSC_KEY_PASSWORD`.
+
+### macOS
+
+Join the **Apple Developer Program** (US$99 / year), create a **Developer ID Application** certificate, export it as a .p12, and add:
+
+- `MAC_CSC_LINK`: the .p12, base64-encoded (`base64 -i cert.p12 | pbcopy`)
+- `MAC_CSC_KEY_PASSWORD`: the .p12 password
+- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (create one at appleid.apple.com), `APPLE_TEAM_ID`
+
+The build then signs with the hardened runtime and notarises with Apple, so the app opens with no warning.
 
 ## Development
 

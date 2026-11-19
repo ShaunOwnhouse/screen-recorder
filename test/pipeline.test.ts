@@ -68,9 +68,16 @@ test('4K60 native capture comes out as 3840x2160 60fps H.264 BT.709', { timeout:
     assert.match(info, /, 60 fps/)
   }))
 
-test('maximum quality records full 4:4:4 colour', { timeout: 120000 }, () =>
+test('maximum quality is H.264 High 4:2:0, the format Windows Media Player plays', { timeout: 120000 }, () =>
   inTemp((dir) => {
     const info = probe(record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, quality: 'maximum' }))
+    assert.match(info, /h264 \(High\)/)
+    assert.match(info, /yuv420p\(tv, bt709/)
+  }))
+
+test('studio quality records full 4:4:4 colour', { timeout: 120000 }, () =>
+  inTemp((dir) => {
+    const info = probe(record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, quality: 'studio' }))
     assert.match(info, /High 4:4:4/)
     assert.match(info, /yuv444p\(tv, bt709/)
   }))
@@ -147,7 +154,7 @@ test('editor export trims to the kept parts and crops exactly', { timeout: 18000
 
 test('preview proxy is small 4:2:0 H.264', { timeout: 120000 }, () =>
   inTemp((dir) => {
-    const src = record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, quality: 'maximum' })
+    const src = record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, quality: 'studio' })
     const proxy = join(dir, 'p.mp4')
     run(buildProxyArgs(src, proxy))
     const info = probe(proxy)
@@ -157,11 +164,11 @@ test('preview proxy is small 4:2:0 H.264', { timeout: 120000 }, () =>
 
 test('a 4:4:4 recording converts to a play-everywhere 4:2:0 H.264 file', { timeout: 120000 }, () =>
   inTemp((dir) => {
-    const src = record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, quality: 'maximum' })
+    const src = record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, quality: 'studio' })
     assert.match(probe(src), /High 4:4:4/)
     const out = join(dir, 'compatible.mp4')
     run(buildExportArgs({
-      input: src, output: out, segments: [[0, 1]], crop: null, hasAudio: false, fps: 30, quality: 'veryhigh', encoder: 'libx264', pixelRate: 0
+      input: src, output: out, segments: [[0, 1]], crop: null, hasAudio: false, fps: 30, quality: 'maximum', encoder: 'libx264', pixelRate: 0
     }))
     const info = probe(out)
     assert.match(info, /h264 \(High\)/)

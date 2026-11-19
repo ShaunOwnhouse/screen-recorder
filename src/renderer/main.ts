@@ -34,6 +34,7 @@ const el = {
   resHint: $('res-hint'),
   quality: $<HTMLSelectElement>('quality'),
   qualityHint: $('quality-hint'),
+  fpsHint: $('fps-hint'),
   encoder: $<HTMLSelectElement>('encoder'),
   cursor: $<HTMLInputElement>('cursor'),
   outdir: $('outdir'),
@@ -53,9 +54,10 @@ const el = {
 }
 
 const QUALITY_SHORT: Record<Settings['quality'], string> = {
+  maximum: 'Maximum',
   veryhigh: 'Very high',
-  maximum: 'Maximum 4:4:4',
   high: 'High',
+  studio: 'Studio 4:4:4',
   lossless: 'Lossless'
 }
 
@@ -152,7 +154,7 @@ function renderSettings(): void {
   if (caps) {
     el.encoder.replaceChildren(
       option('auto', 'Auto — best available'),
-      ...caps.encoders.map((e) => option(e.id, settings.quality === 'maximum' && !e.yuv444 ? `${e.label} (no 4:4:4)` : e.label))
+      ...caps.encoders.map((e) => option(e.id, settings.quality === 'studio' && !e.yuv444 ? `${e.label} (no 4:4:4)` : e.label))
     )
     el.encoder.value = caps.encoders.some((e) => e.id === settings.encoder) ? settings.encoder : 'auto'
 
@@ -186,12 +188,17 @@ function renderHints(): void {
   }
 
   const hints: Record<Settings['quality'], string> = {
-    veryhigh: 'Indistinguishable from the screen for most content. Plays everywhere.',
-    maximum: 'Sharpest coloured text and thin lines. Won’t play in Windows Media Player, phones or most websites — use VLC, or tick “Make it play everywhere” when saving.',
-    high: 'Great quality at roughly half the size of Very high.',
-    lossless: 'Bit-for-bit identical to the screen. Very large files.'
+    maximum:
+      'Near-lossless H.264 with the encoder’s slowest, best settings. Plays in Windows Media Player, on phones, WhatsApp and the web.',
+    veryhigh: 'Indistinguishable from the screen for most content, at about two-thirds the size of Maximum. Plays everywhere.',
+    high: 'Great quality at roughly half the size of Very high. Plays everywhere.',
+    studio:
+      'Full 4:4:4 colour for colour-critical work. Won’t play in Windows Media Player, phones or most websites — use VLC or a video editor.',
+    lossless: 'Bit-for-bit identical to the screen. Very large files; VLC or editors only.'
   }
   el.qualityHint.textContent = hints[settings.quality]
+  el.fpsHint.textContent =
+    settings.fps === 120 ? 'Smoothest motion — only worth it on a 120 Hz+ screen; files are about twice as big as 60 fps.' : ''
 
   el.audioHint.textContent =
     !settings.systemAudio && !settings.micEnabled
@@ -247,7 +254,7 @@ function renderStatus(s: RecordingStatus): void {
     const slow = s.speed !== null && s.elapsed > 5 && s.speed < 0.95
     el.recWarn.hidden = !(slow || s.droppedFrames > 0)
     el.recWarn.textContent = slow
-      ? `Your computer is encoding slower than real time (${s.speed!.toFixed(2)}×). Try a GPU encoder, 30 fps, or "Very high" quality.`
+      ? `Your computer is encoding slower than real time (${s.speed!.toFixed(2)}×). Try a GPU encoder, a lower frame rate, or "Very high" quality.`
       : `${s.droppedFrames} frames dropped.`
   } else {
     el.recMeters.replaceChildren()
@@ -303,7 +310,7 @@ function bind(): void {
       const b = (e.target as HTMLElement).closest('button')
       if (!b) return
       const key = seg.dataset.key as 'mode' | 'fps'
-      void save(key === 'fps' ? { fps: Number(b.dataset.value) as 30 | 60 } : { mode: b.dataset.value as Settings['mode'] })
+      void save(key === 'fps' ? { fps: Number(b.dataset.value) as Settings['fps'] } : { mode: b.dataset.value as Settings['mode'] })
     })
   })
   el.settingsToggle.addEventListener('click', () => setSettingsOpen(el.settingsBody.hidden))

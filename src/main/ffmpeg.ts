@@ -32,8 +32,8 @@ export function detectFeatures(refresh = false): Promise<FfmpegFeatures> {
   return cached
 }
 
-async function probe(encoder: string, quality: Quality): Promise<boolean> {
-  return (await runFfmpeg(buildEncoderProbeArgs(encoder, quality))).ok
+async function probe(encoder: string, quality: Quality, basic = false): Promise<boolean> {
+  return (await runFfmpeg(buildEncoderProbeArgs(encoder, quality, basic))).ok
 }
 
 async function detect(): Promise<FfmpegFeatures> {
@@ -48,25 +48,31 @@ async function detect(): Promise<FfmpegFeatures> {
   const results = await Promise.all(
     candidates.map(async (id): Promise<EncoderInfo | null> => {
       if (!(await probe(id, 'veryhigh'))) return null
-      const yuv444 = YUV444_CAPABLE.includes(id) && (await probe(id, 'maximum'))
-      return { id, label: ENCODER_LABELS[id] ?? id, yuv444 }
+      const tuned = await probe(id, 'maximum')
+      const yuv444 = YUV444_CAPABLE.includes(id) && (await probe(id, 'studio', !tuned))
+      return { id, label: ENCODER_LABELS[id] ?? id, yuv444, tuned }
     })
   )
 
   return {
     version: version.stdout.split(/\r?\n/)[0]?.replace(/^ffmpeg version\s+/, '').split(' ')[0] ?? 'unknown',
     ddagrab: /\bddagrab\b/.test(filters.stdout),
-    encoders: [...results.filter((e): e is EncoderInfo => e !== null), { id: 'libx264', label: ENCODER_LABELS.libx264, yuv444: true }]
+    encoders: [...results.filter((e): e is EncoderInfo => e !== null), { id: 'libx264', label: ENCODER_LABELS.libx264, yuv444: true, tuned: true }]
   }
 }
 
 /** Picks the encoder for a recording, falling back to x264 when 4:4:4 is needed but unsupported. */
 export function chooseEncoder(available: EncoderInfo[], requested: string, quality: Quality): string {
-  const needs444 = quality === 'maximum'
+  const needs444 = quality === 'studio'
   const usable = available.filter((e) => !needs444 || e.yuv444)
   if (requested !== 'auto' && usable.some((e) => e.id === requested)) return requested
   const ids = usable.map((e) => e.id)
   return ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_videotoolbox', 'hevc_nvenc'].find((e) => ids.includes(e)) ?? 'libx264'
+}
+
+/** True when the chosen encoder can't take the top-tier tuning options. */
+export function needsBasicTuning(available: EncoderInfo[], encoder: string): boolean {
+  return available.find((e) => e.id === encoder)?.tuned === false
 }
 
 /** macOS: "Capture screen N" → avfoundation device index (cameras are numbered first). */

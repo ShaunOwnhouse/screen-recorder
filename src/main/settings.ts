@@ -11,7 +11,7 @@ function defaults(): Settings {
     countdown: 3,
     outputHeight: null,
     fps: 60,
-    quality: 'veryhigh',
+    quality: 'maximum',
     encoder: 'auto',
     showCursor: true,
     backend: 'auto',

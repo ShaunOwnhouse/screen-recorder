@@ -135,16 +135,19 @@
             <div class="seg" role="radiogroup" data-key="fps">
               <button type="button" data-value="30">30 fps</button>
               <button type="button" data-value="60">60 fps</button>
+              <button type="button" data-value="120">120 fps</button>
             </div>
+            <span id="fps-hint" class="hint"></span>
           </div>
 
           <label class="field">
             <span class="label">Quality</span>
             <select id="quality">
-              <option value="veryhigh">Very high — visually lossless</option>
-              <option value="maximum">Maximum — full 4:4:4 colour, sharpest text</option>
-              <option value="high">High — smaller files</option>
-              <option value="lossless">Lossless — huge files, archival</option>
+              <option value="maximum">Maximum — best quality, plays everywhere</option>
+              <option value="veryhigh">Very high — visually lossless, smaller files</option>
+              <option value="high">High — smallest files</option>
+              <option value="studio">Studio 4:4:4 — for VLC &amp; video editors only</option>
+              <option value="lossless">Lossless — archival, VLC only</option>
             </select>
             <span id="quality-hint" class="hint"></span>
           </label>

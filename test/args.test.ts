@@ -24,7 +24,10 @@ const after = (args: string[], flag: string): string | undefined => args[args.in
 test('native resolution is captured and encoded without scaling', () => {
   const args = buildRecordArgs(base)
   assert.equal(after(args, '-video_size'), '3840x2160')
-  assert.equal(after(args, '-filter_complex'), '[0:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[v]')
+  assert.equal(
+    after(args, '-filter_complex'),
+    '[0:v]scale=flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp:out_color_matrix=bt709:out_range=tv,format=yuv420p[v]'
+  )
   assert.equal(after(args, '-map'), '[v]')
   assert.equal(after(args, '-r'), '60')
   assert.equal(args.at(-1), 'out.mp4')
@@ -40,7 +43,7 @@ test('odd region sizes are rounded down to even for yuv420p', () => {
 test('scaling keeps aspect ratio and uses lanczos', () => {
   assert.deepEqual(outputSize({ x: 0, y: 0, width: 1920, height: 1080 }, 2160), { width: 3840, height: 2160 })
   const args = buildRecordArgs({ ...base, rect: { x: 0, y: 0, width: 2560, height: 1440 }, outputHeight: 1080 })
-  assert.match(after(args, '-filter_complex')!, /scale=w=1920:h=1080:flags=lanczos:/)
+  assert.match(after(args, '-filter_complex')!, /scale=w=1920:h=1080:flags=lanczos\+accurate_rnd/)
 })
 
 test('ddagrab binds to the monitor’s own GPU adapter and output', () => {
@@ -98,12 +101,26 @@ test('macOS capture uses avfoundation and crops regions out of the full screen',
   assert.ok(!buildRecordArgs({ ...base, backend: 'avfoundation', avf: { device: 1, pixelFormat: null } }).includes('-pixel_format'))
 })
 
-test('maximum quality is 4:4:4 and falls back to x264 for encoders without it', () => {
+test('maximum is near-lossless 4:2:0 H.264 High with the slowest NVENC settings', () => {
   const nv = buildRecordArgs({ ...base, quality: 'maximum', encoder: 'h264_nvenc' })
+  assert.match(after(nv, '-filter_complex')!, /format=yuv420p\[v\]$/)
+  assert.equal(after(nv, '-profile:v'), 'high')
+  assert.equal(after(nv, '-preset'), 'p7')
+  assert.equal(after(nv, '-cq'), '12')
+  assert.equal(after(nv, '-multipass'), 'qres')
+  assert.equal(after(nv, '-temporal_aq'), '1')
+  // GPUs that reject the extra tuning keep the quality target without it.
+  const basic = buildRecordArgs({ ...base, quality: 'maximum', encoder: 'h264_nvenc', basicTuning: true })
+  assert.equal(after(basic, '-cq'), '12')
+  assert.ok(!basic.includes('-multipass'))
+})
+
+test('studio is 4:4:4 and falls back to x264 for encoders without it', () => {
+  const nv = buildRecordArgs({ ...base, quality: 'studio', encoder: 'h264_nvenc' })
   assert.match(after(nv, '-filter_complex')!, /format=yuv444p\[v\]$/)
   assert.equal(after(nv, '-profile:v'), 'high444p')
-  assert.equal(effectiveEncoder('h264_amf', 'maximum'), 'libx264')
-  assert.equal(after(encoderArgs('libx264', 'maximum', 0), '-profile:v'), 'high444')
+  assert.equal(effectiveEncoder('h264_amf', 'studio'), 'libx264')
+  assert.equal(after(encoderArgs('libx264', 'studio', 0), '-profile:v'), 'high444')
 })
 
 test('lossless always uses x264 qp 0 in 4:4:4', () => {
@@ -128,7 +145,8 @@ test('export keeps selected parts, crops, and keeps audio in sync', () => {
   })
   assert.equal(
     after(args, '-vf'),
-    'select=between(t\\,1.000\\,2.500)+between(t\\,4.000\\,6.000),setpts=N/FRAME_RATE/TB,crop=640:360:10:20,format=yuv420p'
+    'select=between(t\\,1.000\\,2.500)+between(t\\,4.000\\,6.000),setpts=N/FRAME_RATE/TB,crop=640:360:10:20,' +
+      'scale=flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp,format=yuv420p'
   )
   assert.equal(after(args, '-af'), 'aselect=between(t\\,1.000\\,2.500)+between(t\\,4.000\\,6.000),asetpts=N/SR/TB')
 })

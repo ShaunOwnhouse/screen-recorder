@@ -27,8 +27,11 @@ portable:
 mac:
   icon: resources/icon.png
   category: public.app-category.video
-  # No Apple Developer ID yet: skip real signing; after-pack.cjs applies an ad-hoc signature instead.
-  identity: null
+  # Signs with a Developer ID when CSC_LINK is provided (and notarises when APPLE_ID etc. are set);
+  # otherwise CI disables signing and after-pack.cjs applies an ad-hoc signature instead.
+  hardenedRuntime: true
+  entitlements: scripts/entitlements.mac.plist
+  entitlementsInherit: scripts/entitlements.mac.plist
   target:
     - dmg
   extraResources:

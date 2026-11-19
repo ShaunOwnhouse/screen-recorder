@@ -1,4 +1,4 @@
-export type Quality = 'high' | 'veryhigh' | 'maximum' | 'lossless'
+export type Quality = 'high' | 'veryhigh' | 'maximum' | 'studio' | 'lossless'
 export type CaptureMode = 'fullscreen' | 'region'
 export type Backend = 'auto' | 'ddagrab' | 'gdigrab'
 
@@ -8,7 +8,7 @@ export interface Settings {
   countdown: number
   /** null keeps the captured (native) resolution — no scaling at all. */
   outputHeight: number | null
-  fps: 30 | 60
+  fps: 30 | 60 | 120
   quality: Quality
   encoder: string
   showCursor: boolean
@@ -36,7 +36,10 @@ export interface DisplayInfo {
 export interface EncoderInfo {
   id: string
   label: string
+  /** Supports the Studio (4:4:4) tier. */
   yuv444: boolean
+  /** Accepts the extra top-tier tuning (multipass, temporal AQ…). */
+  tuned: boolean
 }
 
 export interface MicInfo {

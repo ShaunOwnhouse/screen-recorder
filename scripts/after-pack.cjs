@@ -4,7 +4,8 @@ const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 
 exports.default = async function afterPack(context) {
-  if (context.electronPlatformName !== 'darwin') return
+  // With a real Developer ID certificate, electron-builder signs (and notarises) after this hook.
+  if (context.electronPlatformName !== 'darwin' || process.env.CSC_LINK) return
   const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'inherit' })
   execFileSync('codesign', ['--verify', '--deep', '--strict', app], { stdio: 'inherit' })

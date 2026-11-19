@@ -36,6 +36,8 @@ export interface RecordArgsInput {
   audio: AudioInput[]
   showCursor: boolean
   outputPath: string
+  /** The GPU rejected the top-tier tuning options; use the plain set at the same quality target. */
+  basicTuning?: boolean
 }
 
 export const HARDWARE_ENCODERS = [
@@ -65,12 +67,17 @@ export function even(n: number): number {
 }
 
 export function is444(quality: Quality): boolean {
-  return quality === 'maximum' || quality === 'lossless'
+  return quality === 'studio' || quality === 'lossless'
+}
+
+/** Top tiers get the slowest, highest-quality encoder settings. */
+export function isTuned(quality: Quality): boolean {
+  return quality === 'maximum' || quality === 'studio'
 }
 
 export function effectiveEncoder(encoder: string, quality: Quality): string {
   if (quality === 'lossless') return 'libx264'
-  if (quality === 'maximum' && !YUV444_CAPABLE.includes(encoder)) return 'libx264'
+  if (quality === 'studio' && !YUV444_CAPABLE.includes(encoder)) return 'libx264'
   return encoder
 }
 
@@ -80,43 +87,55 @@ export function pixelFormatFor(encoder: string, quality: Quality): string {
   return 'yuv420p'
 }
 
-const CQ: Record<Exclude<Quality, 'lossless'>, number> = { high: 20, veryhigh: 16, maximum: 13 }
+const CQ: Record<Exclude<Quality, 'lossless'>, number> = { high: 20, veryhigh: 16, maximum: 12, studio: 12 }
+const VT_QUALITY: Record<Exclude<Quality, 'lossless'>, number> = { high: 65, veryhigh: 75, maximum: 88, studio: 88 }
 
-export function encoderArgs(encoder: string, quality: Quality, pixelRate: number): string[] {
+/**
+ * Encoder settings for a quality tier. `basic` drops the extra tuning (multipass, temporal AQ) for
+ * GPUs/drivers that reject it, keeping the same quality target.
+ */
+export function encoderArgs(encoder: string, quality: Quality, pixelRate: number, basic = false): string[] {
   if (quality === 'lossless') return ['-c:v', 'libx264', '-preset', 'ultrafast', '-qp', '0']
 
   const q = CQ[quality]
   const full = is444(quality)
+  const tuned = isTuned(quality) && !basic
   const hevcQ = String(q + 2)
   switch (encoder) {
     case 'h264_nvenc':
     case 'hevc_nvenc': {
       const hevc = encoder === 'hevc_nvenc'
       return [
-        '-c:v', encoder, '-preset', full ? 'p6' : 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', hevc ? hevcQ : String(q), '-b:v', '0',
+        '-c:v', encoder, '-preset', tuned ? 'p7' : 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', hevc ? hevcQ : String(q), '-b:v', '0',
         // Adaptive quantisation spends bits on detail (text, edges) instead of flat areas.
-        '-spatial_aq', '1', '-rc-lookahead', '20',
+        '-spatial_aq', '1', '-rc-lookahead', tuned ? '32' : '20',
+        // Top tiers: a quarter-resolution first pass and temporal AQ for steadier detail in motion.
+        ...(tuned ? ['-multipass', 'qres', '-temporal_aq', '1'] : []),
         '-profile:v', hevc ? (full ? 'rext' : 'main') : full ? 'high444p' : 'high',
         ...(hevc ? ['-tag:v', 'hvc1'] : [])
       ]
     }
     case 'h264_qsv':
-      return ['-c:v', encoder, '-preset', 'medium', '-global_quality', String(q)]
+      return ['-c:v', encoder, '-preset', tuned ? 'slower' : 'medium', '-global_quality', String(q)]
     case 'hevc_qsv':
-      return ['-c:v', encoder, '-preset', 'medium', '-global_quality', hevcQ, '-tag:v', 'hvc1']
+      return ['-c:v', encoder, '-preset', tuned ? 'slower' : 'medium', '-global_quality', hevcQ, '-tag:v', 'hvc1']
     case 'h264_amf':
-      return ['-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', String(q), '-qp_p', String(q), '-qp_b', String(q)]
-    case 'hevc_amf':
-      return ['-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', hevcQ, '-qp_p', hevcQ, '-tag:v', 'hvc1']
-    case 'h264_videotoolbox':
-    case 'hevc_videotoolbox': {
-      // VideoToolbox constant quality is 1–100 (higher = better).
-      const vq = { high: 65, veryhigh: 75, maximum: 85 }[quality]
       return [
-        '-c:v', encoder, '-q:v', String(vq), '-realtime', '1', '-allow_sw', '0',
+        '-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', String(q), '-qp_p', String(q), '-qp_b', String(q),
+        ...(tuned ? ['-preanalysis', '1'] : [])
+      ]
+    case 'hevc_amf':
+      return [
+        '-c:v', encoder, '-quality', 'quality', '-rc', 'cqp', '-qp_i', hevcQ, '-qp_p', hevcQ, '-tag:v', 'hvc1',
+        ...(tuned ? ['-preanalysis', '1'] : [])
+      ]
+    case 'h264_videotoolbox':
+    case 'hevc_videotoolbox':
+      // VideoToolbox constant quality is 1–100 (higher = better).
+      return [
+        '-c:v', encoder, '-q:v', String(VT_QUALITY[quality]), '-realtime', '1', '-allow_sw', '0',
         ...(encoder === 'hevc_videotoolbox' ? ['-tag:v', 'hvc1'] : ['-profile:v', 'high'])
       ]
-    }
     default: {
       // CRF fixes the quality; a faster preset only costs file size, which keeps 4K60 real-time on a CPU.
       const preset = pixelRate > 1920 * 1080 * 60 ? 'superfast' : 'veryfast'
@@ -133,7 +152,10 @@ export function outputSize(rect: Rect, outputHeight: number | null): { width: nu
 }
 
 const COLOR_TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv']
-const AUDIO_ENCODE = ['-c:a', 'aac', '-b:a', '256k']
+const AUDIO_ENCODE = ['-c:a', 'aac', '-b:a', '320k']
+// Accurate rounding and full-resolution chroma interpolation keep coloured text edges clean when
+// converting the screen's RGB to video YUV (the default fast path smears them).
+const SWS_FLAGS = 'flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp'
 
 function audioInputArgs(source: string): string[] {
   return ['-f', 'f32le', '-ar', String(AUDIO_RATE), '-ac', '2', '-thread_queue_size', '4096', '-i', source]
@@ -192,16 +214,16 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
 
   for (const a of o.audio) args.push(...audioInputArgs(a.url))
 
-  const size = out.height !== h ? `w=${out.width}:h=${out.height}:flags=lanczos:` : ''
+  const size = out.height !== h ? `w=${out.width}:h=${out.height}:` : ''
   // Tag and convert as BT.709 so colours don't shift in players that assume HD colourimetry.
-  filters.push(`scale=${size}out_color_matrix=bt709:out_range=tv`, `format=${pixelFormatFor(encoder, o.quality)}`)
+  filters.push(`scale=${size}${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv`, `format=${pixelFormatFor(encoder, o.quality)}`)
   const audio = audioGraph(o.audio, audioIndex)
   const graph = [`${videoLabel}${filters.join(',')}[v]`, audio.graph].filter(Boolean).join(';')
 
   args.push('-filter_complex', graph, '-map', '[v]')
   if (audio.map) args.push('-map', audio.map)
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
-  args.push(...encoderArgs(encoder, o.quality, out.width * out.height * o.fps), '-g', String(o.fps * 2))
+  args.push(...encoderArgs(encoder, o.quality, out.width * out.height * o.fps, o.basicTuning), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
   if (audio.map) args.push(...AUDIO_ENCODE)
   // Fragmented MP4 stays playable up to the last keyframe if the app or PC crashes mid-recording.
@@ -225,6 +247,7 @@ export interface ExportArgsInput {
   quality: Quality
   encoder: string
   pixelRate: number
+  basicTuning?: boolean
 }
 
 export function buildExportArgs(o: ExportArgsInput): string[] {
@@ -233,13 +256,13 @@ export function buildExportArgs(o: ExportArgsInput): string[] {
 
   const v = [`select=${keep}`, 'setpts=N/FRAME_RATE/TB']
   if (o.crop) v.push(`crop=${o.crop.width}:${o.crop.height}:${o.crop.x}:${o.crop.y}`)
-  v.push(`format=${pixelFormatFor(encoder, o.quality)}`)
+  v.push(`scale=${SWS_FLAGS}`, `format=${pixelFormatFor(encoder, o.quality)}`)
 
   const args = ['-hide_banner', '-loglevel', 'error', '-nostats', '-y', '-i', o.input, '-vf', v.join(',')]
   if (o.hasAudio) args.push('-af', `aselect=${keep},asetpts=N/SR/TB`)
   else args.push('-an')
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
-  args.push(...encoderArgs(encoder, o.quality, o.pixelRate), '-g', String(o.fps * 2))
+  args.push(...encoderArgs(encoder, o.quality, o.pixelRate, o.basicTuning), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
   if (o.hasAudio) args.push(...AUDIO_ENCODE)
   args.push('-movflags', '+faststart', '-progress', 'pipe:1', o.output)
@@ -255,12 +278,12 @@ export function buildProxyArgs(input: string, output: string): string[] {
   ]
 }
 
-export function buildEncoderProbeArgs(encoder: string, quality: Quality = 'veryhigh'): string[] {
+export function buildEncoderProbeArgs(encoder: string, quality: Quality = 'veryhigh', basic = false): string[] {
   return [
     '-hide_banner', '-loglevel', 'error',
     '-f', 'lavfi', '-i', 'color=black:s=1280x720:r=30',
     '-frames:v', '5', '-vf', `format=${pixelFormatFor(encoder, quality)}`,
-    ...encoderArgs(encoder, quality, 0),
+    ...encoderArgs(encoder, quality, 0, basic),
     '-f', 'null', '-'
   ]
 }

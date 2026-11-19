@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { buildExportArgs, buildProxyArgs, cropToPixels } from './args.ts'
-import { chooseEncoder, ffmpegPath, runFfmpeg } from './ffmpeg.ts'
+import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl } from './media-protocol.ts'
 import { parseMediaInfo, ProgressParser } from './parse.ts'
 import { moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
@@ -182,13 +182,16 @@ export class EditorController {
   private async export(
     file: string, target: string, meta: RecordingMeta, segments: [number, number][], crop: Rect | null, compatible: boolean
   ): Promise<void> {
-    const quality = meta.yuv444 && !compatible ? 'maximum' : 'veryhigh'
+    // Re-encode at the top tier so edits don't visibly lose quality.
+    const quality = meta.yuv444 && !compatible ? 'studio' : 'maximum'
     const s = this.deps.settings()
-    const encoder = chooseEncoder(await this.deps.encoders(), s.encoder, quality)
+    const encoders = await this.deps.encoders()
+    const encoder = chooseEncoder(encoders, s.encoder, quality)
     const w = crop?.width ?? meta.width
     const h = crop?.height ?? meta.height
     const args = buildExportArgs({
-      input: file, output: target, segments, crop, hasAudio: meta.hasAudio, fps: meta.fps, quality, encoder, pixelRate: w * h * meta.fps
+      input: file, output: target, segments, crop, hasAudio: meta.hasAudio, fps: meta.fps, quality, encoder, pixelRate: w * h * meta.fps,
+      basicTuning: needsBasicTuning(encoders, encoder)
     })
     const total = Math.max(0.1, totalDuration(segments))
     this.cancelled = false

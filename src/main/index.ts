@@ -8,7 +8,7 @@ import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
 import { EditorController, probeMedia } from './editor.ts'
-import { avfoundationScreens, chooseEncoder, detectFeatures, runFfmpeg } from './ffmpeg.ts'
+import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
 import { listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
@@ -521,7 +521,15 @@ async function startRecording(): Promise<void> {
     }
   }
 
-  const base = { fps: s.fps, outputHeight: s.outputHeight, quality: s.quality, encoder, audio: audioInputs, showCursor: s.showCursor }
+  const base = {
+    fps: s.fps,
+    outputHeight: s.outputHeight,
+    quality: s.quality,
+    encoder,
+    basicTuning: needsBasicTuning(features.encoders, encoder),
+    audio: audioInputs,
+    showCursor: s.showCursor
+  }
   const attempts = IS_MAC
     ? await macAttempts(base, display, dipRect)
     : windowsAttempts(base, s, display, toPhysical(dipRect), features.ddagrab, outputs)
