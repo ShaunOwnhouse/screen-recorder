@@ -51,6 +51,32 @@ jobs:
           if [ -z "$WIN_CSC_LINK" ]; then unset WIN_CSC_LINK WIN_CSC_KEY_PASSWORD; fi
           npx electron-builder "${args[@]}"
 
+      # Windows' own media stack (used by Media Player and Photos) must be present to test playback.
+      - name: Make sure Windows Media Foundation is installed
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:SystemRoot\System32\mfplat.dll")) {
+            Install-WindowsFeature Server-Media-Foundation | Format-List
+          }
+          Get-ChildItem "$env:SystemRoot\System32" -Filter 'mf*.dll' | Select-Object -First 8 Name | Format-Table -HideTableHeaders
+          Get-Command powershell.exe | Select-Object -ExpandProperty Source
+          Add-Type -AssemblyName System.Runtime.WindowsRuntime
+          [Environment]::OSVersion.VersionString
+
+      # Runs the real packaged app: record (with a simulated microphone), review, edit and save, then
+      # checks every saved file — decodes it fully and opens it with Windows' own media stack.
+      - name: End-to-end test of the packaged app
+        shell: bash
+        run: node test/e2e/run.cjs "dist/win-unpacked/Screen Recorder.exe"
+
+      - name: Upload end-to-end results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-windows
+          path: test-results/e2e
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v7
         with:
           name: screen-recorder-windows

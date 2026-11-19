@@ -5,8 +5,9 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { buildExportArgs, buildProxyArgs, cropToPixels } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl } from './media-protocol.ts'
-import { parseMediaInfo, ProgressParser } from './parse.ts'
+import { ProgressParser } from './parse.ts'
 import { moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
+import { probeMedia } from './verify.ts'
 import { isFullRange, totalDuration } from '../shared/segments.ts'
 import type { EditorLoad } from '../shared/api.ts'
 import type { EncoderInfo, Rect, RecordingMeta, SaveRequest, Settings } from '../shared/types.ts'
@@ -20,11 +21,6 @@ interface Deps {
   onSaved: (path: string) => void
   onDiscarded: () => void
   onClosed: () => void
-}
-
-export async function probeMedia(file: string): Promise<RecordingMeta | null> {
-  const { stderr } = await runFfmpeg(['-hide_banner', '-i', file])
-  return parseMediaInfo(stderr)
 }
 
 export class EditorController {

@@ -65,38 +65,60 @@ async function start(cfg: AudioConfigPayload): Promise<{ started: string[]; erro
     started.push(name)
   }
 
-  if (cfg.system) {
-    try {
-      // Chromium's desktop source with audio = WASAPI loopback of everything the PC is playing.
-      const stream = await navigator.mediaDevices.getUserMedia({
+  // Open both sources at once, each with its own time limit, so a stuck device can't block the other.
+  const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timed out waiting for the device')), ms)
+      p.then(
+        (v) => {
+          clearTimeout(t)
+          resolve(v)
+        },
+        (e) => {
+          clearTimeout(t)
+          reject(e)
+        }
+      )
+    })
+
+  const openSystem = async (): Promise<void> => {
+    // Chromium's desktop source with audio = WASAPI loopback of everything the PC is playing.
+    const stream = await withTimeout(
+      navigator.mediaDevices.getUserMedia({
         audio: { mandatory: { chromeMediaSource: 'desktop' } },
         video: { mandatory: { chromeMediaSource: 'desktop', maxWidth: 16, maxHeight: 16, maxFrameRate: 1 } }
-      } as unknown as MediaStreamConstraints)
-      stream.getVideoTracks().forEach((t) => {
-        t.stop()
-        stream.removeTrack(t)
-      })
-      attach(stream, cfg.systemVolume, 'system')
-    } catch (err) {
-      errors.push(`Computer sound: ${errorText(err)}`)
-    }
+      } as unknown as MediaStreamConstraints),
+      8000
+    )
+    stream.getVideoTracks().forEach((t) => {
+      t.stop()
+      stream.removeTrack(t)
+    })
+    attach(stream, cfg.systemVolume, 'system')
   }
 
-  if (cfg.mic) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+  const openMic = async (): Promise<void> => {
+    const stream = await withTimeout(
+      navigator.mediaDevices.getUserMedia({
         audio: {
-          deviceId: cfg.mic === 'default' ? undefined : { exact: cfg.mic },
+          deviceId: cfg.mic === 'default' ? undefined : { exact: cfg.mic! },
           echoCancellation: false,
           autoGainControl: false,
           noiseSuppression: cfg.noiseSuppression
         }
-      })
-      attach(stream, cfg.micVolume, 'mic')
-    } catch (err) {
-      errors.push(`Microphone: ${errorText(err)}`)
-    }
+      }),
+      8000
+    )
+    attach(stream, cfg.micVolume, 'mic')
   }
+
+  const jobs: { label: string; run: Promise<void> }[] = []
+  if (cfg.system) jobs.push({ label: 'Computer sound', run: openSystem() })
+  if (cfg.mic) jobs.push({ label: 'Microphone', run: openMic() })
+  const settled = await Promise.allSettled(jobs.map((j) => j.run))
+  settled.forEach((r, i) => {
+    if (r.status === 'rejected') errors.push(`${jobs[i].label}: ${errorText(r.reason)}`)
+  })
 
   const buf = new Float32Array(1024)
   meterTimer = setInterval(() => {

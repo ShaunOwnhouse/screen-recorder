@@ -240,7 +240,8 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
   args.push(...COLOR_TAGS)
   if (audio.map) args.push(...audioEncodeArgs(o.quality))
   // Fragmented MP4 stays playable up to the last keyframe if the app or PC crashes mid-recording.
-  args.push('-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof')
+  // A deep muxing queue lets audio wait for a slow-starting video encoder instead of aborting.
+  args.push('-max_muxing_queue_size', '8192', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof')
   args.push('-stats_period', '1', '-progress', 'pipe:1', o.outputPath)
   return args
 }

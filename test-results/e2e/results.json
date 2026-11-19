@@ -1,0 +1,332 @@
+[
+  {
+    "name": "maximum: recording started (first frame captured)",
+    "ok": true,
+    "detail": "3.2s after pressing Record"
+  },
+  {
+    "name": "maximum: control panel hidden while recording",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "maximum: timer is running",
+    "ok": true,
+    "detail": "00:07"
+  },
+  {
+    "name": "maximum: review window opened the recording",
+    "ok": true,
+    "detail": "1920×1080 · 60 fps · 0:07.3 · with audio · 0.1 MB"
+  },
+  {
+    "name": "maximum: review window can play the video",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Maximum whole screen: file saved",
+    "ok": true,
+    "detail": "/tmp/sr-e2e-z6ebIW/saved/e2e-maximum.mp4"
+  },
+  {
+    "name": "Maximum whole screen: size 1920×1080",
+    "ok": true,
+    "detail": "1920×1080"
+  },
+  {
+    "name": "Maximum whole screen: H.264 video",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progress"
+  },
+  {
+    "name": "Maximum whole screen: 4:2:0 High profile (plays everywhere)",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080, 54 kb/s, 60 f"
+  },
+  {
+    "name": "Maximum whole screen: BT.709 colour tags",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Maximum whole screen: AAC stereo 48 kHz audio",
+    "ok": true,
+    "detail": "Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 33 kb/s (default)"
+  },
+  {
+    "name": "Maximum whole screen: audio is not silent",
+    "ok": true,
+    "detail": "peak -1.8 dB"
+  },
+  {
+    "name": "Maximum whole screen: duration ≥ 4s",
+    "ok": true,
+    "detail": "7.35s"
+  },
+  {
+    "name": "Maximum whole screen: duration ≤ 12s",
+    "ok": true,
+    "detail": "7.35s"
+  },
+  {
+    "name": "Maximum whole screen: starts instantly (moov before mdat)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Maximum whole screen: every frame decodes cleanly",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "edit: recording started (first frame captured)",
+    "ok": true,
+    "detail": "3.2s after pressing Record"
+  },
+  {
+    "name": "edit: control panel hidden while recording",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "edit: timer is running",
+    "ok": true,
+    "detail": "00:08"
+  },
+  {
+    "name": "edit: review window opened the recording",
+    "ok": true,
+    "detail": "1920×1080 · 60 fps · 0:08.4 · with audio · 0.1 MB"
+  },
+  {
+    "name": "edit: review window can play the video",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Edited (trim + crop): file saved",
+    "ok": true,
+    "detail": "/tmp/sr-e2e-z6ebIW/saved/e2e-edited.mp4"
+  },
+  {
+    "name": "Edited (trim + crop): size 1920×1080",
+    "ok": true,
+    "detail": "1920×1080"
+  },
+  {
+    "name": "Edited (trim + crop): H.264 video",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progress"
+  },
+  {
+    "name": "Edited (trim + crop): 4:2:0 High profile (plays everywhere)",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080, 56 kb/s, 60 f"
+  },
+  {
+    "name": "Edited (trim + crop): BT.709 colour tags",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Edited (trim + crop): AAC stereo 48 kHz audio",
+    "ok": true,
+    "detail": "Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 36 kb/s (default)"
+  },
+  {
+    "name": "Edited (trim + crop): audio is not silent",
+    "ok": true,
+    "detail": "peak -2.8 dB"
+  },
+  {
+    "name": "Edited (trim + crop): duration ≥ 2s",
+    "ok": true,
+    "detail": "5.85s"
+  },
+  {
+    "name": "Edited (trim + crop): duration ≤ 8s",
+    "ok": true,
+    "detail": "5.85s"
+  },
+  {
+    "name": "Edited (trim + crop): starts instantly (moov before mdat)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Edited (trim + crop): every frame decodes cleanly",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "studio: recording started (first frame captured)",
+    "ok": true,
+    "detail": "3.2s after pressing Record"
+  },
+  {
+    "name": "studio: control panel hidden while recording",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "studio: timer is running",
+    "ok": true,
+    "detail": "00:05"
+  },
+  {
+    "name": "studio: review window opened the recording",
+    "ok": true,
+    "detail": "1920×1080 · 60 fps · 0:05.2 · 4:4:4 colour · with audio · 0.5 MB"
+  },
+  {
+    "name": "studio: review window can play the video",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Studio: recorded as 4:4:4",
+    "ok": true,
+    "detail": "1920×1080 · 60 fps · 0:05.2 · 4:4:4 colour · with audio · 0.5 MB"
+  },
+  {
+    "name": "Studio: \"make it play everywhere\" is ticked by default",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Studio converted: file saved",
+    "ok": true,
+    "detail": "/tmp/sr-e2e-z6ebIW/saved/e2e-studio-converted.mp4"
+  },
+  {
+    "name": "Studio converted: size 1920×1080",
+    "ok": true,
+    "detail": "1920×1080"
+  },
+  {
+    "name": "Studio converted: H.264 video",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progress"
+  },
+  {
+    "name": "Studio converted: 4:2:0 High profile (plays everywhere)",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080, 56 kb/s, 60 f"
+  },
+  {
+    "name": "Studio converted: BT.709 colour tags",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Studio converted: AAC stereo 48 kHz audio",
+    "ok": true,
+    "detail": "Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 34 kb/s (default)"
+  },
+  {
+    "name": "Studio converted: audio is not silent",
+    "ok": true,
+    "detail": "peak -3.3 dB"
+  },
+  {
+    "name": "Studio converted: duration ≥ 2s",
+    "ok": true,
+    "detail": "5.21s"
+  },
+  {
+    "name": "Studio converted: starts instantly (moov before mdat)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Studio converted: every frame decodes cleanly",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "region: recording started (first frame captured)",
+    "ok": true,
+    "detail": "3.1s after pressing Record"
+  },
+  {
+    "name": "region: control panel hidden while recording",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "region: timer is running",
+    "ok": true,
+    "detail": "00:05"
+  },
+  {
+    "name": "region: review window opened the recording",
+    "ok": true,
+    "detail": "1150×538 · 60 fps · 0:05.3 · with audio · 0.0 MB"
+  },
+  {
+    "name": "region: review window can play the video",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Region: file saved",
+    "ok": true,
+    "detail": "/tmp/sr-e2e-z6ebIW/saved/e2e-region.mp4"
+  },
+  {
+    "name": "Region: size 1150×538",
+    "ok": true,
+    "detail": "1150×538"
+  },
+  {
+    "name": "Region: H.264 video",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progress"
+  },
+  {
+    "name": "Region: 4:2:0 High profile (plays everywhere)",
+    "ok": true,
+    "detail": "h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1150x538, 18 kb/s, 60 fp"
+  },
+  {
+    "name": "Region: BT.709 colour tags",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Region: AAC stereo 48 kHz audio",
+    "ok": true,
+    "detail": "Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 32 kb/s (default)"
+  },
+  {
+    "name": "Region: audio is not silent",
+    "ok": true,
+    "detail": "peak -3.8 dB"
+  },
+  {
+    "name": "Region: duration ≥ 2s",
+    "ok": true,
+    "detail": "5.25s"
+  },
+  {
+    "name": "Region: starts instantly (moov before mdat)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Region: every frame decodes cleanly",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Cancel countdown: back to idle with the panel showing",
+    "ok": true,
+    "detail": "idle, panel visible: true"
+  },
+  {
+    "name": "Cancel countdown: nothing left to review",
+    "ok": true,
+    "detail": "null"
+  }
+]

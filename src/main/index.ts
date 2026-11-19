@@ -7,12 +7,13 @@ import {
 import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts'
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
-import { EditorController, probeMedia } from './editor.ts'
+import { EditorController } from './editor.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
 import { listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
+import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
 import type { OverlayResult } from '../shared/api.ts'
 import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
@@ -636,14 +637,13 @@ recorder.on('recorded', async (file: string, info: RecordedInfo) => {
   void audio.stop()
   closeBar()
   restorePanel()
-  // Never open the review window on a file with no video in it — say what went wrong instead.
-  const meta = existsSync(file) ? await probeMedia(file) : null
-  if (!meta) {
+  // Never open the review window on a recording that doesn't play — say what went wrong instead.
+  if (!info.ok) {
     removePending(file)
     const reason = lastLine(info.stderr)
     recorder.update({
       pending: newestPending(),
-      error: `The recording failed — no video was captured.${reason ? `\nFFmpeg said: ${reason}` : ''}\nFull details: ${info.log}`
+      error: `The recording failed: ${info.reason ?? 'no video was captured.'}${reason ? `\nFFmpeg said: ${reason}` : ''}\nFull details: ${info.log}`
     })
     showMainWindow()
     return
@@ -683,6 +683,8 @@ void app.whenReady().then(async () => {
   screen.on('display-metrics-changed', notifyDisplays)
 
   await recoverInterrupted(async (i, o) => (await runFfmpeg(buildRemuxArgs(i, o), 10 * 60 * 1000)).ok)
+  // Recordings left over from earlier versions that can't be opened would only get in the way.
+  for (const f of listPending()) if (!(await checkStructure(f)).ok) removePending(f)
   recorder.update({ pending: newestPending() })
   createMainWindow()
   createTray()
