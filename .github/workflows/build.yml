@@ -62,8 +62,10 @@ jobs:
 
       - name: Package Intel
         run: |
+          # The installer skips if a binary exists, so remove the Apple Silicon one first.
+          rm -f node_modules/ffmpeg-static/ffmpeg
           npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
-          file node_modules/ffmpeg-static/ffmpeg
+          file node_modules/ffmpeg-static/ffmpeg | tee /dev/stderr | grep -q x86_64
           npx electron-builder --mac --x64 --publish never
 
       - uses: actions/upload-artifact@v4
