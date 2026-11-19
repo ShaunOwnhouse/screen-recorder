@@ -20,6 +20,15 @@
       </header>
 
       <div id="banner" class="banner" hidden></div>
+      <div id="warning" class="banner warn" hidden></div>
+
+      <section id="pending" class="card pending" hidden>
+        <div class="pending-info">
+          <span class="label">Waiting for review</span>
+          <span id="pending-name" class="ellipsis"></span>
+        </div>
+        <button id="review" type="button" class="primary">Review &amp; save</button>
+      </section>
 
       <section class="hero">
         <div id="idle-view" class="idle-view">
@@ -38,15 +47,16 @@
             <span id="timer" class="timer">00:00</span>
           </div>
           <div id="rec-meta" class="rec-meta muted"></div>
+          <div id="rec-meters" class="meters"></div>
           <div id="rec-warn" class="rec-warn" hidden></div>
-          <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop &amp; save</button>
+          <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop recording</button>
         </div>
       </section>
 
       <section id="last" class="card last" hidden>
         <div class="last-info">
-          <span class="label">Last recording</span>
-          <span id="last-name" class="last-name"></span>
+          <span class="label">Last saved</span>
+          <span id="last-name" class="ellipsis"></span>
         </div>
         <div class="last-actions">
           <button id="play" type="button" class="ghost">Play</button>
@@ -56,17 +66,20 @@
 
       <section class="card settings" id="settings">
         <div class="field">
+          <div class="label-row">
+            <span class="label">Screen</span>
+            <button id="refresh-screens" type="button" class="link">Refresh</button>
+          </div>
+          <div id="screens" class="screens" role="radiogroup" aria-label="Screen to record"></div>
+        </div>
+
+        <div class="field">
           <span class="label">Capture</span>
           <div class="seg" role="radiogroup" data-key="mode">
-            <button type="button" data-value="fullscreen">Full screen</button>
+            <button type="button" data-value="fullscreen">Whole screen</button>
             <button type="button" data-value="region">Select region</button>
           </div>
         </div>
-
-        <label class="field">
-          <span class="label">Display</span>
-          <select id="display"></select>
-        </label>
 
         <label class="field">
           <span class="label">Output resolution</span>
@@ -91,20 +104,16 @@
           <span class="label">Quality</span>
           <select id="quality">
             <option value="veryhigh">Very high — visually lossless</option>
+            <option value="maximum">Maximum — full 4:4:4 colour, sharpest text</option>
             <option value="high">High — smaller files</option>
             <option value="lossless">Lossless — huge files, archival</option>
           </select>
+          <span id="quality-hint" class="hint"></span>
         </label>
 
         <label class="field">
           <span class="label">Encoder</span>
           <select id="encoder"></select>
-        </label>
-
-        <label class="field">
-          <span class="label">Audio</span>
-          <select id="audio"></select>
-          <span class="hint">For computer sound, enable “Stereo Mix” in Windows sound settings.</span>
         </label>
 
         <label class="field row">
@@ -120,6 +129,42 @@
             <button id="open-dir" type="button" class="ghost">Open</button>
           </div>
         </div>
+      </section>
+
+      <section class="card settings" id="audio-settings">
+        <div class="label-row">
+          <span class="section-title">Audio</span>
+          <button id="test-audio" type="button" class="ghost small">Test</button>
+        </div>
+
+        <div class="audio-source">
+          <label class="field row">
+            <span class="source-name">Computer sound</span>
+            <input id="system-audio" type="checkbox" class="toggle" />
+          </label>
+          <div class="volume-row" data-for="system">
+            <input id="system-volume" type="range" min="0" max="200" step="5" aria-label="Computer sound volume" />
+            <span id="system-volume-label" class="vol-label"></span>
+          </div>
+          <div class="meter" data-meter="system"><span></span></div>
+        </div>
+
+        <div class="audio-source">
+          <label class="field">
+            <span class="source-name">Microphone / headset</span>
+            <select id="mic"></select>
+          </label>
+          <div class="volume-row" data-for="mic">
+            <input id="mic-volume" type="range" min="0" max="200" step="5" aria-label="Microphone volume" />
+            <span id="mic-volume-label" class="vol-label"></span>
+          </div>
+          <div class="meter" data-meter="mic"><span></span></div>
+          <label class="field row" data-for="mic">
+            <span class="hint">Reduce background noise</span>
+            <input id="noise" type="checkbox" class="toggle" />
+          </label>
+        </div>
+        <span id="audio-hint" class="hint"></span>
       </section>
 
       <footer id="footer" class="footer muted"></footer>

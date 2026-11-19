@@ -1,9 +1,8 @@
 import { execFile } from 'node:child_process'
 import { app } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
-import { buildEncoderProbeArgs, ENCODER_LABELS, HARDWARE_ENCODERS } from './args.ts'
-import { parseDshowAudioDevices } from './parse.ts'
-import type { EncoderInfo } from '../shared/types.ts'
+import { buildEncoderProbeArgs, ENCODER_LABELS, HARDWARE_ENCODERS, YUV444_CAPABLE } from './args.ts'
+import type { EncoderInfo, Quality } from '../shared/types.ts'
 
 export function ffmpegPath(): string {
   const p = ffmpegStatic as unknown as string | null
@@ -23,7 +22,6 @@ export interface FfmpegFeatures {
   version: string
   ddagrab: boolean
   encoders: EncoderInfo[]
-  audioDevices: string[]
 }
 
 let cached: Promise<FfmpegFeatures> | null = null
@@ -33,30 +31,39 @@ export function detectFeatures(refresh = false): Promise<FfmpegFeatures> {
   return cached
 }
 
+async function probe(encoder: string, quality: Quality): Promise<boolean> {
+  return (await runFfmpeg(buildEncoderProbeArgs(encoder, quality))).ok
+}
+
 async function detect(): Promise<FfmpegFeatures> {
-  const [version, filters, encoderList, devices] = await Promise.all([
+  const [version, filters, encoderList] = await Promise.all([
     runFfmpeg(['-hide_banner', '-version']),
     runFfmpeg(['-hide_banner', '-filters']),
-    runFfmpeg(['-hide_banner', '-encoders']),
-    process.platform === 'win32'
-      ? runFfmpeg(['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'])
-      : Promise.resolve({ ok: false, stdout: '', stderr: '' })
+    runFfmpeg(['-hide_banner', '-encoders'])
   ])
 
   // Listing an encoder doesn't mean the GPU/driver supports it, so each one is test-encoded.
   const candidates = HARDWARE_ENCODERS.filter((e) => new RegExp(`\\b${e}\\b`).test(encoderList.stdout))
-  const probes = await Promise.all(candidates.map(async (e) => ((await runFfmpeg(buildEncoderProbeArgs(e))).ok ? e : null)))
-  const working = probes.filter((e): e is (typeof HARDWARE_ENCODERS)[number] => e !== null)
+  const results = await Promise.all(
+    candidates.map(async (id): Promise<EncoderInfo | null> => {
+      if (!(await probe(id, 'veryhigh'))) return null
+      const yuv444 = YUV444_CAPABLE.includes(id) && (await probe(id, 'maximum'))
+      return { id, label: ENCODER_LABELS[id] ?? id, yuv444 }
+    })
+  )
 
   return {
     version: version.stdout.split(/\r?\n/)[0]?.replace(/^ffmpeg version\s+/, '').split(' ')[0] ?? 'unknown',
     ddagrab: /\bddagrab\b/.test(filters.stdout),
-    encoders: [...working, 'libx264'].map((id) => ({ id, label: ENCODER_LABELS[id] ?? id })),
-    audioDevices: parseDshowAudioDevices(devices.stderr)
+    encoders: [...results.filter((e): e is EncoderInfo => e !== null), { id: 'libx264', label: ENCODER_LABELS.libx264, yuv444: true }]
   }
 }
 
-export function pickAutoEncoder(available: EncoderInfo[]): string {
-  const ids = available.map((e) => e.id)
-  return ['h264_nvenc', 'h264_qsv', 'h264_amf'].find((e) => ids.includes(e)) ?? 'libx264'
+/** Picks the encoder for a recording, falling back to x264 when 4:4:4 is needed but unsupported. */
+export function chooseEncoder(available: EncoderInfo[], requested: string, quality: Quality): string {
+  const needs444 = quality === 'maximum'
+  const usable = available.filter((e) => !needs444 || e.yuv444)
+  if (requested !== 'auto' && usable.some((e) => e.id === requested)) return requested
+  const ids = usable.map((e) => e.id)
+  return ['h264_nvenc', 'h264_qsv', 'h264_amf', 'hevc_nvenc'].find((e) => ids.includes(e)) ?? 'libx264'
 }

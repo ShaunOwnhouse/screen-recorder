@@ -32,6 +32,33 @@ export class ProgressParser {
   }
 }
 
+export interface MediaInfo {
+  width: number
+  height: number
+  fps: number
+  duration: number
+  yuv444: boolean
+  hasAudio: boolean
+}
+
+/** Reads the stream summary FFmpeg prints for `ffmpeg -i file`. */
+export function parseMediaInfo(stderr: string): MediaInfo | null {
+  const video = stderr.split(/\r?\n/).find((l) => /Stream #.*: Video:/.test(l))
+  if (!video) return null
+  const size = /\b(\d{2,5})x(\d{2,5})\b/.exec(video.slice(video.indexOf('Video:')))
+  if (!size) return null
+  const d = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr)
+  const fps = /([\d.]+) fps/.exec(video)
+  return {
+    width: Number(size[1]),
+    height: Number(size[2]),
+    fps: fps ? Math.round(Number(fps[1])) : 30,
+    duration: d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0,
+    yuv444: /yuv444p/.test(video),
+    hasAudio: /Stream #.*: Audio:/.test(stderr)
+  }
+}
+
 function num(v: string | undefined): number {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
@@ -49,22 +76,12 @@ function toProgress(f: Record<string, string>): Progress {
   }
 }
 
-/** Parses `ffmpeg -list_devices true -f dshow -i dummy` (both old and new output formats). */
-export function parseDshowAudioDevices(stderr: string): string[] {
-  const devices: string[] = []
-  let section: 'audio' | 'video' | null = null
-  for (const line of stderr.split(/\r?\n/)) {
-    if (/DirectShow audio devices/i.test(line)) section = 'audio'
-    else if (/DirectShow video devices/i.test(line)) section = 'video'
-    if (/Alternative name/i.test(line)) continue
-
-    const tagged = line.match(/"([^"]+)"\s+\((audio|video|none|audio, video)\)/)
-    if (tagged) {
-      if (tagged[2].includes('audio')) devices.push(tagged[1])
-      continue
-    }
-    const plain = line.match(/\]\s+"([^"]+)"\s*$/)
-    if (plain && section === 'audio') devices.push(plain[1])
-  }
-  return [...new Set(devices)]
+export function parseRange(header: string | null, size: number): { start: number; end: number } | null {
+  const m = header && /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (!m || (!m[1] && !m[2])) return null
+  let start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]))
+  let end = m[1] && m[2] ? Number(m[2]) : size - 1
+  end = Math.min(end, size - 1)
+  start = Math.min(start, end)
+  return { start, end }
 }

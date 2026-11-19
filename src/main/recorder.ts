@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { rmSync } from 'node:fs'
-import { buildRecordArgs, buildRemuxArgs, ENCODER_LABELS, outputSize, type RecordArgsInput } from './args.ts'
+import { buildRecordArgs, buildRemuxArgs, effectiveEncoder, ENCODER_LABELS, outputSize, type RecordArgsInput } from './args.ts'
 import { ffmpegPath, runFfmpeg } from './ffmpeg.ts'
 import { ProgressParser } from './parse.ts'
+import { moveFile, tempPathFor } from './pending.ts'
 import type { RecordingStatus } from '../shared/types.ts'
 
 type Attempt = Omit<RecordArgsInput, 'outputPath'>
@@ -13,7 +14,7 @@ const STOP_TIMEOUT_MS = 15000
 
 export class Recorder extends EventEmitter {
   private proc: ChildProcess | null = null
-  private status: RecordingStatus = { state: 'idle', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null }
+  private status: RecordingStatus = { state: 'idle', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, pending: null }
   private startedAt = 0
   private ticker: NodeJS.Timeout | null = null
   private tempPath = ''
@@ -34,7 +35,7 @@ export class Recorder extends EventEmitter {
     if (this.proc) throw new Error('Already recording.')
     this.finalPath = finalPath
     // Recorded as crash-safe fragmented MP4, then remuxed losslessly to a normal MP4 on stop.
-    this.tempPath = finalPath.replace(/\.mp4$/i, '.recording.mp4')
+    this.tempPath = tempPathFor(finalPath)
 
     const errors: string[] = []
     for (const attempt of attempts) {
@@ -83,7 +84,7 @@ export class Recorder extends EventEmitter {
         const out = outputSize(attempt.rect, attempt.outputHeight)
         this.update({
           state: 'recording', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, error: undefined,
-          encoder: ENCODER_LABELS[attempt.quality === 'lossless' ? 'libx264' : attempt.encoder] ?? attempt.encoder,
+          encoder: ENCODER_LABELS[effectiveEncoder(attempt.encoder, attempt.quality)] ?? attempt.encoder,
           backend: attempt.backend === 'ddagrab' ? 'Desktop Duplication' : 'GDI',
           resolution: `${out.width}×${out.height} @ ${attempt.fps}fps`
         })
@@ -124,14 +125,11 @@ export class Recorder extends EventEmitter {
     this.proc = null
 
     const remux = await runFfmpeg(buildRemuxArgs(this.tempPath, this.finalPath), 10 * 60 * 1000)
-    if (remux.ok) {
-      rmSync(this.tempPath, { force: true })
-      this.update({ state: 'idle', lastFile: this.finalPath, error })
-      this.emit('saved', this.finalPath)
-    } else {
-      this.update({ state: 'idle', lastFile: this.tempPath, error: error ?? 'Final MP4 conversion failed; the raw recording was kept.' })
-      this.emit('saved', this.tempPath)
-    }
+    if (remux.ok) rmSync(this.tempPath, { force: true })
+    // The fragmented file is still a valid MP4, just less seek-friendly, so keep it rather than lose the take.
+    else moveFile(this.tempPath, this.finalPath)
     this.stopping = null
+    this.update({ state: 'idle', error })
+    this.emit('recorded', this.finalPath)
   }
 }

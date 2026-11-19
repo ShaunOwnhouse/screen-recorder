@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { Api } from '../shared/api.ts'
-import type { RecordingStatus } from '../shared/types.ts'
+
+function subscribe<T>(channel: string, cb: (value: T) => void): () => void {
+  const listener = (_e: IpcRendererEvent, value: T): void => cb(value)
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.removeListener(channel, listener)
+}
 
 const api: Api = {
   getCapabilities: (refresh = false) => ipcRenderer.invoke('caps:get', refresh),
@@ -12,11 +17,11 @@ const api: Api = {
   openOutputDir: () => ipcRenderer.invoke('shell:openDir'),
   showLastRecording: () => ipcRenderer.invoke('shell:showLast'),
   playLastRecording: () => ipcRenderer.invoke('shell:playLast'),
-  onStatus: (cb) => {
-    const listener = (_e: IpcRendererEvent, s: RecordingStatus): void => cb(s)
-    ipcRenderer.on('rec:status', listener)
-    return () => ipcRenderer.removeListener('rec:status', listener)
-  }
+  openReview: () => ipcRenderer.invoke('rec:review'),
+  testAudio: (on) => ipcRenderer.invoke('audio:test', on),
+  onStatus: (cb) => subscribe('rec:status', cb),
+  onLevels: (cb) => subscribe('audio:levels', cb),
+  onCapsChanged: (cb) => subscribe('caps:changed', () => cb())
 }
 
 contextBridge.exposeInMainWorld('api', api)

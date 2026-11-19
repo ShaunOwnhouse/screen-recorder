@@ -1,4 +1,4 @@
-export type Quality = 'high' | 'veryhigh' | 'lossless'
+export type Quality = 'high' | 'veryhigh' | 'maximum' | 'lossless'
 export type CaptureMode = 'fullscreen' | 'region'
 export type Backend = 'auto' | 'ddagrab' | 'gdigrab'
 
@@ -10,10 +10,16 @@ export interface Settings {
   fps: 30 | 60
   quality: Quality
   encoder: string
-  audioDevice: string | null
   showCursor: boolean
   backend: Backend
   outputDir: string
+  systemAudio: boolean
+  systemVolume: number
+  /** A microphone deviceId, 'default', or null for no microphone. */
+  micDevice: string | null
+  micLabel: string | null
+  micVolume: number
+  noiseSuppression: boolean
 }
 
 export interface DisplayInfo {
@@ -23,9 +29,16 @@ export interface DisplayInfo {
   height: number
   scaleFactor: number
   primary: boolean
+  thumbnail: string | null
 }
 
 export interface EncoderInfo {
+  id: string
+  label: string
+  yuv444: boolean
+}
+
+export interface MicInfo {
   id: string
   label: string
 }
@@ -36,7 +49,7 @@ export interface Capabilities {
   ddagrab: boolean
   displays: DisplayInfo[]
   encoders: EncoderInfo[]
-  audioDevices: string[]
+  microphones: MicInfo[]
   hotkey: string | null
 }
 
@@ -51,8 +64,17 @@ export interface RecordingStatus {
   encoder?: string
   backend?: string
   resolution?: string
+  audio?: string
+  /** Basename of a finished recording waiting for the user to save or discard it. */
+  pending: string | null
   lastFile?: string
   error?: string
+  warning?: string
+}
+
+export interface AudioLevels {
+  system: number | null
+  mic: number | null
 }
 
 export interface Rect {
@@ -60,4 +82,32 @@ export interface Rect {
   y: number
   width: number
   height: number
+}
+
+export type Segment = [number, number]
+
+export interface RecordingMeta {
+  width: number
+  height: number
+  fps: number
+  duration: number
+  yuv444: boolean
+  hasAudio: boolean
+}
+
+export interface EditorSource {
+  name: string
+  url: string
+  meta: RecordingMeta
+  sizeBytes: number
+  defaultName: string
+  outputDir: string
+}
+
+export interface SaveRequest {
+  segments: Segment[]
+  /** Normalised 0..1 crop of the frame, or null for the full frame. */
+  crop: Rect | null
+  fileName: string
+  saveAs: boolean
 }

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; media-src 'self' media:; img-src 'self' data:"
+    />
+    <title>Review recording</title>
+    <link rel="stylesheet" href="./editor.css" />
+  </head>
+  <body>
+    <div class="editor">
+      <header class="bar">
+        <div class="title">
+          <h1>Review recording</h1>
+          <span id="info" class="muted"></span>
+        </div>
+        <div class="title-actions">
+          <button id="discard" type="button" class="danger-ghost">Discard</button>
+        </div>
+      </header>
+
+      <section class="stage-wrap">
+        <div id="stage" class="stage">
+          <video id="video" preload="auto" playsinline></video>
+          <div id="crop" class="crop" hidden>
+            <div id="crop-box" class="crop-box">
+              <span class="crop-size" id="crop-size"></span>
+              <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i>
+              <i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i>
+            </div>
+          </div>
+          <div id="stage-msg" class="stage-msg" hidden></div>
+        </div>
+      </section>
+
+      <section class="transport">
+        <button id="play" type="button" class="icon-btn" aria-label="Play">
+          <svg id="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+        </button>
+        <span id="time" class="time">0:00.0 / 0:00.0</span>
+        <div class="spacer"></div>
+        <span id="kept" class="muted"></span>
+      </section>
+
+      <section class="timeline-wrap">
+        <div id="timeline" class="timeline" tabindex="0" aria-label="Timeline">
+          <div id="segments" class="segments"></div>
+          <div id="selection" class="selection" hidden>
+            <span class="handle" data-edge="in"></span>
+            <span class="handle" data-edge="out"></span>
+          </div>
+          <div id="playhead" class="playhead"></div>
+        </div>
+        <div class="hint">Drag across the timeline to select a part, then keep it or delete it. Grey parts are removed.</div>
+      </section>
+
+      <section class="tools">
+        <div class="group">
+          <button id="mark-in" type="button" class="ghost" title="Mark start (I)">Mark start <kbd>I</kbd></button>
+          <button id="mark-out" type="button" class="ghost" title="Mark end (O)">Mark end <kbd>O</kbd></button>
+        </div>
+        <div class="group">
+          <button id="keep-sel" type="button" class="ghost" disabled>Keep only selection</button>
+          <button id="delete-sel" type="button" class="ghost" disabled>Delete selection <kbd>Del</kbd></button>
+        </div>
+        <div class="group">
+          <button id="undo" type="button" class="ghost" disabled>Undo</button>
+          <button id="reset" type="button" class="ghost" disabled>Reset</button>
+        </div>
+        <div class="group">
+          <button id="crop-toggle" type="button" class="ghost" aria-pressed="false">Crop</button>
+          <select id="aspect" hidden aria-label="Crop shape">
+            <option value="free">Free</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16 (vertical)</option>
+            <option value="1:1">1:1</option>
+            <option value="4:3">4:3</option>
+          </select>
+          <button id="crop-reset" type="button" class="ghost" hidden>Remove crop</button>
+        </div>
+      </section>
+
+      <footer class="save">
+        <label class="name-field">
+          <span class="label">File name</span>
+          <div class="name-row">
+            <input id="name" type="text" spellcheck="false" />
+            <span class="ext">.mp4</span>
+          </div>
+        </label>
+        <div class="dest muted" id="dest"></div>
+        <div class="save-actions">
+          <button id="save-as" type="button" class="ghost">Save as…</button>
+          <button id="save" type="button" class="primary">Save</button>
+        </div>
+      </footer>
+
+      <div id="busy" class="busy" hidden>
+        <div class="busy-card">
+          <strong id="busy-title">Saving…</strong>
+          <div class="progress"><span id="busy-bar"></span></div>
+          <span id="busy-detail" class="muted"></span>
+          <button id="busy-cancel" type="button" class="ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./editor.ts"></script>
+  </body>
+</html>

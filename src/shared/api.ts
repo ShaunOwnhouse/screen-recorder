@@ -1,4 +1,6 @@
-import type { Capabilities, RecordingStatus, Rect, Settings } from './types.ts'
+import type {
+  AudioLevels, Capabilities, EditorSource, MicInfo, RecordingStatus, Rect, SaveRequest, Settings
+} from './types.ts'
 
 export interface Api {
   getCapabilities(refresh?: boolean): Promise<Capabilities>
@@ -10,9 +12,38 @@ export interface Api {
   openOutputDir(): Promise<void>
   showLastRecording(): Promise<void>
   playLastRecording(): Promise<void>
+  openReview(): Promise<void>
+  testAudio(on: boolean): Promise<string[]>
   onStatus(cb: (status: RecordingStatus) => void): () => void
+  onLevels(cb: (levels: AudioLevels) => void): () => void
+  onCapsChanged(cb: () => void): () => void
+}
+
+export interface EditorApi {
+  load(): Promise<EditorSource | null>
+  makeProxy(): Promise<string>
+  save(req: SaveRequest): Promise<{ ok: boolean; path?: string; error?: string }>
+  cancelExport(): Promise<void>
+  discard(): Promise<boolean>
+  onProgress(cb: (fraction: number) => void): () => void
 }
 
 export interface OverlayApi {
   done(rect: Rect | null): void
+}
+
+export interface AudioConfigPayload {
+  system: boolean
+  systemVolume: number
+  mic: string | null
+  micVolume: number
+  noiseSuppression: boolean
+}
+
+export interface AudioBridgeApi {
+  onStart(fn: (cfg: AudioConfigPayload) => Promise<{ started: string[]; errors: string[] }>): void
+  onStop(fn: () => Promise<void>): void
+  onListDevices(fn: () => Promise<MicInfo[]>): void
+  pcm(chunk: Float32Array): void
+  levels(levels: AudioLevels): void
 }

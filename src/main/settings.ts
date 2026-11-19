@@ -13,10 +13,15 @@ function defaults(): Settings {
     fps: 60,
     quality: 'veryhigh',
     encoder: 'auto',
-    audioDevice: null,
     showCursor: true,
     backend: 'auto',
-    outputDir: join(app.getPath('videos'), 'Screen Recordings')
+    outputDir: join(app.getPath('videos'), 'Screen Recordings'),
+    systemAudio: true,
+    systemVolume: 1,
+    micDevice: null,
+    micLabel: null,
+    micVolume: 1,
+    noiseSuppression: true
   }
 }
 
