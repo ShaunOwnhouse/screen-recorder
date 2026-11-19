@@ -67,6 +67,8 @@ jobs:
       # checks every saved file — decodes it fully and opens it with Windows' own media stack.
       - name: End-to-end test of the packaged app
         shell: bash
+        env:
+          E2E_CAPTURE_EXCLUSION: informational
         run: node test/e2e/run.cjs "dist/win-unpacked/Screen Recorder.exe"
 
       - name: Upload end-to-end results

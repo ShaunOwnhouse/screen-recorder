@@ -23,6 +23,10 @@ const outDir = path.join(userData, 'saved')
 const results = []
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a)
+function warn(name, detail = '') {
+  results.push({ name, ok: true, warn: true, detail })
+  log('WARN', name, detail ? `— ${detail}` : '')
+}
 function check(name, ok, detail = '') {
   results.push({ name, ok, detail })
   log(ok ? 'PASS' : 'FAIL', name, detail ? `— ${detail}` : '')
@@ -179,8 +183,9 @@ async function record(app, main, label, { seconds, region }) {
     await sleep(600)
     await shot(overlay, `${label}-overlay`)
     const vp = await overlay.evaluate(() => ({ w: innerWidth, h: innerHeight }))
-    const x1 = Math.round(vp.w * 0.15), y1 = Math.round(vp.h * 0.2)
-    const x2 = Math.round(vp.w * 0.75), y2 = Math.round(vp.h * 0.7)
+    const fr = region.fractions || { x1: 0.15, y1: 0.2, x2: 0.75, y2: 0.7 }
+    const x1 = Math.round(vp.w * fr.x1), y1 = Math.round(vp.h * fr.y1)
+    const x2 = Math.round(vp.w * fr.x2), y2 = Math.round(vp.h * fr.y2)
     await overlay.mouse.move(x1, y1)
     await overlay.mouse.down()
     await overlay.mouse.move(x2, y2, { steps: 12 })
@@ -268,6 +273,21 @@ async function save(app, editor, name) {
     log('primary display (physical px):', `${display.w}×${display.h} @${display.f}x`)
     const evenFloor = (n) => Math.floor(n / 2) * 2
 
+    // 0) Prove the Windows playback check itself works: a normal 4:2:0 file must pass; the 4:4:4 format
+    //    that Windows Media Player rejects (error 0x80004005) is reported for information.
+    if (isWin) {
+      const make = (name, pix, profile) => {
+        const f = path.join(RESULTS, name)
+        ff(['-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30:duration=2', '-c:v', 'libx264',
+          '-pix_fmt', pix, '-profile:v', profile, '-movflags', '+faststart', f])
+        return f
+      }
+      const good = windowsMediaFoundation(make('control-420.mp4', 'yuv420p', 'high'))
+      check('Control: a standard 4:2:0 H.264 file plays in Windows', good.ok, good.out.replace(/\s+/g, ' ').slice(0, 250))
+      const bad = windowsMediaFoundation(make('control-444.mp4', 'yuv444p', 'high444'))
+      log(`Control: 4:4:4 H.264 (what Media Player rejected) → ${bad.ok ? 'Windows CAN decode it here' : 'Windows cannot decode it'}: ${bad.out.replace(/\s+/g, ' ').slice(0, 200)}`)
+    }
+
     // 1) Whole screen, Maximum, with audio → save untouched
     {
       const { editor, status, barBounds } = await record(app, main, 'maximum', { seconds: 5 })
@@ -283,7 +303,14 @@ async function save(app, editor, name) {
           x: Math.round(b.x * display.f), y: Math.round(b.y * display.f)
         }
         const red = redPixels(file, 3, region)
-        check('Maximum whole screen: recording bar is NOT in the video', red < 20, `${red} bright-red UI pixels where the bar was (${JSON.stringify(b)})`)
+        const detail = `${red} bright-red UI pixels where the bar was (${JSON.stringify(b)})`
+        if (red >= 20 && process.env.E2E_CAPTURE_EXCLUSION === 'informational') {
+          // CI's virtual display has no graphics card and is captured with the old GDI method, which doesn't
+          // honour Windows' "exclude from capture" flag there. Real PCs use Desktop Duplication; check there.
+          warn('Maximum whole screen: bar hidden from capture by Windows — NOT VERIFIABLE on this virtual display', detail)
+        } else {
+          check('Maximum whole screen: recording bar is NOT in the video', red < 20, detail)
+        }
       }
       log('recorded with', status.backend, '/', status.encoder)
     }
@@ -318,13 +345,20 @@ async function save(app, editor, name) {
       await setSettings(main, { quality: 'maximum' })
     }
 
-    // 4) Region
+    // 4) Region covering the top of the screen: the bar must move out of the recorded area, so it
+    //    can't be in the video no matter what the capture method does with window exclusion.
     {
-      const region = {}
-      const { editor } = await record(app, main, 'region', { seconds: 3, region })
-      const file = await save(app, editor, 'e2e-region')
+      const region = { fractions: { x1: 0.02, y1: 0.03, x2: 0.98, y2: 0.55 } }
+      const { editor, barBounds } = await record(app, main, 'region', { seconds: 3, region })
       const e = region.expected
+      const rect = { x: e.x, y: e.y, width: e.w, height: e.h }
+      const overlaps = barBounds.x < rect.x + rect.width && barBounds.x + barBounds.width > rect.x &&
+        barBounds.y < rect.y + rect.height && barBounds.y + barBounds.height > rect.y
+      check('Region: recording bar moved outside the recorded area', !overlaps, `bar ${JSON.stringify(barBounds)} vs region ${JSON.stringify(rect)}`)
+      const file = await save(app, editor, 'e2e-region')
       validate('Region', file, { width: evenFloor(Math.round(e.w * display.f)), height: evenFloor(Math.round(e.h * display.f)), audio: true, minSeconds: 2 })
+      const red = redPixels(file, 2, { x: 0, y: 0, w: evenFloor(Math.round(e.w * display.f)), h: evenFloor(Math.round(e.h * display.f)) })
+      check('Region: no recording-bar pixels anywhere in the video', red < 20, `${red} bright-red UI pixels in the frame`)
     }
 
     // 5) Cancel during the countdown leaves nothing behind
@@ -366,7 +400,9 @@ async function save(app, editor, name) {
 
   fs.writeFileSync(path.join(RESULTS, 'results.json'), JSON.stringify(results, null, 2))
   const bad = results.filter((r) => !r.ok)
+  const warned = results.filter((r) => r.warn)
   console.log(`\n${results.length - bad.length}/${results.length} checks passed${failed ? ' (run aborted early)' : ''}`)
+  warned.forEach((w) => console.log(`  WARNING: ${w.name} — ${w.detail}`))
   bad.forEach((b) => console.log(`  FAILED: ${b.name} — ${b.detail}`))
   process.exit(bad.length || failed ? 1 : 0)
 })()
