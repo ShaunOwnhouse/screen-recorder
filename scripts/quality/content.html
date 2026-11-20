@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8">
+<style>
+ body{margin:0;background:#1e1e2e;color:#cdd6f4;font:13px/1.55 Consolas,"DejaVu Sans Mono",monospace;width:1920px}
+ .row{display:flex}.side{width:260px;background:#181825;padding:12px;height:2400px}
+ .side div{padding:3px 6px;color:#a6adc8;font:12px "DejaVu Sans",sans-serif}
+ .side div.sel{background:#313244;color:#fff}
+ .code{padding:12px 18px;flex:1}
+ .k{color:#cba6f7}.s{color:#a6e3a1}.f{color:#89b4fa}.n{color:#fab387}.c{color:#6c7086}.r{color:#f38ba8}.y{color:#f9e2af}.t{color:#94e2d5}
+ .ui{display:flex;gap:10px;padding:8px 18px;background:#11111b;font:12px "DejaVu Sans",sans-serif}
+ .ui span{padding:3px 9px;border-radius:4px;background:#313244}.ui .red{background:#ef4444;color:#fff}.ui .blue{background:#3b82f6;color:#fff}
+ .tbl{margin:10px 18px;border-collapse:collapse;font:12px "DejaVu Sans",sans-serif}.tbl td{border:1px solid #45475a;padding:3px 10px}
+ .tbl td.e{color:#ff5555}.tbl td.g{color:#50fa7b}.tbl td.b{color:#6ea8ff}
+</style>
+<div class="ui"><span>File</span><span>Edit</span><span class="red">Stop</span><span class="blue">Run ▶</span><span>Help</span><span style="color:#ff5555">Error: 3</span><span style="color:#50fa7b">Passed: 214</span></div>
+<div class="row"><div class="side" id="side"></div><div class="code" id="code"></div></div>
+<script>
+const side=document.getElementById('side');for(let i=0;i<70;i++)side.innerHTML+=`<div class="${i==4?'sel':''}">${['src/main/index.ts','src/renderer/main.ts','package.json','README.md','test/e2e/run.cjs'][i%5]} ${i}</div>`
+const lines=[];const kw=['const','function','return','await','import','export','async','if','else'];
+for(let i=0;i<130;i++){const k=kw[i%kw.length];lines.push(`<span class="c">${String(i+1).padStart(3)}</span>  <span class="k">${k}</span> <span class="f">compute${i}</span>(<span class="y">arg${i}</span>: <span class="t">string</span>) { <span class="c">// the quick brown fox jumps ${i}</span>`+`\n     <span class="k">return</span> <span class="s">"Hello, world ${i} — ÄÖÜ 日本語 \\n"</span> + <span class="n">${(i*37)%997}</span>.<span class="r">toFixed</span>(<span class="n">2</span>) <span class="c">/* ${(i*7919).toString(16)} */</span> }`)}
+document.getElementById('code').innerHTML='<pre style="margin:0">'+lines.join('\n')+'</pre><table class="tbl"><tr><td class="e">FAIL</td><td class="g">PASS</td><td class="b">INFO</td><td>0.00123</td></tr><tr><td class="e">red text</td><td class="g">green text</td><td class="b">blue text</td><td>thin 1px lines →</td></tr></table>'
+</script>

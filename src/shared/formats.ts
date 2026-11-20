@@ -115,7 +115,7 @@ export const IMAGE_FORMATS: FormatInfo<ImageFormat>[] = [
     notice: {
       level: 'warn',
       title: 'JPEG is lossy.',
-      text: 'It throws away some detail — text and sharp edges can look slightly fuzzy — even at the maximum quality this app uses. If you’re not sure, keep PNG.'
+      text: 'It throws away some detail — text and sharp edges can look slightly fuzzy — even at the maximum quality this app uses, and for screenshots of text and apps it is usually not even smaller than PNG. If you’re not sure, keep PNG.'
     }
   }
 ]

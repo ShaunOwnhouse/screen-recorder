@@ -6,8 +6,32 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  # GitHub only gives a repository a fixed amount of artifact storage, and every build is ~450 MB. Without this the quota fills
+  # up ("Artifact storage quota has been hit") and new builds can no longer be uploaded. Only the newest build is kept.
+  tidy:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete artifacts from earlier runs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.workflow_run.id != ${{ github.run_id }}) | .id' |
+          while read -r id; do
+            echo "deleting artifact $id"
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" || true
+          done
+
   windows:
+    needs: tidy
+    if: ${{ !cancelled() }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,12 +100,14 @@ jobs:
           name: e2e-windows
           path: test-results/e2e
           if-no-files-found: ignore
+          retention-days: 2
 
       - uses: actions/upload-artifact@v7
         with:
           name: screen-snap-windows
           path: dist/*.exe
           if-no-files-found: error
+          retention-days: 3
 
       # Microsoft Store package. Microsoft signs it during certification, so no certificate is needed.
       # Uses the app identity from Partner Center (repository variables); without them it still builds
@@ -137,8 +163,11 @@ jobs:
           name: screen-snap-microsoft-store
           path: dist/*.appx
           if-no-files-found: error
+          retention-days: 3
 
   mac:
+    needs: tidy
+    if: ${{ !cancelled() }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -197,3 +226,4 @@ jobs:
           name: screen-snap-mac
           path: dist/*.dmg
           if-no-files-found: error
+          retention-days: 3
