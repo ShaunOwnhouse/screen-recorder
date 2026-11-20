@@ -66,3 +66,11 @@ If anything fails, send a screenshot plus the newest file from the logs folder. 
 ## Settings window
 
 - [ ] With Settings open, the window stays about the same height; scroll inside Settings, and the section names at the top jump to each section.
+
+## Updates
+
+- [ ] **First install:** install with the **Setup** file (the Portable file can't update itself). Settings → Updates shows the version number.
+- [ ] **Check now:** says "You're up to date." when there is nothing newer.
+- [ ] **A newer build exists:** after a few seconds a green banner says "Version X is ready … Restart to update". Click it: the app closes, installs and starts again by itself, and Settings → Updates shows the new version. Your settings and any recordings waiting for review are still there.
+- [ ] **Not during a recording:** with the banner showing, start a recording; the app must not restart. Finish the recording, then restart works.
+- [ ] **macOS (until the app is code-signed):** Settings → Updates says a new version is available and the button opens the download page; the update itself is installed by hand.

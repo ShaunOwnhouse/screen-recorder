@@ -26,6 +26,11 @@ const api: Api = {
   openReview: () => ipcRenderer.invoke('rec:review'),
   testAudio: (on) => ipcRenderer.invoke('audio:test', on),
   fitHeight: (height) => ipcRenderer.invoke('window:fit', height),
+  getUpdateStatus: () => ipcRenderer.invoke('update:status'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdate: (cb) => subscribe('update:status', cb),
   onStatus: (cb) => subscribe('rec:status', cb),
   onLevels: (cb) => subscribe('audio:levels', cb),
   onCapsChanged: (cb) => subscribe('caps:changed', () => cb())

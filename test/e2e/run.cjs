@@ -8,6 +8,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
+const http = require('node:http')
 
 const ROOT = path.resolve(__dirname, '../..')
 const FFMPEG = require('ffmpeg-static')
@@ -251,6 +252,7 @@ const SETTINGS = (over) => ({
   shotClipboard: false,
   shotCursor: false,
   shotDelay: 0,
+  autoUpdate: true,
   videoFormat: 'mp4',
   systemAudio: isWin, // exercises the Windows loopback path; there's no sound device on CI so it may fail softly
   micEnabled: true,
@@ -417,12 +419,26 @@ async function save(app, editor, name) {
   fs.mkdirSync(userData, { recursive: true })
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(SETTINGS({})))
 
+  // A tiny update feed on this computer (Windows only: Linux runs from source, which never self-updates).
+  let feedVersion = require(path.join(ROOT, 'package.json')).version
+  const feedServer = http.createServer((req, res) => {
+    if (/latest\.yml$/.test(req.url)) {
+      res.writeHead(200, { 'Content-Type': 'text/yaml' })
+      res.end(`version: ${feedVersion}\nfiles:\n  - url: Screen-Snap-Setup-${feedVersion}.exe\n    sha512: AAAA\n    size: 1\npath: Screen-Snap-Setup-${feedVersion}.exe\nsha512: AAAA\nreleaseDate: '2026-01-01T00:00:00.000Z'\n`)
+    } else {
+      res.writeHead(404)
+      res.end()
+    }
+  })
+  await new Promise((r) => feedServer.listen(0, '127.0.0.1', r))
+  const feedUrl = `http://127.0.0.1:${feedServer.address().port}`
+
   const flags = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--user-data-dir=${userData}`]
   const launch = target
     ? { executablePath: path.resolve(target), args: flags }
     : { executablePath: path.join(ROOT, 'node_modules/electron/dist/electron'), args: ['--no-sandbox', ROOT, ...flags] }
   log('launching', target ? path.resolve(target) : 'Electron from source', '| platform', process.platform)
-  const app = await electron.launch({ ...launch, timeout: 120000, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' } })
+  const app = await electron.launch({ ...launch, timeout: 120000, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...(isWin ? { SCREEN_SNAP_UPDATE_FEED: feedUrl } : {}) } })
   const errors = []
   app.process().stderr.on('data', (d) => {
     const s = String(d)
@@ -434,6 +450,8 @@ async function save(app, editor, name) {
     const main = await waitForWindow(app, 'index.html')
     await main.waitForFunction(() => !document.getElementById('footer').textContent.includes('Detecting'), null, { timeout: 60000 })
     log('panel ready:', await main.textContent('#footer'))
+    const runVersion = await app.evaluate(({ app }) => app.getVersion())
+    feedVersion = runVersion // the feed starts out announcing the very version that is running
     await shot(main, 'panel')
 
     const display = await app.evaluate(({ screen }) => {
@@ -560,6 +578,52 @@ async function save(app, editor, name) {
       await main.evaluate((d) => window.api.setSettings({ hotkeyRecord: d.r, hotkeyShot: d.s }), { r: st.hotkeyRecord, s: st.hotkeyShot })
       await sleep(400)
       check('Shortcuts: defaults come back', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)) && !(await registered('Control+Alt+Q')))
+      await main.click('#settings-toggle')
+    }
+
+    // ---- Updates: the installed app updates itself (Settings → Updates) ----
+    {
+      log('--- updates ---')
+      await main.click('#settings-toggle')
+      await main.waitForSelector('#settings-wrap:not([hidden])')
+      await main.click('#jump button[data-target=g-updates]')
+      await sleep(900)
+      check('Updates: the running version is shown', (await main.textContent('#app-version')).trim() === runVersion && /^\d+\.\d+\.\d+$/.test(runVersion), `${await main.textContent('#app-version')} vs ${runVersion}`)
+      check('Updates: Settings has an Updates section reachable from the section buttons', await main.isVisible('#update-check'))
+      const line = () => main.textContent('#update-line')
+      if (!isWin) {
+        const l = await line()
+        check('Updates: a development copy says plainly that it does not update itself', /doesn’t update itself/.test(l), l)
+        check('Updates: "Check now" is switched off when updates are not possible', await main.isDisabled('#update-check'))
+        check('Updates: no update banner is shown for it', await main.isHidden('#update-banner'))
+      } else {
+        // The packaged app asks the local feed: same version → up to date
+        await main.click('#update-check')
+        await main.waitForFunction(() => /up to date/.test(document.getElementById('update-line').textContent), null, { timeout: 30000 })
+          .then(() => check('Updates: "Check now" says you are up to date when there is nothing newer', true), async () => check('Updates: "Check now" says you are up to date when there is nothing newer', false, await line()))
+        check('Updates: no banner when up to date', await main.isHidden('#update-banner'))
+        // A newer version exists, automatic updates are off → it is announced with a Download button
+        await main.evaluate(() => window.api.setSettings({ autoUpdate: false }))
+        feedVersion = '99.0.0'
+        await main.click('#update-check')
+        await main.waitForFunction(() => /99\.0\.0 is available/.test(document.getElementById('update-line').textContent), null, { timeout: 30000 })
+          .then(() => check('Updates: a newer version is announced', true), async () => check('Updates: a newer version is announced', false, await line()))
+        check('Updates: the banner offers to download it', (await main.isVisible('#update-banner')) && /Download it/.test(await main.textContent('#update-action')), await main.textContent('#update-banner'))
+        await shot(main, 'panel-update-available')
+        // When the feed can't be reached the app says so quietly (no crash, no scary banner)
+        feedServer.close()
+        feedServer.closeAllConnections()
+        await main.evaluate(() => window.api.setSettings({ autoUpdate: true }))
+        await sleep(300)
+        await main.click('#update-check')
+        await main.waitForFunction(() => /Couldn’t check for updates/.test(document.getElementById('update-line').textContent), null, { timeout: 40000 })
+          .then(() => check('Updates: an unreachable update server is reported calmly', true), async () => check('Updates: an unreachable update server is reported calmly', false, await line()))
+      }
+      await main.click('#update-auto')
+      check('Updates: automatic updates can be switched off', (await main.evaluate(() => window.api.getSettings())).autoUpdate === false)
+      await main.click('#update-auto')
+      check('Updates: …and back on', (await main.evaluate(() => window.api.getSettings())).autoUpdate === true)
+      await shot(main, 'panel-updates')
       await main.click('#settings-toggle')
     }
 
@@ -833,16 +897,15 @@ async function save(app, editor, name) {
         check('Screenshot editor: Undo takes back the last mark, Redo restores it', !(await review.isDisabled('#redo')))
         await review.click('#redo')
         check('Screenshot editor: Redo is used up again', await review.isDisabled('#redo'))
-        // crop: pull the bottom-right corner in
+        // crop: pull the bottom-right corner in. First let the window settle, then make sure starting a crop doesn't move the picture.
+        const picWidth = () => review.evaluate(() => document.getElementById('view').getBoundingClientRect().width)
+        await sleep(900)
+        const widthBefore = await picWidth()
         await review.click('#t-crop')
         check('Screenshot editor: Crop shows its own buttons', await review.isVisible('#crop-apply'))
-        const stable = await review.evaluate(async () => {
-          const r = () => document.getElementById('view').getBoundingClientRect().width
-          const a = r()
-          await new Promise((res) => setTimeout(res, 400))
-          return Math.abs(a - r()) < 1
-        })
-        check('Screenshot editor: starting a crop does not make the picture jump around', stable)
+        await sleep(700)
+        const widthAfter = await picWidth()
+        check('Screenshot editor: starting a crop does not make the picture jump around', Math.abs(widthAfter - widthBefore) < 1, `${widthBefore} → ${widthAfter}`)
         const h = await review.locator('#crop-box i[data-h=se]').boundingBox()
         await review.mouse.move(h.x + h.width / 2, h.y + h.height / 2)
         await review.mouse.down()

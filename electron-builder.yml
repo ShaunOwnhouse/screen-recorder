@@ -20,9 +20,10 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  artifactName: ${productName}-Setup-${version}.${ext}
+  # No spaces in file names: the update feed refers to files by name, and GitHub rewrites spaces to dots.
+  artifactName: Screen-Snap-Setup-${version}.${ext}
 portable:
-  artifactName: ${productName}-Portable-${version}.${ext}
+  artifactName: Screen-Snap-Portable-${version}.${ext}
 # Microsoft Store package. identityName / publisher / publisherDisplayName / displayName come from
 # Partner Center → Product identity, passed in by CI from repository variables.
 appx:
@@ -31,7 +32,7 @@ appx:
   languages:
     - en-US
   showNameOnTiles: true
-  artifactName: ${productName}-Store-${version}.${ext}
+  artifactName: Screen-Snap-Store-${version}.${ext}
 
 mac:
   icon: resources/icon.png
@@ -51,4 +52,4 @@ mac:
     NSAudioCaptureUsageDescription: Screen Snap records your computer's sound when you turn on Computer sound.
   minimumSystemVersion: '11.0'
 dmg:
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  artifactName: Screen-Snap-${version}-mac-${arch}.${ext}

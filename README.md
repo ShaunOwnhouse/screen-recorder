@@ -70,6 +70,27 @@ On first recording, macOS asks for **Screen & System Audio Recording** permissio
 | Computer sound | Built in | macOS 13 Ventura or later |
 | Microphone | Yes | Yes |
 
+## Updates
+
+The installed app **updates itself**. A few seconds after it starts (and every few hours after that) it looks for a newer version; if there is one it downloads it quietly in the background and shows a green banner, **Restart to update**. The update also installs when you simply close the app. Your settings and any unsaved recordings are kept, and the app never restarts in the middle of a recording. **Settings → Updates** has a **Check now** button and a switch to turn automatic downloads off.
+
+- Install the **Setup** file once. After that you never download an installer again. The *Portable* file can't update itself.
+- **macOS** can only replace itself once the app is code-signed (see below). Until then a Mac is told "Version X is available" with a button to the download page.
+- Every build gets a higher version number automatically (`1.1.<build number>`), which is what lets an installed copy recognise a build as newer.
+- A real Windows test runs on every build before it is published: it installs the previous build silently, lets it find the new one on a local feed, downloads it, restarts into it and checks the version, the settings and the "up to date" message.
+
+### Where updates come from
+
+Installed copies read an update feed (`latest.yml` plus the installer) over the internet. **This repository is private, so installed copies can't read from it.** Pick one:
+
+1. **A public, releases-only repository (recommended; the code stays private).**
+   1. Create a new public repository, for example `screen-snap-updates`, and add a README so it isn't empty.
+   2. Create a fine-grained access token (GitHub → Settings → Developer settings → Fine-grained tokens) for *only that repository* with **Contents: Read and write**.
+   3. In this repository → Settings → Secrets and variables → Actions: add the secret `UPDATE_FEED_TOKEN` (the token) and the variable `UPDATE_FEED_REPO` (`YourName/screen-snap-updates`).
+   4. Push. From the next build, new versions are published there and installed copies find them.
+2. **Make this repository public.** Then the default feed (this repository's `updates` release) works with nothing else to set up.
+3. **Your own web server.** Set the variable `UPDATE_FEED_URL` to the folder that holds `latest.yml`, and upload the files from each build there.
+
 ## Removing the security warning
 
 Windows SmartScreen ("Windows protected your PC") and macOS Gatekeeper warn about any app that isn't **code-signed** by a verified publisher. Only a signing certificate removes the warning. The build is already set up for it: add the secrets below under **GitHub → Settings → Secrets and variables → Actions**, push, and the next build is signed automatically.

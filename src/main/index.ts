@@ -13,6 +13,7 @@ import { availableFormats } from './ffmpeg-codecs.ts'
 import { migrateFromOldName } from './migrate.ts'
 import { ShotReview } from './shots.ts'
 import { clearShotTmp, Snapper } from './snap.ts'
+import { Updater } from './updater.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
@@ -122,6 +123,16 @@ const snapper = new Snapper({
     showMainWindow()
   }
 })
+
+const updater = new Updater({
+  auto: () => getSettings().autoUpdate,
+  busy: () => {
+    if (recorder.getStatus().state !== 'idle') return 'Finish your recording (or screenshot) first, then restart to update.'
+    if (shots.isOpen()) return 'Save or discard the screenshot you are editing first — unsaved screenshots are not kept across a restart.'
+    return null
+  }
+})
+updater.on('status', (status) => mainWindow?.webContents.send('update:status', status))
 
 function newestPending(): string | null {
   const [first] = listPending()
@@ -818,6 +829,7 @@ function registerIpc(): void {
       if (await systemPreferences.askForMediaAccess('microphone')) mainWindow?.webContents.send('caps:changed')
     }
     const updated = updateSettings(patch)
+    if (patch.autoUpdate === true) void updater.check()
     if ('hotkeyRecord' in patch || 'hotkeyShot' in patch) {
       applyHotkeys()
       mainWindow?.webContents.send('caps:changed')
@@ -840,6 +852,10 @@ function registerIpc(): void {
     mkdirSync(dir, { recursive: true })
     await shell.openPath(dir)
   })
+  ipcMain.handle('update:status', () => updater.getStatus())
+  ipcMain.handle('update:check', () => updater.check())
+  ipcMain.handle('update:download', () => updater.download())
+  ipcMain.handle('update:install', () => updater.install())
   ipcMain.handle('rec:toggle', () => toggleRecording())
   ipcMain.handle('shot:take', () => toggleScreenshot())
   ipcMain.handle('rec:status', () => recorder.getStatus())
@@ -942,6 +958,7 @@ void app.whenReady().then(async () => {
   recorder.update({ pending: newestPending() })
   createMainWindow()
   createTray()
+  updater.start()
   void detectFeatures()
   void dxgiOutputs()
 })

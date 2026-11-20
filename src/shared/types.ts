@@ -40,6 +40,8 @@ export interface Settings {
   /** Global shortcuts (Electron accelerators); '' turns one off. */
   hotkeyRecord: string
   hotkeyShot: string
+  /** Download and install new versions in the background (the app still asks before restarting). */
+  autoUpdate: boolean
 }
 
 export interface DisplayInfo {

@@ -1,3 +1,4 @@
+import type { UpdateStatus } from './updates.ts'
 import type {
   AudioLevels, Capabilities, EditorSource, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
   ShotSaveRequest, ShotSource
@@ -24,6 +25,13 @@ export interface Api {
   openReview(): Promise<void>
   testAudio(on: boolean): Promise<string[]>
   fitHeight(height: number): Promise<void>
+  getUpdateStatus(): Promise<UpdateStatus>
+  checkForUpdates(): Promise<UpdateStatus>
+  /** Downloads a found update (when automatic downloading is off) or, on a build that can't self-update, opens the download page. */
+  downloadUpdate(): Promise<void>
+  /** Restarts to finish an update that has been downloaded. ok=false with a reason when it isn't a good moment (recording, screenshot being edited). */
+  installUpdate(): Promise<{ ok: boolean; reason?: string }>
+  onUpdate(cb: (status: UpdateStatus) => void): () => void
   onStatus(cb: (status: RecordingStatus) => void): () => void
   onLevels(cb: (levels: AudioLevels) => void): () => void
   onCapsChanged(cb: () => void): () => void

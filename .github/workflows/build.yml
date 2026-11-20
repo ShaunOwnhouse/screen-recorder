@@ -9,6 +9,15 @@ on:
 permissions:
   contents: read
 
+env:
+  # Every build gets a higher version than the one before, which is what lets an installed copy see it as an update.
+  APP_VERSION: 1.1.${{ github.run_number }}
+  RELEASE_PAGE: https://github.com/${{ github.repository }}/releases/tag/latest-build
+  # Where installed copies look for updates (see README → Updates). By default this repository's "updates" release; because it
+  # is private, installed copies can't read it, so point UPDATE_FEED_REPO at a public repo (and add the UPDATE_FEED_TOKEN secret).
+  FEED_REPO: ${{ vars.UPDATE_FEED_REPO || github.repository }}
+  UPDATE_FEED_URL: ${{ vars.UPDATE_FEED_URL || format('https://github.com/{0}/releases/download/updates', vars.UPDATE_FEED_REPO || github.repository) }}
+
 jobs:
   # GitHub only gives a repository a fixed amount of artifact storage, and every build is ~450 MB. Without this the quota fills
   # up ("Artifact storage quota has been hit") and new builds can no longer be uploaded. Only the newest build is kept.
@@ -29,6 +38,11 @@ jobs:
           gh release view latest-build --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create latest-build --repo "$GITHUB_REPOSITORY" --target "${{ github.sha }}" --prerelease \
               --title "Latest build" --notes "Newest build of Screen Snap from the main branch."
+          # The update feed: installed copies read latest.yml from here and download the new installer.
+          export GH_TOKEN="${{ secrets.UPDATE_FEED_TOKEN || github.token }}"
+          gh release view updates --repo "$FEED_REPO" >/dev/null 2>&1 || \
+            gh release create updates --repo "$FEED_REPO" --prerelease \
+              --title "Update feed (used by the app, not for downloading)" --notes "Files the installed app reads to update itself."
 
       - name: Delete artifacts from earlier runs
         continue-on-error: true
@@ -74,7 +88,7 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
-          args=(--win --publish never)
+          args=(--win --publish never "-c.extraMetadata.version=$APP_VERSION" "-c.extraMetadata.releasePage=$RELEASE_PAGE" -c.publish.provider=generic "-c.publish.url=$UPDATE_FEED_URL")
           if [ -n "$AZURE_CLIENT_SECRET" ]; then
             echo "Signing with Azure Trusted Signing"
             args+=(
@@ -108,6 +122,12 @@ jobs:
         shell: bash
         run: node test/e2e/run.cjs "dist/win-unpacked/Screen Snap.exe"
 
+      # Proves the update path on a real Windows machine: install the build silently, let it find a newer build on a local
+      # feed, download it, restart into it, and check that the new version runs with the old settings.
+      - name: Update test (install, update, relaunch)
+        shell: bash
+        run: node test/e2e/update.cjs "dist/Screen-Snap-Setup-$APP_VERSION.exe"
+
       # Only reached when the end-to-end test above passed. Publishes the installers the test just ran.
       - name: Publish the Windows build to the Latest build release
         if: github.event_name != 'pull_request'
@@ -116,10 +136,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload latest-build dist/*.exe --clobber --repo "$GITHUB_REPOSITORY"
+          # The update feed: the installer + its block map first, then latest.yml (which points at them). Older installers are removed.
+          ls -la dist
+          feed() { GH_TOKEN="${{ secrets.UPDATE_FEED_TOKEN || github.token }}" gh "$@" --repo "$FEED_REPO"; }
+          feed release upload updates "dist/Screen-Snap-Setup-$APP_VERSION.exe" "dist/Screen-Snap-Setup-$APP_VERSION.exe.blockmap" --clobber
+          feed release upload updates dist/latest.yml --clobber
+          for old in $(feed release view updates --json assets --jq '.assets[].name' | grep -E '^Screen-Snap-Setup-' | grep -v "$APP_VERSION"); do
+            feed release delete-asset updates "$old" --yes || true
+          done
           CHECKS=$(node -e "const r=require('./test-results/e2e/results.json');console.log(r.filter(x=>x.ok).length+'/'+r.length)")
           gh release edit latest-build --repo "$GITHUB_REPOSITORY" --notes "Newest build of Screen Snap (commit ${GITHUB_SHA:0:7}).
 
-          **Windows:** the exact installers attached here were run through an end-to-end test on a real Windows machine (record, review, edit, save in every format, screenshots, shortcuts): $CHECKS checks passed.
+          **Windows:** the exact installers attached here were run through an end-to-end test on a real Windows machine (record, review, edit, save in every format, screenshots, shortcuts): $CHECKS checks passed. The same run also proved the self-update: it installed an older build, found this newer one, downloaded it, restarted into it and kept its settings.
           **macOS:** the \`.dmg\` files are built but not yet tested on a Mac."
 
       - name: Upload end-to-end results
@@ -128,7 +156,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: e2e-windows
-          path: test-results/e2e
+          path: |
+            test-results/e2e
+            test-results/update
           if-no-files-found: ignore
           retention-days: 2
 
@@ -160,7 +190,7 @@ jobs:
             STORE_PUBLISHER_DISPLAY_NAME=Placeholder
             STORE_DISPLAY_NAME="Screen Snap"
           fi
-          npx electron-builder --win appx --publish never \
+          npx electron-builder --win appx --publish never "-c.extraMetadata.version=$APP_VERSION" \
             "-c.appx.identityName=$STORE_IDENTITY_NAME" \
             "-c.appx.publisher=$STORE_PUBLISHER" \
             "-c.appx.publisherDisplayName=$STORE_PUBLISHER_DISPLAY_NAME" \
@@ -247,19 +277,27 @@ jobs:
           fi
           if [ -z "$APPLE_ID" ] || [ -z "$CSC_LINK" ]; then unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; fi
 
-          npx electron-builder --mac --arm64 --publish never
+          mac_args=(--publish never "-c.extraMetadata.version=$APP_VERSION" "-c.extraMetadata.releasePage=$RELEASE_PAGE" -c.publish.provider=generic "-c.publish.url=$UPDATE_FEED_URL")
+          if [ -n "$CSC_LINK" ]; then mac_args+=("-c.extraMetadata.signedBuild=true"); fi
+          npx electron-builder --mac --arm64 "${mac_args[@]}"
 
           # The installer skips if a binary exists, so remove the Apple Silicon one first.
           rm -f node_modules/ffmpeg-static/ffmpeg
           npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
           file node_modules/ffmpeg-static/ffmpeg | tee /dev/stderr | grep -q x86_64
-          npx electron-builder --mac --x64 --publish never
+          npx electron-builder --mac --x64 "${mac_args[@]}"
 
       - name: Publish the macOS build to the Latest build release
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload latest-build dist/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          gh release upload latest-build dist/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
+          ls -la dist
+          # The Mac side of the update feed (until the app is code-signed, Macs are only told that a new version exists).
+          if [ -f dist/latest-mac.yml ]; then
+            GH_TOKEN="${{ secrets.UPDATE_FEED_TOKEN || github.token }}" gh release upload updates dist/latest-mac.yml --clobber --repo "$FEED_REPO"
+          fi
 
       - uses: actions/upload-artifact@v7
         continue-on-error: true

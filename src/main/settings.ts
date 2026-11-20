@@ -33,7 +33,8 @@ function defaults(): Settings {
     shotClipboard: false,
     shotCursor: false,
     hotkeyRecord: process.platform === 'darwin' ? DEFAULT_RECORD_HOTKEY.mac : DEFAULT_RECORD_HOTKEY.win,
-    hotkeyShot: process.platform === 'darwin' ? DEFAULT_SHOT_HOTKEY.mac : DEFAULT_SHOT_HOTKEY.win
+    hotkeyShot: process.platform === 'darwin' ? DEFAULT_SHOT_HOTKEY.mac : DEFAULT_SHOT_HOTKEY.win,
+    autoUpdate: true
   }
 }
 
@@ -47,7 +48,8 @@ function sanitize(s: Settings): Settings {
     shotMode: s.shotMode === 'fullscreen' || s.shotMode === 'region' ? s.shotMode : d.shotMode,
     shotDelay: [0, 3, 5].includes(s.shotDelay) ? s.shotDelay : d.shotDelay,
     hotkeyRecord: typeof s.hotkeyRecord === 'string' ? s.hotkeyRecord : d.hotkeyRecord,
-    hotkeyShot: typeof s.hotkeyShot === 'string' ? s.hotkeyShot : d.hotkeyShot
+    hotkeyShot: typeof s.hotkeyShot === 'string' ? s.hotkeyShot : d.hotkeyShot,
+    autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate
   }
 }
 

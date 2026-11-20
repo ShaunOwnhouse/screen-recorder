@@ -1,5 +1,6 @@
 import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
 import { acceleratorFromKey, acceleratorLabel } from '../shared/hotkeys.ts'
+import { updateBanner, updateLine, type UpdateStatus } from '../shared/updates.ts'
 import type { AudioLevels, Capabilities, RecordingStatus, Settings } from '../shared/types.ts'
 
 const api = window.api
@@ -76,7 +77,15 @@ const el = {
   shotCursor: $<HTMLInputElement>('shot-cursor'),
   keyRecord: $<HTMLButtonElement>('key-record'),
   keyShot: $<HTMLButtonElement>('key-shot'),
-  keyHint: $('key-hint')
+  keyHint: $('key-hint'),
+  updateBanner: $('update-banner'),
+  updateText: $('update-text'),
+  updateAction: $<HTMLButtonElement>('update-action'),
+  updateLine: $('update-line'),
+  updateCheck: $<HTMLButtonElement>('update-check'),
+  updateHint: $('update-hint'),
+  updateAuto: $<HTMLInputElement>('update-auto'),
+  appVersion: $('app-version')
 }
 
 const IS_MAC = /Mac/i.test(navigator.platform)
@@ -93,6 +102,7 @@ let settings: Settings
 let caps: Capabilities | null = null
 let status: RecordingStatus | null = null
 let testing = false
+let update: UpdateStatus | null = null
 let tab: 'record' | 'shot' = 'record'
 
 function prefGet(key: string): string | null {
@@ -235,6 +245,39 @@ function onShortcutKey(e: KeyboardEvent): void {
   void save(which === 'record' ? { hotkeyRecord: accelerator } : { hotkeyShot: accelerator })
 }
 
+function renderUpdate(s: UpdateStatus): void {
+  update = s
+  el.appVersion.textContent = `${s.current}`
+  el.updateLine.textContent = updateLine(s)
+  el.updateLine.title = updateLine(s)
+  el.updateCheck.disabled = s.state === 'unsupported' || s.state === 'checking' || s.state === 'downloading'
+  el.updateHint.textContent =
+    s.state === 'unsupported'
+      ? ''
+      : s.notifyOnly
+        ? 'This Mac build is not code-signed yet, so updates are announced here and installed by hand.'
+        : 'Updates download in the background. Your settings and recordings are kept.'
+  const banner = updateBanner(s)
+  el.updateBanner.hidden = !banner
+  if (banner) {
+    el.updateText.textContent = banner.text
+    el.updateAction.hidden = !banner.action
+    el.updateAction.textContent = banner.label ?? ''
+    el.updateAction.dataset.action = banner.action ?? ''
+  }
+}
+
+async function runUpdateAction(): Promise<void> {
+  const action = el.updateAction.dataset.action
+  if (action === 'restart') {
+    const res = await api.installUpdate()
+    if (!res.ok) {
+      el.warning.hidden = false
+      el.warning.textContent = res.reason ?? 'Can’t restart right now.'
+    }
+  } else if (action === 'download' || action === 'open') await api.downloadUpdate()
+}
+
 function renderHotkeys(): void {
   const describe = (accelerator: string, registered: string | null | undefined): { button: string; hint: string } => {
     if (!accelerator) return { button: 'Off', hint: 'Shortcut is off — turn it on in Settings › Shortcuts.' }
@@ -293,6 +336,7 @@ function renderSettings(): void {
   el.micVolume.value = String(Math.round(settings.micVolume * 100))
   el.micVolumeLabel.textContent = `${Math.round(settings.micVolume * 100)}%`
   el.noise.checked = settings.noiseSuppression
+  el.updateAuto.checked = settings.autoUpdate
 
   if (caps) {
     el.encoder.replaceChildren(
@@ -513,6 +557,9 @@ function bind(): void {
     void save({ micDevice: id, micLabel: label, micEnabled: true })
   })
   el.testAudio.addEventListener('click', () => void runAudioTest(!testing))
+  el.updateCheck.addEventListener('click', async () => renderUpdate(await api.checkForUpdates()))
+  el.updateAction.addEventListener('click', () => void runUpdateAction())
+  el.updateAuto.addEventListener('change', () => void save({ autoUpdate: el.updateAuto.checked }))
   el.videoFormat.addEventListener('change', () => void save({ videoFormat: el.videoFormat.value as Settings['videoFormat'] }))
   el.shotFormat.addEventListener('change', () => void save({ shotFormat: el.shotFormat.value as Settings['shotFormat'] }))
   el.shotClipboard.addEventListener('change', () => void save({ shotClipboard: el.shotClipboard.checked }))
@@ -562,6 +609,8 @@ async function init(): Promise<void> {
   settings = await api.getSettings()
   renderSettings()
   api.onStatus(renderStatus)
+  api.onUpdate(renderUpdate)
+  renderUpdate(await api.getUpdateStatus())
   api.onLevels(renderLevels)
   api.onCapsChanged(() => void loadCapabilities(false))
   renderStatus(await api.getStatus())

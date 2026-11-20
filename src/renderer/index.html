@@ -38,6 +38,11 @@
         <button id="review" type="button" class="primary">Review &amp; save</button>
       </section>
 
+      <div id="update-banner" class="banner update" role="status" hidden>
+        <span id="update-text"></span>
+        <button id="update-action" type="button" class="update-btn" hidden></button>
+      </div>
+
       <div id="tabs" class="tabs" role="tablist" aria-label="What do you want to do?">
         <button id="tab-record" type="button" role="tab" class="rec" aria-selected="true">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" /></svg>Record
@@ -169,6 +174,7 @@
             <button type="button" data-target="g-saving">Saving</button>
             <button type="button" data-target="g-shots">Screenshots</button>
             <button type="button" data-target="g-keys">Shortcuts</button>
+            <button type="button" data-target="g-updates">Updates</button>
           </div>
           <h2 class="group-title" id="g-rec">Recording</h2>
 
@@ -310,6 +316,20 @@
             </div>
           </div>
           <span id="key-hint" class="hint"></span>
+
+          <h2 class="group-title" id="g-updates">Updates</h2>
+          <div class="field">
+            <span class="label">Screen Snap <span id="app-version"></span></span>
+            <div class="path-row">
+              <span id="update-line" class="status-line"></span>
+              <button id="update-check" type="button" class="ghost">Check now</button>
+            </div>
+            <span id="update-hint" class="hint"></span>
+          </div>
+          <label class="field row">
+            <span class="label">Download and install updates automatically</span>
+            <input id="update-auto" type="checkbox" class="toggle" />
+          </label>
         </div>
         <div id="fade" class="fade" aria-hidden="true">⌄ scroll for more</div>
         </div>
