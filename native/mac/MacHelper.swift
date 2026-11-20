@@ -1,4 +1,4 @@
-// macOS helper for Screen Recorder.
+// macOS helper for Screen Snap.
 //   mac-helper displays  -> JSON array of display IDs in the order FFmpeg's avfoundation numbers screens
 //   mac-helper audio     -> streams computer sound (ScreenCaptureKit) to stdout as 48 kHz stereo float32 PCM
 // Exits when stdin is closed by the parent process.

@@ -1,5 +1,6 @@
 import type {
-  AudioLevels, Capabilities, EditorSource, MicInfo, RecordingStatus, Rect, SaveRequest, Settings
+  AudioLevels, Capabilities, EditorSource, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
+  ShotSaveRequest, ShotSource
 } from './types.ts'
 
 export interface Api {
@@ -7,12 +8,19 @@ export interface Api {
   getSettings(): Promise<Settings>
   setSettings(patch: Partial<Settings>): Promise<Settings>
   chooseOutputDir(): Promise<Settings>
+  /** Opens the folder picker for screenshots; resolves with the chosen folder, or null if cancelled. */
+  chooseShotDir(): Promise<string | null>
+  openShotDir(): Promise<void>
   toggleRecording(): Promise<void>
+  /** Starts a screenshot (or cancels one that is waiting for you to pick an area). */
+  takeScreenshot(): Promise<void>
   getStatus(): Promise<RecordingStatus>
   openOutputDir(): Promise<void>
   openLogs(): Promise<void>
   showLastRecording(): Promise<void>
   playLastRecording(): Promise<void>
+  showLastShot(): Promise<void>
+  openLastShot(): Promise<void>
   openReview(): Promise<void>
   testAudio(on: boolean): Promise<string[]>
   fitHeight(height: number): Promise<void>
@@ -31,6 +39,18 @@ export interface EditorApi {
   cancelExport(): Promise<void>
   discard(): Promise<boolean>
   onProgress(cb: (fraction: number) => void): () => void
+}
+
+export type ShotLoad = { source: ShotSource } | { error: string }
+
+export interface ShotApi {
+  load(): Promise<ShotLoad>
+  /** The captured picture as PNG bytes. */
+  bytes(): Promise<Uint8Array>
+  save(req: ShotSaveRequest): Promise<{ ok: boolean; path?: string; error?: string }>
+  copy(req: ShotCopyRequest): Promise<boolean>
+  discard(edited: boolean): Promise<boolean>
+  setDirty(dirty: boolean): void
 }
 
 /** What the user picked on one screen's overlay: an area (region mode), the whole screen, or nothing. */

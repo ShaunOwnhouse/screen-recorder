@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { buildExportArgs, buildProxyArgs, cropToPixels } from './args.ts'
+import { buildConvertArgs, buildCopyArgs, buildExportArgs, buildProxyArgs, cropToPixels } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl } from './media-protocol.ts'
 import { ProgressParser } from './parse.ts'
@@ -10,7 +10,8 @@ import { moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } f
 import { probeMedia } from './verify.ts'
 import { isFullRange, totalDuration } from '../shared/segments.ts'
 import type { EditorLoad } from '../shared/api.ts'
-import type { EncoderInfo, Rect, RecordingMeta, SaveRequest, Settings } from '../shared/types.ts'
+import { videoFormat } from '../shared/formats.ts'
+import type { EncoderInfo, Rect, RecordingMeta, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
 
 interface Deps {
   preload: string
@@ -18,6 +19,7 @@ interface Deps {
   load: (win: BrowserWindow) => void
   settings: () => Settings
   encoders: () => Promise<EncoderInfo[]>
+  formats: () => Promise<VideoFormat[]>
   onSaved: (path: string) => void
   onDiscarded: () => void
   onClosed: () => void
@@ -104,14 +106,18 @@ export class EditorController {
       return { error: 'This recording can’t be opened — it has no video in it (the recording probably failed). You can discard it.' }
     }
     const name = basename(file)
+    const formats = await this.deps.formats()
+    const wanted = this.deps.settings().videoFormat
     return {
       source: {
-      name,
-      url: mediaUrl(name),
-      meta,
-      sizeBytes: statSync(file).size,
-      defaultName: name.replace(/\.mp4$/i, ''),
-      outputDir: this.deps.settings().outputDir
+        name,
+        url: mediaUrl(name),
+        meta,
+        sizeBytes: statSync(file).size,
+        defaultName: name.replace(/\.mp4$/i, ''),
+        outputDir: this.deps.settings().outputDir,
+        formats,
+        format: formats.includes(wanted) ? wanted : 'mp4'
       }
     }
   }
@@ -137,17 +143,19 @@ export class EditorController {
     const meta = await probeMedia(file)
     if (!meta) return { ok: false, error: 'Could not read the recording.' }
 
+    const format: VideoFormat = (await this.deps.formats()).includes(req.format) ? req.format : 'mp4'
+    const info = videoFormat(format)
     const outputDir = this.deps.settings().outputDir
-    const fileName = sanitizeFileName(req.fileName, basename(file, '.mp4'))
+    const fileName = sanitizeFileName(req.fileName, basename(file, '.mp4'), info.ext)
     let target: string
     if (req.saveAs) {
       const res = await dialog.showSaveDialog(win, {
         title: 'Save recording',
         defaultPath: join(outputDir, fileName),
-        filters: [{ name: 'MP4 video', extensions: ['mp4'] }]
+        filters: [{ name: `${info.ext.toUpperCase()} video`, extensions: [info.ext] }]
       })
       if (res.canceled || !res.filePath) return { ok: false }
-      target = /\.mp4$/i.test(res.filePath) ? res.filePath : `${res.filePath}.mp4`
+      target = new RegExp(`\\.${info.ext}$`, 'i').test(res.filePath) ? res.filePath : `${res.filePath}.${info.ext}`
       mkdirSync(dirname(target), { recursive: true })
     } else {
       mkdirSync(outputDir, { recursive: true })
@@ -157,12 +165,22 @@ export class EditorController {
     const segments = req.segments.length ? req.segments : [[0, meta.duration] as [number, number]]
     const crop = cropToPixels(req.crop, meta.width, meta.height)
     const convert = meta.yuv444 && req.compatible
+    const untouched = !crop && isFullRange(segments, meta.duration)
+    const container = format === 'mkv' ? 'mkv' : format === 'mov' ? 'mov' : 'mp4'
     try {
-      if (!crop && !convert && isFullRange(segments, meta.duration)) {
-        // Untouched recording: move it as-is — no re-encode, zero quality loss.
-        moveFile(file, target)
+      if (format === 'mp4' || format === 'mkv' || format === 'mov') {
+        if (untouched && !convert) {
+          // Untouched recording: no re-encode, zero quality loss — moved as-is (MP4) or re-wrapped (MKV/MOV).
+          if (format === 'mp4') moveFile(file, target)
+          else await this.run(buildCopyArgs(file, target, container), meta.duration)
+        } else {
+          await this.export(file, target, meta, segments, crop, convert, container)
+        }
       } else {
-        await this.export(file, target, meta, segments, crop, convert)
+        await this.run(
+          buildConvertArgs({ input: file, output: target, segments, crop, hasAudio: meta.hasAudio, fps: meta.fps, format }),
+          totalDuration(segments)
+        )
       }
     } catch (err) {
       rmSync(target, { force: true })
@@ -176,7 +194,8 @@ export class EditorController {
   }
 
   private async export(
-    file: string, target: string, meta: RecordingMeta, segments: [number, number][], crop: Rect | null, compatible: boolean
+    file: string, target: string, meta: RecordingMeta, segments: [number, number][], crop: Rect | null, compatible: boolean,
+    container: 'mp4' | 'mov' | 'mkv'
   ): Promise<void> {
     // Re-encode at the top tier so edits don't visibly lose quality.
     const quality = meta.yuv444 && !compatible ? 'studio' : 'maximum'
@@ -187,9 +206,14 @@ export class EditorController {
     const h = crop?.height ?? meta.height
     const args = buildExportArgs({
       input: file, output: target, segments, crop, hasAudio: meta.hasAudio, fps: meta.fps, quality, encoder, pixelRate: w * h * meta.fps,
-      basicTuning: needsBasicTuning(encoders, encoder)
+      basicTuning: needsBasicTuning(encoders, encoder), container
     })
-    const total = Math.max(0.1, totalDuration(segments))
+    await this.run(args, totalDuration(segments))
+  }
+
+  /** Runs FFmpeg with progress reporting to the review window; rejects on failure or cancel. */
+  private async run(args: string[], seconds: number): Promise<void> {
+    const total = Math.max(0.1, seconds)
     this.cancelled = false
 
     await new Promise<void>((resolve, reject) => {

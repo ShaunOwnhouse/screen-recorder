@@ -1,6 +1,10 @@
 export type Quality = 'high' | 'veryhigh' | 'maximum' | 'studio' | 'lossless'
 export type CaptureMode = 'fullscreen' | 'region'
 export type Backend = 'auto' | 'ddagrab' | 'gdigrab'
+/** What a recording can be saved as. 'mp4' (H.264) is the default and the format that plays everywhere. */
+export type VideoFormat = 'mp4' | 'hevc' | 'mkv' | 'mov' | 'webm' | 'gif'
+/** What a screenshot can be saved as. 'png' is lossless and the default. */
+export type ImageFormat = 'png' | 'webp' | 'jpeg'
 
 export interface Settings {
   mode: CaptureMode
@@ -22,6 +26,20 @@ export interface Settings {
   micLabel: string | null
   micVolume: number
   noiseSuppression: boolean
+  /** Default format offered when saving a recording. */
+  videoFormat: VideoFormat
+  /** Screenshots: whole screen or a dragged area. */
+  shotMode: CaptureMode
+  /** Seconds to wait before a screenshot is taken (0 = none). */
+  shotDelay: number
+  shotFormat: ImageFormat
+  shotDir: string
+  /** Also copy the image to the clipboard as soon as it's captured. */
+  shotClipboard: boolean
+  shotCursor: boolean
+  /** Global shortcuts (Electron accelerators); '' turns one off. */
+  hotkeyRecord: string
+  hotkeyShot: string
 }
 
 export interface DisplayInfo {
@@ -55,9 +73,14 @@ export interface Capabilities {
   encoders: EncoderInfo[]
   microphones: MicInfo[]
   hotkey: string | null
+  shotHotkey: string | null
+  /** Formats this computer's FFmpeg can actually write. */
+  videoFormats: VideoFormat[]
+  imageFormats: ImageFormat[]
 }
 
-export type RecordingState = 'idle' | 'selecting' | 'countdown' | 'recording' | 'saving'
+/** 'snapping' = a screenshot is being taken (waiting, choosing the area, or capturing). */
+export type RecordingState = 'idle' | 'selecting' | 'countdown' | 'recording' | 'saving' | 'snapping'
 
 export interface RecordingStatus {
   state: RecordingState
@@ -74,6 +97,7 @@ export interface RecordingStatus {
   /** Basename of a finished recording waiting for the user to save or discard it. */
   pending: string | null
   lastFile?: string
+  lastShot?: string
   error?: string
   warning?: string
 }
@@ -108,6 +132,9 @@ export interface EditorSource {
   sizeBytes: number
   defaultName: string
   outputDir: string
+  /** Formats this computer can write, and the one chosen as default in Settings. */
+  formats: VideoFormat[]
+  format: VideoFormat
 }
 
 export interface SaveRequest {
@@ -118,4 +145,26 @@ export interface SaveRequest {
   saveAs: boolean
   /** For 4:4:4 recordings: convert to 4:2:0 so Windows' player, phones and the web can play it. */
   compatible: boolean
+  format: VideoFormat
+}
+
+export interface ShotSource {
+  width: number
+  height: number
+  defaultName: string
+  outputDir: string
+  format: ImageFormat
+  formats: ImageFormat[]
+}
+
+export interface ShotSaveRequest {
+  /** The edited (cropped / annotated) image as PNG bytes, or null to use the capture untouched. */
+  png: Uint8Array | null
+  fileName: string
+  saveAs: boolean
+  format: ImageFormat
+}
+
+export interface ShotCopyRequest {
+  png: Uint8Array | null
 }

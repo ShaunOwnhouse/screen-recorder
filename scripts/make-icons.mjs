@@ -68,22 +68,33 @@ function roundedSquare(u, v, r) {
   return Math.hypot(dx, dy) <= r
 }
 
+// The Screen Snap mark: four snip-frame corners around a record dot.
+function segDist(u, v, [ax, ay], [bx, by]) {
+  const dx = bx - ax
+  const dy = by - ay
+  const t = Math.max(0, Math.min(1, ((u - ax) * dx + (v - ay) * dy) / (dx * dx + dy * dy)))
+  return Math.hypot(u - (ax + t * dx), v - (ay + t * dy))
+}
+const cornerSegments = (m, l) => [
+  [[m, m + l], [m, m]], [[m, m], [m + l, m]],
+  [[1 - m - l, m], [1 - m, m]], [[1 - m, m], [1 - m, m + l]],
+  [[m, 1 - m - l], [m, 1 - m]], [[m, 1 - m], [m + l, 1 - m]],
+  [[1 - m - l, 1 - m], [1 - m, 1 - m]], [[1 - m, 1 - m], [1 - m, 1 - m - l]]
+]
+/** True where the mark is drawn: the record dot, or a snip-frame corner. */
+function snip(u, v, { m = 0.2, l = 0.2, t = 0.075, dot = 0.13 } = {}) {
+  if (dist(u, v) < dot) return true
+  return cornerSegments(m, l).some(([a, b]) => segDist(u, v, a, b) <= t / 2)
+}
+
 // macOS-style margin: the rounded square fills ~80% of the canvas.
 const app = (u0, v0) => {
   const u = (u0 - 0.1) / 0.8
   const v = (v0 - 0.1) / 0.8
   if (u < 0 || u > 1 || v < 0 || v > 1 || !roundedSquare(u, v, 0.22)) return NONE
-  const d = dist(u, v)
-  if (d < 0.17) return RED
-  if (d > 0.27 && d < 0.33) return RED
-  return DARK
+  return snip(u, v, { m: 0.22, l: 0.21, t: 0.08, dot: 0.14 }) ? RED : DARK
 }
-const trayIdle = (u, v) => {
-  const d = dist(u, v)
-  if (d < 0.2) return LIGHT
-  if (d > 0.32 && d < 0.46) return LIGHT
-  return NONE
-}
+const trayIdle = (u, v) => (snip(u, v, { m: 0.1, l: 0.3, t: 0.12, dot: 0.17 }) ? LIGHT : NONE)
 const trayRec = (u, v) => {
   const d = dist(u, v)
   if (d < 0.46) return RED
@@ -104,12 +115,7 @@ writeFileSync(`${out}/mac/trayTemplate@2x.png`, png(32, recolor(trayIdle, BLACK)
 writeFileSync(`${out}/mac/trayRec.png`, png(16, trayRec))
 writeFileSync(`${out}/mac/trayRec@2x.png`, png(32, trayRec))
 // Microsoft Store (MSIX) tile assets; the manifest's background colour fills behind them.
-const mark = (u, v) => {
-  const d = dist(u, v)
-  if (d < 0.17) return RED
-  if (d > 0.27 && d < 0.33) return RED
-  return NONE
-}
+const mark = (u, v) => (snip(u, v, { m: 0.2, l: 0.2, t: 0.075, dot: 0.13 }) ? RED : NONE)
 const wide = (u, v) => mark(u - (310 / 150 - 1) / 2, v)
 mkdirSync(`${out}/appx`, { recursive: true })
 writeFileSync(`${out}/appx/StoreLogo.png`, png(50, app))

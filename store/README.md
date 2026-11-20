@@ -10,7 +10,7 @@ Store apps are signed by Microsoft, so users installing from the Store never see
 ## 2. Reserve the app name
 
 1. In **Partner Center → Apps and games**, choose **New product → MSIX or PWA app**.
-2. Reserve a name. It must be unique in the Store, and plain "Screen Recorder" is almost certainly taken, so pick something distinctive.
+2. Reserve a name. It must be unique in the Store, and plain "Screen Snap" is almost certainly taken, so pick something distinctive.
 
 ## 3. Give the build your app identity
 
@@ -27,7 +27,7 @@ Store apps are signed by Microsoft, so users installing from the Store never see
    | `STORE_PUBLISHER_DISPLAY_NAME` | Package/Properties/PublisherDisplayName |
    | `STORE_DISPLAY_NAME` | The name you reserved |
 
-3. Re-run the latest **Build apps** workflow (Actions → Build apps → Run workflow). It produces a **screen-recorder-microsoft-store** artifact containing the `.appx` package.
+3. Re-run the latest **Build apps** workflow (Actions → Build apps → Run workflow). It produces a **screen-snap-microsoft-store** artifact containing the `.appx` package.
 
 ## 4. Create the submission
 

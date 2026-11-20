@@ -67,3 +67,41 @@ export function buildGrabArgs(o: Pick<RecordArgsInput, 'backend' | 'dda' | 'avf'
       ]
   }
 }
+
+/**
+ * FFmpeg arguments that grab ONE frame of a screen area as a lossless PNG on stdout (screenshots). Same capture
+ * methods as recording, so a screenshot has exactly the pixels a recording would.
+ */
+export function buildShotArgs(o: Pick<RecordArgsInput, 'backend' | 'dda' | 'avf' | 'x11Display' | 'rect'>, cursor: boolean): string[] {
+  const { x, y, width: w, height: h } = o.rect
+  const mouse = cursor ? '1' : '0'
+  const head = ['-hide_banner', '-loglevel', 'error', '-nostdin']
+  const tail = ['-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', '-pix_fmt', 'rgb24', '-']
+  switch (o.backend) {
+    case 'ddagrab':
+      if (!o.dda) throw new Error('ddagrab needs an adapter/output target')
+      return [
+        ...head, '-init_hw_device', `d3d11va=dda:${o.dda.adapter}`, '-filter_hw_device', 'dda',
+        '-filter_complex', `ddagrab=output_idx=${o.dda.output}:framerate=10:draw_mouse=${mouse}:offset_x=${x}:offset_y=${y}:video_size=${w}x${h},hwdownload,format=bgra,format=rgb24[v]`,
+        '-map', '[v]', ...tail
+      ]
+    case 'avfoundation':
+      if (!o.avf) throw new Error('avfoundation needs a screen device')
+      return [
+        ...head, '-f', 'avfoundation', '-capture_cursor', mouse, '-framerate', '10',
+        ...(o.avf.pixelFormat ? ['-pixel_format', o.avf.pixelFormat] : []), '-i', `${o.avf.device}:none`,
+        // The device can hand over a blank first frame; take the second.
+        '-vf', `crop=${w}:${h}:${x}:${y},select=gte(n\\,1)`, '-fps_mode', 'vfr', ...tail
+      ]
+    case 'x11grab':
+      return [
+        ...head, '-f', 'x11grab', '-draw_mouse', mouse, '-framerate', '10', '-video_size', `${w}x${h}`,
+        '-i', `${o.x11Display ?? ':0'}+${x},${y}`, ...tail
+      ]
+    default:
+      return [
+        ...head, '-f', 'gdigrab', '-draw_mouse', mouse, '-framerate', '10', '-offset_x', String(x), '-offset_y', String(y),
+        '-video_size', `${w}x${h}`, '-i', 'desktop', ...tail
+      ]
+  }
+}

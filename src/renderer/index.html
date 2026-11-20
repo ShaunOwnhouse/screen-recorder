@@ -6,15 +6,20 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws:; img-src 'self' data:"
     />
-    <title>Screen Recorder</title>
+    <title>Screen Snap</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app" id="app">
       <header class="top">
         <div class="brand">
-          <span class="logo" aria-hidden="true"></span>
-          <h1>Screen Recorder</h1>
+          <span class="logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" />
+              <circle cx="12" cy="12" r="4.2" fill="#ef4444" />
+            </svg>
+          </span>
+          <h1>Screen Snap</h1>
         </div>
         <span id="chip" class="chip">Ready</span>
       </header>
@@ -33,7 +38,18 @@
         <button id="review" type="button" class="primary">Review &amp; save</button>
       </section>
 
-      <section class="hero">
+      <div id="tabs" class="tabs" role="tablist" aria-label="What do you want to do?">
+        <button id="tab-record" type="button" role="tab" class="rec" aria-selected="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" /></svg>Record
+        </button>
+        <button id="tab-shot" type="button" role="tab" class="snap" aria-selected="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="6" width="18" height="14" rx="3" /><path d="M8 6l1.5-2h5L16 6" /><circle cx="12" cy="13" r="3.6" />
+          </svg>Screenshot
+        </button>
+      </div>
+
+      <section id="hero-record" class="hero">
         <div id="idle-view" class="idle-view">
           <button id="record" class="record-btn" type="button" aria-label="Start recording">
             <span class="dot"></span>
@@ -81,6 +97,46 @@
         </div>
       </section>
 
+      <section id="hero-shot" class="hero" hidden>
+        <div class="idle-view">
+          <button id="shoot" class="record-btn shot" type="button" aria-label="Take a screenshot">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="6" width="18" height="14" rx="3" /><path d="M8 6l1.5-2h5L16 6" /><circle cx="12" cy="13" r="3.6" />
+            </svg>
+          </button>
+          <div class="hero-text">
+            <strong id="shot-label">Take a screenshot</strong>
+            <span id="shot-hotkey-hint" class="muted"></span>
+          </div>
+        </div>
+        <div class="quick">
+          <div class="seg" role="radiogroup" aria-label="What to capture" data-key="shotMode">
+            <button type="button" data-value="fullscreen">Whole screen</button>
+            <button type="button" data-value="region">Select region</button>
+          </div>
+          <span id="shot-mode-hint" class="hint"></span>
+          <div class="row2">
+            <span class="label">Delay</span>
+            <div class="seg" role="radiogroup" aria-label="Delay before the screenshot" data-key="shotDelay">
+              <button type="button" data-value="0">None</button>
+              <button type="button" data-value="3">3 s</button>
+              <button type="button" data-value="5">5 s</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="last-shot" class="card last" hidden>
+        <div class="last-info">
+          <span class="label">Last saved</span>
+          <span id="last-shot-name" class="ellipsis"></span>
+        </div>
+        <div class="last-actions">
+          <button id="open-shot" type="button" class="ghost">Open</button>
+          <button id="reveal-shot" type="button" class="ghost">Show</button>
+        </div>
+      </section>
+
       <section id="last" class="card last" hidden>
         <div class="last-info">
           <span class="label">Last saved</span>
@@ -104,8 +160,17 @@
           <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
         </button>
 
-        <div id="settings-body" class="drawer-body" hidden>
-          <h2 class="group-title">Recording</h2>
+        <div id="settings-wrap" class="scroll-wrap" hidden>
+        <div id="settings-body" class="drawer-body scroll">
+          <div id="jump" class="jump" role="tablist" aria-label="Jump to a settings section">
+            <button type="button" data-target="g-rec">Record</button>
+            <button type="button" data-target="g-video">Video</button>
+            <button type="button" data-target="g-audio">Audio</button>
+            <button type="button" data-target="g-saving">Saving</button>
+            <button type="button" data-target="g-shots">Screenshots</button>
+            <button type="button" data-target="g-keys">Shortcuts</button>
+          </div>
+          <h2 class="group-title" id="g-rec">Recording</h2>
 
           <label class="field">
             <span class="label">Countdown before recording</span>
@@ -117,7 +182,7 @@
             </select>
           </label>
 
-          <h2 class="group-title">Video</h2>
+          <h2 class="group-title" id="g-video">Video</h2>
 
           <label class="field">
             <span class="label">Output resolution</span>
@@ -162,7 +227,7 @@
             <input id="cursor" type="checkbox" class="toggle" />
           </label>
 
-          <div class="label-row group-head">
+          <div class="label-row group-head" id="g-audio">
             <h2 class="group-title">Audio</h2>
             <button id="test-audio" type="button" class="ghost small">Test</button>
           </div>
@@ -191,15 +256,62 @@
           </div>
           <span id="audio-hint" class="hint"></span>
 
-          <h2 class="group-title">Saving</h2>
+          <h2 class="group-title" id="g-saving">Saving</h2>
           <div class="field">
-            <span class="label">Save to</span>
+            <span class="label">Save recordings to</span>
             <div class="path-row">
               <span id="outdir" class="path" title=""></span>
               <button id="choose-dir" type="button" class="ghost">Change</button>
               <button id="open-dir" type="button" class="ghost">Open</button>
             </div>
           </div>
+          <label class="field">
+            <span class="label">Default video format</span>
+            <select id="video-format"></select>
+            <span id="video-format-hint" class="hint"></span>
+          </label>
+
+          <h2 class="group-title" id="g-shots">Screenshots</h2>
+          <div class="field">
+            <span class="label">Save screenshots to</span>
+            <div class="path-row">
+              <span id="shotdir" class="path" title=""></span>
+              <button id="choose-shot-dir" type="button" class="ghost">Change</button>
+              <button id="open-shot-dir" type="button" class="ghost">Open</button>
+            </div>
+          </div>
+          <label class="field">
+            <span class="label">Default image format</span>
+            <select id="shot-format"></select>
+            <span id="shot-format-hint" class="hint"></span>
+          </label>
+          <label class="field row">
+            <span class="label">Copy to clipboard as soon as I capture</span>
+            <input id="shot-clipboard" type="checkbox" class="toggle" />
+          </label>
+          <label class="field row">
+            <span class="label">Show mouse cursor in screenshots</span>
+            <input id="shot-cursor" type="checkbox" class="toggle" />
+          </label>
+
+          <h2 class="group-title" id="g-keys">Shortcuts</h2>
+          <div class="field">
+            <span class="label">Start / stop recording</span>
+            <div class="path-row">
+              <button id="key-record" type="button" class="keybtn" aria-label="Change the recording shortcut"></button>
+              <button id="key-record-off" type="button" class="ghost">Off</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Take a screenshot</span>
+            <div class="path-row">
+              <button id="key-shot" type="button" class="keybtn" aria-label="Change the screenshot shortcut"></button>
+              <button id="key-shot-off" type="button" class="ghost">Off</button>
+            </div>
+          </div>
+          <span id="key-hint" class="hint"></span>
+        </div>
+        <div id="fade" class="fade" aria-hidden="true">⌄ scroll for more</div>
         </div>
       </section>
 

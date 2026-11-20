@@ -1,8 +1,8 @@
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 
-const pages = ['index', 'overlay', 'editor', 'audio', 'countdown', 'bar'] as const
-const preloads = ['index', 'overlay', 'editor', 'audio'] as const
+const pages = ['index', 'overlay', 'editor', 'shot', 'audio', 'countdown', 'bar'] as const
+const preloads = ['index', 'overlay', 'editor', 'shot', 'audio'] as const
 
 export default defineConfig({
   main: {

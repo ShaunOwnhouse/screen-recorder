@@ -67,7 +67,7 @@ jobs:
       # checks every saved file — decodes it fully and opens it with Windows' own media stack.
       - name: End-to-end test of the packaged app
         shell: bash
-        run: node test/e2e/run.cjs "dist/win-unpacked/Screen Recorder.exe"
+        run: node test/e2e/run.cjs "dist/win-unpacked/Screen Snap.exe"
 
       - name: Upload end-to-end results
         if: always()
@@ -79,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: screen-recorder-windows
+          name: screen-snap-windows
           path: dist/*.exe
           if-no-files-found: error
 
@@ -101,13 +101,13 @@ jobs:
             STORE_IDENTITY_NAME=Placeholder.ScreenRecorder
             STORE_PUBLISHER="CN=00000000-0000-0000-0000-000000000000"
             STORE_PUBLISHER_DISPLAY_NAME=Placeholder
-            STORE_DISPLAY_NAME="Screen Recorder"
+            STORE_DISPLAY_NAME="Screen Snap"
           fi
           npx electron-builder --win appx --publish never \
             "-c.appx.identityName=$STORE_IDENTITY_NAME" \
             "-c.appx.publisher=$STORE_PUBLISHER" \
             "-c.appx.publisherDisplayName=$STORE_PUBLISHER_DISPLAY_NAME" \
-            "-c.appx.displayName=${STORE_DISPLAY_NAME:-Screen Recorder}"
+            "-c.appx.displayName=${STORE_DISPLAY_NAME:-Screen Snap}"
 
       - name: Declare microphone in Store package
         shell: pwsh
@@ -134,7 +134,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.STORE_READY == '1'
         with:
-          name: screen-recorder-microsoft-store
+          name: screen-snap-microsoft-store
           path: dist/*.appx
           if-no-files-found: error
 
@@ -194,6 +194,6 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: screen-recorder-mac
+          name: screen-snap-mac
           path: dist/*.dmg
           if-no-files-found: error

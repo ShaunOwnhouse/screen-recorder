@@ -1,5 +1,6 @@
-// One of these covers each connected screen while the user picks what to record.
+// One of these covers each connected screen while the user picks what to record (or to screenshot).
 const params = new URLSearchParams(location.search)
+const shot = params.get('kind') === 'shot'
 const mode = params.get('mode') === 'screen' ? 'screen' : 'region'
 const label = params.get('label') ?? 'This screen'
 const size = params.get('size') ?? ''
@@ -10,12 +11,17 @@ const sizeEl = document.getElementById('size')!
 const help = document.getElementById('help')!
 
 document.body.classList.add(mode)
+if (shot) {
+  document.body.classList.add('shot')
+  const name = params.get('shot')
+  if (name) (document.getElementById('frozen') as HTMLImageElement).src = `media://shot/${encodeURIComponent(name)}`
+}
 help.innerHTML =
   mode === 'screen'
-    ? 'Click the screen you want to record · <kbd>Esc</kbd> to cancel'
-    : 'Drag to select the area to record · <kbd>Esc</kbd> to cancel'
-document.getElementById('card-title')!.textContent = `Record ${label}`
-document.getElementById('card-detail')!.textContent = `${size} · Click to start`
+    ? `Click the screen you want to ${shot ? 'capture' : 'record'} · <kbd>Esc</kbd> to cancel`
+    : `Drag to select the area to ${shot ? 'capture' : 'record'} · <kbd>Esc</kbd> to cancel`
+document.getElementById('card-title')!.textContent = `${shot ? 'Capture' : 'Record'} ${label}`
+document.getElementById('card-detail')!.textContent = `${size} · Click to ${shot ? 'capture' : 'start'}`
 
 const cancel = (): void => window.overlay.done(null)
 window.addEventListener('keydown', (e) => e.key === 'Escape' && cancel())

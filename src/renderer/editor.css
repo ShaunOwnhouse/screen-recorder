@@ -354,17 +354,37 @@ kbd {
 
 .save {
   display: flex;
-  align-items: flex-end;
-  gap: 16px;
+  flex-direction: column;
+  gap: 10px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.save-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
 }
 
 .name-field {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  flex: 0 1 380px;
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.format-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 1 330px;
+  min-width: 0;
+}
+
+.format-field select {
+  width: 100%;
+  padding: 8px 10px;
 }
 
 .label {
@@ -398,12 +418,11 @@ kbd {
   color: var(--muted);
 }
 
-.dest-col {
-  flex: 1;
-  min-width: 0;
+.save-meta {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .compat {
@@ -424,12 +443,61 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-bottom: 9px;
 }
 
 .save-actions {
   display: flex;
   gap: 8px;
+}
+
+/* Risk notice shown when a format other than the recommended one is picked. */
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fde68a;
+}
+
+.notice.info {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #bfdbfe;
+}
+
+.notice.bad {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fecaca;
+}
+
+.notice .ic {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.notice .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-btn {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.notice-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .primary {

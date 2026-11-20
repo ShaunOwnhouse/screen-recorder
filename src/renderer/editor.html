@@ -83,23 +83,34 @@
       </section>
 
       <footer class="save">
-        <label class="name-field">
-          <span class="label">File name</span>
-          <div class="name-row">
-            <input id="name" type="text" spellcheck="false" />
-            <span class="ext">.mp4</span>
+        <div class="save-row">
+          <label class="name-field">
+            <span class="label">File name</span>
+            <div class="name-row">
+              <input id="name" type="text" spellcheck="false" />
+              <span class="ext" id="ext">.mp4</span>
+            </div>
+          </label>
+          <label class="format-field">
+            <span class="label">Format</span>
+            <select id="format" aria-label="Save as format"></select>
+          </label>
+          <div class="save-actions">
+            <button id="save-as" type="button" class="ghost">Save as…</button>
+            <button id="save" type="button" class="primary">Save</button>
           </div>
-        </label>
-        <div class="dest-col">
+        </div>
+        <div id="format-notice" class="notice" role="status" hidden>
+          <span class="ic" aria-hidden="true">⚠</span>
+          <div class="grow"><b id="notice-title"></b> <span id="notice-text"></span></div>
+          <button id="use-default" type="button" class="notice-btn">Use MP4 (recommended)</button>
+        </div>
+        <div class="save-meta">
           <label id="compat-row" class="compat" hidden>
             <input id="compat" type="checkbox" checked />
             <span>Make it play everywhere (recommended) <span class="muted">— this is a Studio 4:4:4 recording, which Windows Media Player, phones and the web can’t open. Untick to keep the 4:4:4 file for VLC or a video editor.</span></span>
           </label>
           <div class="dest muted" id="dest"></div>
-        </div>
-        <div class="save-actions">
-          <button id="save-as" type="button" class="ghost">Save as…</button>
-          <button id="save" type="button" class="primary">Save</button>
         </div>
       </footer>
 

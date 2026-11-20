@@ -9,6 +9,10 @@ import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
 import { EditorController } from './editor.ts'
 import { buildGrabArgs, compareBar } from './barprobe.ts'
+import { availableFormats } from './ffmpeg-codecs.ts'
+import { migrateFromOldName } from './migrate.ts'
+import { ShotReview } from './shots.ts'
+import { clearShotTmp, Snapper } from './snap.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
@@ -17,16 +21,16 @@ import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
 import type { OverlayResult } from '../shared/api.ts'
-import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
+import type { CaptureMode, Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
+import { acceleratorLabel } from '../shared/hotkeys.ts'
 import { awayPlacement, BAR_HEIGHT, BAR_WIDTH, barPlacement, overlaps } from './placement.ts'
 
-const HOTKEY = 'CommandOrControl+Shift+R'
 const RESOURCES = join(__dirname, '../../resources')
 const ICON = join(RESOURCES, 'icon.png')
 const PANEL_WIDTH = 460
 const IS_MAC = process.platform === 'darwin'
 type Attempt = Omit<RecordArgsInput, 'outputPath'>
-type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'audio.html' | 'countdown.html' | 'bar.html'
+type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'shot.html' | 'audio.html' | 'countdown.html' | 'bar.html'
 interface Target {
   display: Display
   /** DIP rectangle to record (the whole display, or a dragged region). */
@@ -39,6 +43,7 @@ const recorder = new Recorder()
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let hotkeyRegistered = false
+let shotHotkeyRegistered = false
 let quitting = false
 let bar: BrowserWindow | null = null
 let panelHiddenForRecording = false
@@ -64,6 +69,7 @@ const editor = new EditorController({
   load: (w) => loadPage(w, 'editor.html'),
   settings: getSettings,
   encoders: async () => (await detectFeatures()).encoders,
+  formats: async () => availableFormats((await detectFeatures()).codecs).video,
   onSaved: (path) => {
     const n = new Notification({ title: 'Recording saved', body: basename(path) })
     n.on('click', () => shell.showItemInFolder(path))
@@ -73,6 +79,48 @@ const editor = new EditorController({
   },
   onDiscarded: () => afterReview(),
   onClosed: () => maybeQuit()
+})
+
+const shots = new ShotReview({
+  preload: join(__dirname, '../preload/shot.js'),
+  icon: ICON,
+  load: (w) => loadPage(w, 'shot.html'),
+  settings: getSettings,
+  formats: async () => availableFormats((await detectFeatures()).codecs).image,
+  onSaved: (path) => {
+    const n = new Notification({ title: 'Screenshot saved', body: basename(path) })
+    n.on('click', () => shell.showItemInFolder(path))
+    n.show()
+    recorder.update({ lastShot: path })
+    maybeQuit()
+  },
+  onClosed: () => maybeQuit()
+})
+
+/** Hides this app's own windows (so they can't be in a picture of the screen); the returned function shows them again. */
+function hideAppWindows(): () => void {
+  const hidden = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible())
+  for (const w of hidden) w.hide()
+  return () => {
+    for (const w of hidden) if (!w.isDestroyed()) w.showInactive()
+  }
+}
+
+const snapper = new Snapper({
+  settings: getSettings,
+  attempts: (display) => grabAttempts(display),
+  choose: (mode, frozen) => chooseTarget(mode, frozen),
+  countdown: (display, seconds) => runCountdown({ display, rect: display.bounds }, seconds, 'Taking a screenshot…', true),
+  hideApp: hideAppWindows,
+  setBusy: (busy) => {
+    recorder.update(busy ? { state: 'snapping', error: undefined } : { state: 'idle' })
+    if (!busy) maybeQuit()
+  },
+  open: (png) => shots.open(png),
+  fail: (message) => {
+    recorder.update({ error: message })
+    showMainWindow()
+  }
 })
 
 function newestPending(): string | null {
@@ -101,7 +149,7 @@ function createMainWindow(): void {
     resizable: false,
     maximizable: false,
     show: false,
-    title: 'Screen Recorder',
+    title: 'Screen Snap',
     backgroundColor: '#101216',
     autoHideMenuBar: true,
     icon: ICON,
@@ -114,7 +162,7 @@ function createMainWindow(): void {
     if (!quitting && recorder.getStatus().state !== 'idle') {
       e.preventDefault()
       mainWindow?.hide()
-      new Notification({ title: 'Still recording', body: `Press ${hotkeyLabel()} or use the tray icon to stop.` }).show()
+      new Notification({ title: 'Still recording', body: `Stop with ${stopHint()}.` }).show()
     }
   })
   mainWindow.on('closed', () => {
@@ -134,11 +182,34 @@ function showMainWindow(): void {
 
 // The hidden audio window keeps Electron's window-all-closed from firing, so quit explicitly.
 function maybeQuit(): void {
-  if (!mainWindow && !editor.isOpen() && recorder.getStatus().state === 'idle') app.quit()
+  if (!mainWindow && !editor.isOpen() && !shots.isOpen() && recorder.getStatus().state === 'idle') app.quit()
 }
 
-function hotkeyLabel(): string {
-  return HOTKEY.replace('CommandOrControl', process.platform === 'darwin' ? 'Cmd' : 'Ctrl')
+const label = (accelerator: string): string => acceleratorLabel(accelerator, IS_MAC)
+
+/** "Stop with Alt+Shift+R or the tray icon" — only names a shortcut that is actually registered. */
+function stopHint(): string {
+  return hotkeyRegistered ? `${label(getSettings().hotkeyRecord)} or the tray icon` : 'the tray icon'
+}
+
+/**
+ * (Re)registers the global shortcuts from Settings. They work in any app, so the defaults avoid the ones other
+ * apps use (browsers: Ctrl+Shift+R hard refresh, Ctrl+Shift+I developer tools), and either can be changed or turned off.
+ */
+function applyHotkeys(): void {
+  globalShortcut.unregisterAll()
+  const s = getSettings()
+  const register = (accelerator: string, run: () => void): boolean => {
+    if (!accelerator) return false
+    try {
+      return globalShortcut.register(accelerator, run)
+    } catch {
+      return false // not a valid accelerator
+    }
+  }
+  hotkeyRegistered = register(s.hotkeyRecord, () => void toggleRecording())
+  shotHotkeyRegistered = s.hotkeyShot === s.hotkeyRecord ? false : register(s.hotkeyShot, () => void toggleScreenshot())
+  updateTray()
 }
 
 function trayImage(recording: boolean): Electron.NativeImage {
@@ -151,10 +222,11 @@ function updateTray(): void {
   if (!tray) return
   const recording = recorder.getStatus().state === 'recording'
   tray.setImage(trayImage(recording))
-  tray.setToolTip(recording ? 'Screen Recorder — recording' : 'Screen Recorder')
+  tray.setToolTip(recording ? 'Screen Snap — recording' : 'Screen Snap')
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: recording ? 'Stop recording' : 'Start recording', accelerator: HOTKEY, click: () => void toggleRecording() },
+      { label: recording ? 'Stop recording' : 'Start recording', click: () => void toggleRecording() },
+      { label: 'Take a screenshot', click: () => void toggleScreenshot() },
       { label: 'Show window', click: showMainWindow },
       { label: 'Open recordings folder', click: () => void openOutputDir() },
       { type: 'separator' },
@@ -194,6 +266,7 @@ async function getCapabilities(refresh = false): Promise<Capabilities> {
   const primeMics = !IS_MAC || systemPreferences.getMediaAccessStatus('microphone') === 'granted'
   const [features, microphones] = await Promise.all([detectFeatures(refresh), audio.listMicrophones(primeMics)])
   const displays = listDisplays()
+  const formats = availableFormats(features.codecs)
   return {
     platformSupported: process.platform === 'win32' || IS_MAC || process.platform === 'linux',
     ffmpegVersion: features.version,
@@ -201,7 +274,10 @@ async function getCapabilities(refresh = false): Promise<Capabilities> {
     displays,
     encoders: features.encoders,
     microphones,
-    hotkey: hotkeyRegistered ? hotkeyLabel() : null
+    hotkey: hotkeyRegistered ? label(getSettings().hotkeyRecord) : null,
+    shotHotkey: shotHotkeyRegistered ? label(getSettings().hotkeyShot) : null,
+    videoFormats: formats.video,
+    imageFormats: formats.image
   }
 }
 
@@ -215,7 +291,7 @@ function toPhysical(rect: Rect): Rect {
  * Like the Snipping Tool: an overlay covers every screen. In region mode the user drags an area on
  * any screen; in whole-screen mode they click the screen they want (skipped with a single screen).
  */
-function chooseTarget(mode: Settings['mode']): Promise<Target | null> {
+function chooseTarget(mode: CaptureMode, frozen?: Map<number, string>): Promise<Target | null> {
   const displays = screen.getAllDisplays()
   if (mode === 'fullscreen' && displays.length === 1) return Promise.resolve({ display: displays[0], rect: displays[0].bounds })
 
@@ -276,6 +352,7 @@ function chooseTarget(mode: Settings['mode']): Promise<Target | null> {
       })
       const size = physicalSize(d)
       loadPage(win, 'overlay.html', {
+        ...(frozen?.get(d.id) ? { kind: 'shot', shot: frozen.get(d.id)! } : {}),
         mode: mode === 'fullscreen' ? 'screen' : 'region',
         label: displayLabel(d, i),
         size: `${size.width}×${size.height}`,
@@ -294,7 +371,7 @@ function setCountdownNote(text: string): void {
   }
 }
 
-function runCountdown(target: Target, seconds: number, note?: string): Promise<boolean> {
+function runCountdown(target: Target, seconds: number, note?: string, quiet = false): Promise<boolean> {
   if (seconds <= 0) return Promise.resolve(true)
   return new Promise((resolve) => {
     const width = 320
@@ -334,7 +411,7 @@ function runCountdown(target: Target, seconds: number, note?: string): Promise<b
     cancelCountdown = () => finish(false)
     const tick = (): void => {
       if (left === 0) return finish(true)
-      recorder.update({ state: 'countdown', countdown: left })
+      if (!quiet) recorder.update({ state: 'countdown', countdown: left })
       left -= 1
       timer = setTimeout(tick, 1000)
     }
@@ -518,8 +595,8 @@ async function ensureMacPermissions(s: Settings): Promise<void> {
     if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
       void shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
       throw new Error(
-        'Screen Recorder needs permission to record your screen. Turn it on in System Settings › Privacy & Security › ' +
-          'Screen & System Audio Recording, then quit and reopen Screen Recorder.'
+        'Screen Snap needs permission to see your screen. Turn it on in System Settings › Privacy & Security › ' +
+          'Screen & System Audio Recording, then quit and reopen Screen Snap.'
       )
     }
   }
@@ -563,6 +640,25 @@ async function macAttempts(base: Omit<Attempt, 'backend' | 'rect'>, display: Dis
   ]
   if (base.encoder !== 'libx264') attempts.push({ ...base, backend: 'avfoundation', avf: { device, pixelFormat: null }, rect, encoder: 'libx264' })
   return attempts
+}
+
+/** Capture methods for one whole screen, best first — what a screenshot uses (the same ones recording uses). */
+async function grabAttempts(display: Display): Promise<Attempt[]> {
+  const s = getSettings()
+  const base = {
+    fps: 60, outputHeight: null, quality: 'maximum' as const, encoder: 'libx264', basicTuning: false, audio: [], showCursor: false
+  }
+  let list: Attempt[]
+  if (IS_MAC) list = await macAttempts(base, display, display.bounds)
+  else if (process.platform === 'linux') {
+    list = [{ ...base, backend: 'x11grab', x11Display: process.env.DISPLAY ?? ':0', rect: toPhysical(display.bounds) }]
+  } else {
+    const features = await detectFeatures()
+    const outputs = s.backend === 'gdigrab' ? [] : await dxgiOutputs()
+    list = windowsAttempts(base, s, display, toPhysical(display.bounds), features.ddagrab, outputs)
+  }
+  // The encoder doesn't matter for one picture, so drop the duplicates that only differ by it.
+  return list.filter((a, i, all) => all.findIndex((b) => b.backend === a.backend && JSON.stringify(b.avf) === JSON.stringify(a.avf)) === i)
 }
 
 async function startRecording(): Promise<void> {
@@ -625,7 +721,7 @@ async function startRecording(): Promise<void> {
 
   showBar(target)
   recorder.update({ state: 'countdown', countdown: undefined })
-  const hideNote = `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
+  const hideNote = `Stop with ${stopHint()}. The bar hides while recording so it can't appear in your video.`
   let barMovedAway = false
   // The timer sits on the screen being recorded. The check runs while the countdown plays; if the bar ever shows
   // up in the capture it moves to the other screen (or hides, with only one screen) so it can't be in the video.
@@ -687,6 +783,27 @@ async function toggleRecording(): Promise<void> {
   }
 }
 
+/** Starts a screenshot, or cancels one that is still waiting (countdown / choosing the area). */
+async function toggleScreenshot(): Promise<void> {
+  if (snapper.busy) {
+    cancelCountdown?.()
+    cancelSelection?.()
+    return
+  }
+  if (recorder.getStatus().state !== 'idle') return
+  if (IS_MAC && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+    try {
+      await ensureMacPermissions({ ...getSettings(), micEnabled: false })
+    } catch (err) {
+      recorder.update({ error: (err as Error).message })
+      showMainWindow()
+      return
+    }
+  }
+  recorder.update({ error: undefined })
+  await snapper.run()
+}
+
 async function openOutputDir(): Promise<void> {
   const dir = getSettings().outputDir
   mkdirSync(dir, { recursive: true })
@@ -700,7 +817,12 @@ function registerIpc(): void {
     if (IS_MAC && patch.micEnabled && systemPreferences.getMediaAccessStatus('microphone') !== 'granted') {
       if (await systemPreferences.askForMediaAccess('microphone')) mainWindow?.webContents.send('caps:changed')
     }
-    return updateSettings(patch)
+    const updated = updateSettings(patch)
+    if ('hotkeyRecord' in patch || 'hotkeyShot' in patch) {
+      applyHotkeys()
+      mainWindow?.webContents.send('caps:changed')
+    }
+    return updated
   })
   ipcMain.handle('settings:chooseDir', async () => {
     const res = await dialog.showOpenDialog(mainWindow!, {
@@ -709,7 +831,17 @@ function registerIpc(): void {
     })
     return res.canceled ? getSettings() : updateSettings({ outputDir: res.filePaths[0] })
   })
+  ipcMain.handle('settings:chooseShotDir', async () => {
+    const res = await dialog.showOpenDialog(mainWindow!, { defaultPath: getSettings().shotDir, properties: ['openDirectory', 'createDirectory'] })
+    return res.canceled ? null : res.filePaths[0]
+  })
+  ipcMain.handle('shell:openShotDir', async () => {
+    const dir = getSettings().shotDir
+    mkdirSync(dir, { recursive: true })
+    await shell.openPath(dir)
+  })
   ipcMain.handle('rec:toggle', () => toggleRecording())
+  ipcMain.handle('shot:take', () => toggleScreenshot())
   ipcMain.handle('rec:status', () => recorder.getStatus())
   ipcMain.handle('rec:review', () => openReview())
   ipcMain.handle('window:fit', (e, height: number) => {
@@ -732,6 +864,14 @@ function registerIpc(): void {
   ipcMain.handle('shell:showLast', () => {
     const f = recorder.getStatus().lastFile
     if (f) shell.showItemInFolder(f)
+  })
+  ipcMain.handle('shell:showLastShot', () => {
+    const f = recorder.getStatus().lastShot
+    if (f) shell.showItemInFolder(f)
+  })
+  ipcMain.handle('shell:openLastShot', async () => {
+    const f = recorder.getStatus().lastShot
+    if (f) await shell.openPath(f)
   })
   ipcMain.handle('shell:playLast', async () => {
     const f = recorder.getStatus().lastFile
@@ -782,10 +922,12 @@ app.on('before-quit', (e) => {
 app.on('will-quit', () => globalShortcut.unregisterAll())
 
 void app.whenReady().then(async () => {
-  if (process.platform === 'win32') app.setAppUserModelId('com.shaunownhouse.screenrecorder')
+  if (process.platform === 'win32') app.setAppUserModelId('com.shaunownhouse.screensnap')
+  migrateFromOldName()
+  clearShotTmp()
   handleMediaProtocol()
   registerIpc()
-  hotkeyRegistered = globalShortcut.register(HOTKEY, () => void toggleRecording())
+  applyHotkeys()
   const notifyDisplays = (): void => {
     invalidateDxgiOutputs()
     mainWindow?.webContents.send('caps:changed')

@@ -4,6 +4,7 @@ import ffmpegStatic from 'ffmpeg-static'
 import { buildEncoderProbeArgs, ENCODER_LABELS, HARDWARE_ENCODERS, YUV444_CAPABLE } from './args.ts'
 import { parseAvfoundationScreens } from './parse.ts'
 import type { EncoderInfo, Quality } from '../shared/types.ts'
+import type { FfmpegCodecs } from './ffmpeg-codecs.ts'
 
 export function ffmpegPath(): string {
   const p = ffmpegStatic as unknown as string | null
@@ -34,6 +35,8 @@ export interface FfmpegFeatures {
   version: string
   ddagrab: boolean
   encoders: EncoderInfo[]
+  /** Software encoders needed for the extra save formats. */
+  codecs: FfmpegCodecs
 }
 
 let cached: Promise<FfmpegFeatures> | null = null
@@ -68,6 +71,12 @@ async function detect(): Promise<FfmpegFeatures> {
   return {
     version: version.stdout.split(/\r?\n/)[0]?.replace(/^ffmpeg version\s+/, '').split(' ')[0] ?? 'unknown',
     ddagrab: /\bddagrab\b/.test(filters.stdout),
+    codecs: {
+      x265: /\blibx265\b/.test(encoderList.stdout),
+      vp9: /\blibvpx-vp9\b/.test(encoderList.stdout),
+      opus: /\blibopus\b/.test(encoderList.stdout),
+      webp: /\blibwebp\b/.test(encoderList.stdout)
+    },
     encoders: [...results.filter((e): e is EncoderInfo => e !== null), { id: 'libx264', label: ENCODER_LABELS.libx264, yuv444: true, tuned: true }]
   }
 }

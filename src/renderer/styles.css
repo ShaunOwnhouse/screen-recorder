@@ -73,20 +73,15 @@ input:focus-visible {
 }
 
 .logo {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid var(--accent);
-  display: grid;
-  place-items: center;
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
-.logo::after {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
+.logo svg {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .chip {
@@ -697,4 +692,202 @@ select {
 .footer {
   font-size: 11px;
   text-align: center;
+}
+
+/* ---------- Record | Screenshot tabs ---------- */
+
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tabs button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tabs button[aria-selected='true'] {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tabs button[aria-selected='true'].rec svg {
+  stroke: var(--accent);
+  fill: var(--accent);
+}
+
+.tabs button[aria-selected='true'].snap svg {
+  stroke: #60a5fa;
+}
+
+.tabs.locked {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.record-btn.shot:hover {
+  border-color: #60a5fa;
+}
+
+.record-btn.shot svg {
+  width: 30px;
+  height: 30px;
+  fill: none;
+  stroke: #60a5fa;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.row2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.row2 .label {
+  margin: 0;
+}
+
+.row2 .seg {
+  flex: 1;
+  max-width: 230px;
+}
+
+/* ---------- Settings: a fixed-height area that scrolls inside ---------- */
+
+.scroll-wrap {
+  position: relative;
+  border-top: 1px solid var(--border);
+}
+
+.drawer-body.scroll {
+  position: relative;
+  border-top: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-top: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #444c5c transparent;
+}
+
+.drawer-body.scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.drawer-body.scroll::-webkit-scrollbar-thumb {
+  background: #444c5c;
+  border-radius: 8px;
+  border: 2px solid var(--surface);
+}
+
+.drawer-body.scroll > * {
+  flex: none;
+}
+
+.fade {
+  position: absolute;
+  left: 0;
+  right: 10px;
+  bottom: 0;
+  height: 38px;
+  background: linear-gradient(rgba(24, 27, 33, 0), var(--surface) 85%);
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fade.hide {
+  display: none;
+}
+
+.jump {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  margin: 0 -14px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.jump::-webkit-scrollbar {
+  display: none;
+}
+
+.jump button {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jump button:hover {
+  color: var(--text);
+}
+
+.jump button.on {
+  background: var(--accent-soft);
+  color: #fca5a5;
+}
+
+.keybtn {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.keybtn:hover {
+  border-color: var(--muted);
+}
+
+.keybtn.listening {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #fca5a5;
 }

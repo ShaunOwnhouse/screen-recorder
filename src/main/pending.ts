@@ -54,14 +54,4 @@ export function moveFile(src: string, dest: string): void {
   }
 }
 
-export function sanitizeFileName(name: string, fallback: string): string {
-  const cleaned = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').replace(/\.mp4$/i, '').trim().replace(/[. ]+$/, '')
-  return `${cleaned || fallback}.mp4`
-}
-
-export function uniquePath(dir: string, fileName: string): string {
-  const stem = fileName.replace(/\.mp4$/i, '')
-  let candidate = join(dir, fileName)
-  for (let i = 2; existsSync(candidate); i++) candidate = join(dir, `${stem} (${i}).mp4`)
-  return candidate
-}
+export { sanitizeFileName, uniquePath } from './filenames.ts'

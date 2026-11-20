@@ -1,5 +1,5 @@
-appId: com.shaunownhouse.screenrecorder
-productName: Screen Recorder
+appId: com.shaunownhouse.screensnap
+productName: Screen Snap
 directories:
   output: dist
   buildResources: resources
@@ -26,7 +26,7 @@ portable:
 # Microsoft Store package. identityName / publisher / publisherDisplayName / displayName come from
 # Partner Center → Product identity, passed in by CI from repository variables.
 appx:
-  applicationId: ScreenRecorder
+  applicationId: ScreenSnap
   backgroundColor: '#101216'
   languages:
     - en-US
@@ -47,8 +47,8 @@ mac:
     - from: resources/mac/mac-helper
       to: bin/mac-helper
   extendInfo:
-    NSMicrophoneUsageDescription: Screen Recorder uses your microphone when you choose to record your voice.
-    NSAudioCaptureUsageDescription: Screen Recorder records your computer's sound when you turn on Computer sound.
+    NSMicrophoneUsageDescription: Screen Snap uses your microphone when you choose to record your voice.
+    NSAudioCaptureUsageDescription: Screen Snap records your computer's sound when you turn on Computer sound.
   minimumSystemVersion: '11.0'
 dmg:
   artifactName: ${productName}-${version}-mac-${arch}.${ext}

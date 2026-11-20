@@ -1,5 +1,6 @@
 import { isFullRange, keepOnly, playablePosition, removeRange, totalDuration } from '../shared/segments.ts'
-import type { EditorSource, Rect, Segment } from '../shared/types.ts'
+import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
+import type { EditorSource, Rect, Segment, VideoFormat } from '../shared/types.ts'
 
 const api = window.editor
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
@@ -17,6 +18,8 @@ const cropSize = $('crop-size')
 const aspectSel = $<HTMLSelectElement>('aspect')
 const nameInput = $<HTMLInputElement>('name')
 const compat = $<HTMLInputElement>('compat')
+const formatSel = $<HTMLSelectElement>('format')
+const noticeEl = $('format-notice')
 const busy = $('busy')
 const busyTitle = $('busy-title')
 const busyBar = $('busy-bar')
@@ -332,14 +335,41 @@ function showBusy(title: string, detail: string, cancellable: boolean): void {
   busyCancel.textContent = 'Cancel'
 }
 
+const currentFormat = (): VideoFormat => formatSel.value as VideoFormat
+/** MKV / MOV with a 4:4:4 file kept as-is is only a re-wrap; HEVC, WebM and GIF always convert. */
+const alwaysConverts = (f: VideoFormat): boolean => f === 'hevc' || f === 'webm' || f === 'gif'
+
+function renderFormat(): void {
+  const f = videoFormat(currentFormat())
+  $('ext').textContent = `.${f.ext}`
+  const n = f.notice
+  noticeEl.hidden = !n
+  if (n) {
+    noticeEl.className = `notice ${n.level === 'warn' ? '' : n.level}`.trim()
+    $('notice-title').textContent = n.title
+    $('notice-text').textContent = n.text
+  }
+  // The 4:4:4 → 4:2:0 choice only matters when the file stays H.264; the other formats are always 4:2:0.
+  $('compat-row').hidden = !src?.meta.yuv444 || alwaysConverts(currentFormat())
+}
+
 async function save(saveAs: boolean): Promise<void> {
   if (!src || saving) return
   saving = true
   video.pause()
-  const edited = !isFullRange(keep, duration) || (!!crop && cropOn) || (compat.checked && !!src.meta.yuv444)
+  const format = currentFormat()
+  const trimmed = !isFullRange(keep, duration) || (!!crop && cropOn)
+  const converting = alwaysConverts(format)
+  const edited = trimmed || converting || (compat.checked && !!src.meta.yuv444)
   showBusy(
-    edited ? 'Exporting your edit…' : 'Saving…',
-    edited ? 'Re-encoding at the same quality as the recording.' : 'Moving the original — no re-encode, no quality loss.',
+    converting ? `Converting to ${videoFormat(format).ext.toUpperCase()}…` : trimmed ? 'Exporting your edit…' : format === 'mp4' ? 'Saving…' : 'Saving a copy…',
+    converting
+      ? 'Making a new copy in this format — this can take a while for long recordings.'
+      : trimmed
+        ? 'Re-encoding at the same quality as the recording.'
+        : format === 'mp4'
+          ? 'Moving the original — no re-encode, no quality loss.'
+          : 'Re-wrapping the video — no re-encode, no quality loss.',
     edited
   )
   if (saveAs) busy.hidden = true
@@ -349,7 +379,8 @@ async function save(saveAs: boolean): Promise<void> {
     crop: cropOn ? crop : null,
     fileName: nameInput.value,
     saveAs,
-    compatible: compat.checked
+    compatible: compat.checked,
+    format
   })
   saving = false
   if (res.ok) return // The main process closes this window.
@@ -503,7 +534,21 @@ async function init(): Promise<void> {
   duration = m.duration
   keep = [[0, duration]]
   nameInput.value = src.defaultName
-  $('compat-row').hidden = !m.yuv444
+  formatSel.replaceChildren(
+    ...VIDEO_FORMATS.filter((f) => src!.formats.includes(f.id)).map((f) => {
+      const o = document.createElement('option')
+      o.value = f.id
+      o.textContent = f.label
+      return o
+    })
+  )
+  formatSel.value = src.format
+  formatSel.addEventListener('change', renderFormat)
+  $('use-default').addEventListener('click', () => {
+    formatSel.value = 'mp4'
+    renderFormat()
+  })
+  renderFormat()
   $('dest').textContent = `Saves to ${src.outputDir}`
   $('info').textContent = [
     `${m.width}×${m.height}`,

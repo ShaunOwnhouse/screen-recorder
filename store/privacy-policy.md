@@ -1,8 +1,8 @@
-# Screen Recorder: Privacy Policy
+# Screen Snap: Privacy Policy
 
 _Last updated: 19 November 2026_
 
-Screen Recorder records your screen, and optionally your computer's sound and your microphone, only when you start a recording.
+Screen Snap records your screen, and optionally your computer's sound and your microphone, only when you start a recording.
 
 ## What the app accesses
 

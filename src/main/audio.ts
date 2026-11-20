@@ -37,7 +37,7 @@ export class PcmPipe {
   ) {}
 
   static async create(): Promise<PcmPipe> {
-    const name = `screen-recorder-audio-${process.pid}-${Date.now()}-${++pipeSeq}`
+    const name = `screen-snap-audio-${process.pid}-${Date.now()}-${++pipeSeq}`
     const path = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`)
     let pipe: PcmPipe | null = null
     const server = createServer((socket) => {

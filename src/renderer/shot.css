@@ -1,0 +1,109 @@
+/* Extra styles for the screenshot review window; the rest comes from editor.css. */
+.editor.shot {
+  grid-template-rows: auto 1fr auto auto;
+}
+
+.shot-wrap {
+  display: flex;
+  overflow: auto;
+  position: relative;
+  /* Room around the picture so the crop handles on its edges and corners are fully visible and grabbable. */
+  padding: 18px;
+  background:
+    linear-gradient(45deg, #15181d 25%, transparent 25%, transparent 75%, #15181d 75%) 0 0 / 20px 20px,
+    linear-gradient(45deg, #15181d 25%, #0c0e12 25%, #0c0e12 75%, #15181d 75%) 10px 10px / 20px 20px;
+}
+
+/* margin:auto centres the picture when it's smaller than the window but still lets a big one scroll from its corner. */
+.canvas-box {
+  position: relative;
+  margin: auto;
+  flex: none;
+  line-height: 0;
+}
+
+#view {
+  display: block;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  touch-action: none;
+}
+
+#view.draw {
+  cursor: crosshair;
+}
+
+#view.text {
+  cursor: text;
+}
+
+.crop-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.text-input {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed #fff;
+  background: rgba(0, 0, 0, 0.25);
+  outline: none;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 40px;
+  user-select: text;
+}
+
+.swatches {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.swatches button {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatches button[aria-checked='true'] {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.primary.compact {
+  padding: 6px 14px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 8px 16px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.toast.bad {
+  background: #3a1a1d;
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+}
+
+.group.ghosted {
+  visibility: hidden;
+}
+
+/* No divider before the (usually invisible) crop buttons. */
+.group:has(+ .group.ghosted) {
+  border-right: 0;
+}

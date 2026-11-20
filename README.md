@@ -1,6 +1,6 @@
-# Screen Recorder
+# Screen Snap
 
-A screen recorder for Windows and macOS that keeps full HD, 1440p and 4K quality all the way to the saved file.
+A screen recorder and screenshot tool for Windows and macOS that keeps full HD, 1440p and 4K quality all the way to the saved file.
 
 ## Why the output stays sharp
 
@@ -35,7 +35,10 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 
   Unedited saves are moved as-is, with no re-encode. Edited saves are re-encoded at the original quality.
 - Unsaved recordings survive app restarts and crashes and wait for review
-- `Ctrl+Shift+R` (Windows) / `Cmd+Shift+R` (macOS) global hotkey to start and stop
+- Global shortcuts to start/stop a recording and to take a screenshot from any app (default `Alt+Shift+R` / `Alt+Shift+S` on Windows, `Control+Option+R` / `Control+Option+S` on macOS). They deliberately avoid the keys browsers use (`Ctrl+Shift+R` hard refresh, `Ctrl+Shift+I` developer tools), and either can be changed or turned off in **Settings → Shortcuts**
+- **Save in other formats.** MP4 · H.264 (what the app has always saved, and the default) plays everywhere. The review window can also save MKV or MOV (re-wrapped without re-encoding when you haven't edited), H.265 (smaller), WebM (VP9, for websites) or an animated GIF. Anything other than the default shows a notice about what may not open it; a default can be set in Settings
+- **Screenshots**, with the same Snipping-Tool-style start: every screen freezes at its real pixel size, then you drag an area or click a screen (optional 3 / 5 s delay, optional cursor). A review window offers **Copy**, **Save**, **Save as…** and **Discard**, plus crop and pen / highlighter / arrow / text tools with undo and redo. PNG (lossless, exact pixels) is the default; WebP (lossless) and maximum-quality JPEG are available with a notice. The app's own windows are never in the picture
+- Settings scroll inside a fixed-height area with shortcuts to each section, so the window stays compact
 - Compact window: quick choices (screen, whole screen or region, audio on/off) sit under the record button, and everything else lives in a collapsible **Settings** section
 - Tray icon that shows when you're recording
 
@@ -43,19 +46,19 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 
 Every push to `main` builds both apps on GitHub Actions. Open the **Actions** tab and select the latest **Build apps** run.
 
-**Windows**: download `screen-recorder-windows`. It contains:
+**Windows**: download `screen-snap-windows`. It contains:
 
-- `Screen Recorder-Setup-<version>.exe`: installer
-- `Screen Recorder-Portable-<version>.exe`: runs without installing
+- `Screen Snap-Setup-<version>.exe`: installer
+- `Screen Snap-Portable-<version>.exe`: runs without installing
 
 The app isn't code-signed, so Windows SmartScreen may warn on first launch. Click **More info → Run anyway**.
 
-**macOS** (11 Big Sur or later): download `screen-recorder-mac`. Use `…-mac-arm64.dmg` on Apple Silicon (M1 or later) and `…-mac-x64.dmg` on Intel Macs. Open the DMG and drag **Screen Recorder** into **Applications**.
+**macOS** (11 Big Sur or later): download `screen-snap-mac`. Use `…-mac-arm64.dmg` on Apple Silicon (M1 or later) and `…-mac-x64.dmg` on Intel Macs. Open the DMG and drag **Screen Snap** into **Applications**.
 
 The app isn't notarised by Apple yet, so the first launch is blocked. Try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. If macOS says the app "is damaged", run this once in Terminal:
 
 ```bash
-xattr -cr "/Applications/Screen Recorder.app"
+xattr -cr "/Applications/Screen Snap.app"
 ```
 
 On first recording, macOS asks for **Screen & System Audio Recording** permission (and **Microphone**, if you turn it on). After granting screen permission, quit and reopen the app.

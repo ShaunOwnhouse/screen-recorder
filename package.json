@@ -1,8 +1,8 @@
 {
   "name": "screen-recorder",
-  "productName": "Screen Recorder",
+  "productName": "Screen Snap",
   "version": "1.0.0",
-  "description": "High quality HD / 4K screen recorder for Windows",
+  "description": "Screen recorder and screenshot tool with full HD / 4K quality for Windows and macOS",
   "main": "out/main/index.js",
   "author": "ShaunOwnhouse",
   "license": "MIT",

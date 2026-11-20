@@ -1,3 +1,5 @@
+import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
+import { acceleratorFromKey, acceleratorLabel } from '../shared/hotkeys.ts'
 import type { AudioLevels, Capabilities, RecordingStatus, Settings } from '../shared/types.ts'
 
 const api = window.api
@@ -50,8 +52,34 @@ const el = {
   noise: $<HTMLInputElement>('noise'),
   testAudio: $<HTMLButtonElement>('test-audio'),
   audioHint: $('audio-hint'),
-  footer: $('footer')
+  footer: $('footer'),
+  tabs: $('tabs'),
+  tabRecord: $<HTMLButtonElement>('tab-record'),
+  tabShot: $<HTMLButtonElement>('tab-shot'),
+  heroRecord: $('hero-record'),
+  heroShot: $('hero-shot'),
+  shoot: $<HTMLButtonElement>('shoot'),
+  shotLabel: $('shot-label'),
+  shotHotkeyHint: $('shot-hotkey-hint'),
+  shotModeHint: $('shot-mode-hint'),
+  lastShot: $('last-shot'),
+  lastShotName: $('last-shot-name'),
+  settingsWrap: $('settings-wrap'),
+  fade: $('fade'),
+  jump: $('jump'),
+  videoFormat: $<HTMLSelectElement>('video-format'),
+  videoFormatHint: $('video-format-hint'),
+  shotFormat: $<HTMLSelectElement>('shot-format'),
+  shotFormatHint: $('shot-format-hint'),
+  shotdir: $('shotdir'),
+  shotClipboard: $<HTMLInputElement>('shot-clipboard'),
+  shotCursor: $<HTMLInputElement>('shot-cursor'),
+  keyRecord: $<HTMLButtonElement>('key-record'),
+  keyShot: $<HTMLButtonElement>('key-shot'),
+  keyHint: $('key-hint')
 }
+
+const IS_MAC = /Mac/i.test(navigator.platform)
 
 const QUALITY_SHORT: Record<Settings['quality'], string> = {
   maximum: 'Maximum',
@@ -65,6 +93,7 @@ let settings: Settings
 let caps: Capabilities | null = null
 let status: RecordingStatus | null = null
 let testing = false
+let tab: 'record' | 'shot' = 'record'
 
 function prefGet(key: string): string | null {
   try {
@@ -112,9 +141,119 @@ async function save(patch: Partial<Settings>): Promise<void> {
 }
 
 function setSettingsOpen(open: boolean): void {
-  el.settingsBody.hidden = !open
+  el.settingsWrap.hidden = !open
   el.settingsToggle.setAttribute('aria-expanded', String(open))
   prefSet('settingsOpen', open ? '1' : '0')
+  if (open) requestAnimationFrame(updateScrollState)
+}
+
+function setTab(next: 'record' | 'shot'): void {
+  tab = next
+  prefSet('tab', next)
+  renderTabs()
+}
+
+function renderTabs(): void {
+  const shot = tab === 'shot'
+  el.tabRecord.setAttribute('aria-selected', String(!shot))
+  el.tabShot.setAttribute('aria-selected', String(shot))
+  el.heroRecord.hidden = shot
+  el.heroShot.hidden = !shot
+  el.last.hidden = shot || !status?.lastFile
+  el.lastShot.hidden = !shot || !status?.lastShot
+}
+
+/** Fade + highlighted section chip for the scrolling settings area. */
+function updateScrollState(): void {
+  const body = el.settingsBody
+  el.fade.classList.toggle('hide', body.scrollTop + body.clientHeight >= body.scrollHeight - 6)
+  const chips = [...el.jump.querySelectorAll<HTMLButtonElement>('button')]
+  const line = body.scrollTop + el.jump.offsetHeight + 16
+  let active = chips[0]
+  for (const c of chips) {
+    const g = document.getElementById(c.dataset.target ?? '')
+    if (g && g.offsetTop <= line) active = c
+  }
+  chips.forEach((c) => c.classList.toggle('on', c === active))
+}
+
+function setupSettingsScroll(): void {
+  el.settingsBody.addEventListener('scroll', updateScrollState, { passive: true })
+  new ResizeObserver(updateScrollState).observe(el.settingsBody)
+  el.jump.querySelectorAll<HTMLButtonElement>('button').forEach((c) =>
+    c.addEventListener('click', () => {
+      const g = document.getElementById(c.dataset.target ?? '')
+      if (g) el.settingsBody.scrollTo({ top: g.offsetTop - el.jump.offsetHeight - 4, behavior: 'smooth' })
+    })
+  )
+}
+
+// ---------- shortcuts ----------
+
+let listening: 'record' | 'shot' | null = null
+
+function stopListening(): void {
+  listening = null
+  window.removeEventListener('keydown', onShortcutKey, true)
+  el.keyRecord.classList.remove('listening')
+  el.keyShot.classList.remove('listening')
+  if (settings) renderHotkeys()
+}
+
+function listenFor(which: 'record' | 'shot'): void {
+  if (listening) stopListening()
+  listening = which
+  const btn = which === 'record' ? el.keyRecord : el.keyShot
+  btn.classList.add('listening')
+  btn.textContent = 'Press the new keys…  (Esc to cancel, Backspace to turn off)'
+  window.addEventListener('keydown', onShortcutKey, true)
+}
+
+function onShortcutKey(e: KeyboardEvent): void {
+  if (!listening) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return
+  if (e.key === 'Escape') return stopListening()
+  const which = listening
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    stopListening()
+    void save(which === 'record' ? { hotkeyRecord: '' } : { hotkeyShot: '' })
+    return
+  }
+  const accelerator = acceleratorFromKey(e, IS_MAC)
+  if (!accelerator) {
+    el.keyHint.textContent = 'Use Ctrl, Alt or Shift together with a letter, number or F-key (F-keys and Print Screen also work alone).'
+    return
+  }
+  const other = which === 'record' ? settings.hotkeyShot : settings.hotkeyRecord
+  if (accelerator === other) {
+    el.keyHint.textContent = 'That shortcut is already used for the other action.'
+    return
+  }
+  stopListening()
+  void save(which === 'record' ? { hotkeyRecord: accelerator } : { hotkeyShot: accelerator })
+}
+
+function renderHotkeys(): void {
+  const describe = (accelerator: string, registered: string | null | undefined): { button: string; hint: string } => {
+    if (!accelerator) return { button: 'Off', hint: 'Shortcut is off — turn it on in Settings › Shortcuts.' }
+    const name = acceleratorLabel(accelerator, IS_MAC)
+    if (!caps) return { button: name, hint: '' }
+    return registered
+      ? { button: name, hint: `or press ${registered} anywhere` }
+      : { button: `${name}  — unavailable`, hint: 'Shortcut unavailable — another app is using it. Pick another in Settings › Shortcuts.' }
+  }
+  const rec = describe(settings.hotkeyRecord, caps?.hotkey)
+  const snap = describe(settings.hotkeyShot, caps?.shotHotkey)
+  if (listening !== 'record') el.keyRecord.textContent = rec.button
+  if (listening !== 'shot') el.keyShot.textContent = snap.button
+  el.hotkeyHint.textContent = rec.hint
+  el.shotHotkeyHint.textContent = snap.hint
+  const clash = (settings.hotkeyRecord && !caps?.hotkey && caps) || (settings.hotkeyShot && !caps?.shotHotkey && caps)
+  el.keyHint.textContent = clash
+    ? 'A shortcut shows “unavailable” when another app already uses those keys. Pick different ones.'
+    : 'Shortcuts work in any app, so avoid keys your other apps use — browsers use Ctrl+Shift+R (refresh) and Ctrl+Shift+I (developer tools).'
 }
 
 /** Tallest connected screen, for the "upscaling adds no detail" hint. */
@@ -138,6 +277,10 @@ function renderSettings(): void {
   el.cursor.checked = settings.showCursor
   el.outdir.textContent = settings.outputDir
   el.outdir.title = settings.outputDir
+  el.shotdir.textContent = settings.shotDir
+  el.shotdir.title = settings.shotDir
+  el.shotClipboard.checked = settings.shotClipboard
+  el.shotCursor.checked = settings.shotCursor
 
   el.pillSystem.setAttribute('aria-pressed', String(settings.systemAudio))
   el.pillMic.setAttribute('aria-pressed', String(settings.micEnabled))
@@ -158,12 +301,18 @@ function renderSettings(): void {
     )
     el.encoder.value = caps.encoders.some((e) => e.id === settings.encoder) ? settings.encoder : 'auto'
 
+    el.videoFormat.replaceChildren(...VIDEO_FORMATS.filter((f) => caps!.videoFormats.includes(f.id)).map((f) => option(f.id, f.label)))
+    el.videoFormat.value = settings.videoFormat
+    el.shotFormat.replaceChildren(...IMAGE_FORMATS.filter((f) => caps!.imageFormats.includes(f.id)).map((f) => option(f.id, f.label)))
+    el.shotFormat.value = settings.shotFormat
+
     const mics = caps.microphones
     el.mic.replaceChildren(option('default', 'System default microphone'), ...mics.map((m) => option(m.id, m.label)))
     const byLabel = mics.find((m) => m.label === settings.micLabel)
     el.mic.value = mics.some((m) => m.id === settings.micDevice) ? settings.micDevice : byLabel ? byLabel.id : 'default'
   }
   renderHints()
+  renderHotkeys()
   renderSummary()
 }
 
@@ -175,6 +324,19 @@ function renderHints(): void {
       : multi
         ? 'You’ll click the screen to record when you start.'
         : 'Records your whole screen.'
+
+  el.shotModeHint.textContent =
+    settings.shotMode === 'region'
+      ? 'The screen freezes the moment you start, so menus and tooltips can be captured. Drag an area on any screen.'
+      : multi
+        ? 'The screen freezes when you start. Click the screen you want to capture.'
+        : 'Captures your whole screen, frozen at the moment you press the button.'
+  const vn = VIDEO_FORMATS.find((f) => f.id === settings.videoFormat)?.notice
+  el.videoFormatHint.classList.toggle('warn', !!vn)
+  el.videoFormatHint.textContent = vn ? `${vn.title} ${vn.text}` : 'You can still pick a different format for each recording when you save it.'
+  const sn = IMAGE_FORMATS.find((f) => f.id === settings.shotFormat)?.notice
+  el.shotFormatHint.classList.toggle('warn', !!sn)
+  el.shotFormatHint.textContent = sn ? `${sn.title} ${sn.text}` : 'PNG keeps every pixel exactly as it was on your screen.'
 
   const tallest = largestDisplayHeight()
   el.resHint.classList.remove('warn')
@@ -240,11 +402,17 @@ function renderStatus(s: RecordingStatus): void {
   el.recView.hidden = !recording
   el.quick.hidden = recording
   el.quick.classList.toggle('locked', s.state !== 'idle')
+  el.heroShot.querySelector('.quick')?.classList.toggle('locked', s.state !== 'idle')
+  el.tabs.classList.toggle('locked', s.state !== 'idle')
   el.settingsBody.classList.toggle('locked', s.state !== 'idle')
   el.record.disabled = s.state !== 'idle' || !caps?.platformSupported
+  el.shoot.disabled = s.state !== 'idle' || !caps?.platformSupported
 
-  el.chip.className = `chip ${s.state === 'selecting' ? 'saving' : s.state}`
-  el.chip.textContent = { idle: 'Ready', selecting: 'Choose what to record…', countdown: 'Starting…', recording: 'Recording', saving: 'Finishing…' }[s.state]
+  el.chip.className = `chip ${s.state === 'selecting' || s.state === 'snapping' ? 'saving' : s.state}`
+  el.chip.textContent = {
+    idle: 'Ready', selecting: 'Choose what to record…', countdown: 'Starting…', recording: 'Recording', saving: 'Finishing…',
+    snapping: 'Taking screenshot…'
+  }[s.state]
   el.recordLabel.textContent =
     s.state === 'saving' ? 'Finishing recording…' : s.state === 'selecting' ? 'Choose what to record' : 'Start recording'
 
@@ -268,8 +436,9 @@ function renderStatus(s: RecordingStatus): void {
   el.pending.hidden = !s.pending
   el.pendingName.textContent = s.pending?.replace(/\.mp4$/i, '') ?? ''
 
-  el.last.hidden = !s.lastFile
   el.lastName.textContent = s.lastFile?.split(/[\\/]/).pop() ?? ''
+  el.lastShotName.textContent = s.lastShot?.split(/[\\/]/).pop() ?? ''
+  renderTabs()
 
   if (s.state !== 'idle' && testing) {
     testing = false
@@ -281,7 +450,7 @@ function renderFooter(): void {
   if (!caps) return
   const gpus = caps.encoders.filter((e) => e.id !== 'libx264').length
   el.footer.textContent = `FFmpeg ${caps.ffmpegVersion} · ${gpus} hardware encoder(s)`
-  el.hotkeyHint.textContent = caps.hotkey ? `or press ${caps.hotkey} anywhere` : 'Global hotkey unavailable (in use by another app)'
+  renderHotkeys()
   if (!caps.platformSupported) {
     el.bannerWrap.hidden = false
     el.banner.textContent = 'Recording is supported on Windows and macOS only.'
@@ -309,11 +478,22 @@ function bind(): void {
     seg.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest('button')
       if (!b) return
-      const key = seg.dataset.key as 'mode' | 'fps'
-      void save(key === 'fps' ? { fps: Number(b.dataset.value) as Settings['fps'] } : { mode: b.dataset.value as Settings['mode'] })
+      const key = seg.dataset.key as 'mode' | 'fps' | 'shotMode' | 'shotDelay'
+      const value = b.dataset.value ?? ''
+      void save(
+        key === 'fps'
+          ? { fps: Number(value) as Settings['fps'] }
+          : key === 'shotDelay'
+            ? { shotDelay: Number(value) }
+            : key === 'shotMode'
+              ? { shotMode: value as Settings['shotMode'] }
+              : { mode: value as Settings['mode'] }
+      )
     })
   })
-  el.settingsToggle.addEventListener('click', () => setSettingsOpen(el.settingsBody.hidden))
+  el.settingsToggle.addEventListener('click', () => setSettingsOpen(el.settingsWrap.hidden))
+  el.tabRecord.addEventListener('click', () => setTab('record'))
+  el.tabShot.addEventListener('click', () => setTab('shot'))
   el.pillSystem.addEventListener('click', () => void save({ systemAudio: !settings.systemAudio }))
   el.pillMic.addEventListener('click', () => void save({ micEnabled: !settings.micEnabled }))
   el.resolution.addEventListener('change', () =>
@@ -333,6 +513,24 @@ function bind(): void {
     void save({ micDevice: id, micLabel: label, micEnabled: true })
   })
   el.testAudio.addEventListener('click', () => void runAudioTest(!testing))
+  el.videoFormat.addEventListener('change', () => void save({ videoFormat: el.videoFormat.value as Settings['videoFormat'] }))
+  el.shotFormat.addEventListener('change', () => void save({ shotFormat: el.shotFormat.value as Settings['shotFormat'] }))
+  el.shotClipboard.addEventListener('change', () => void save({ shotClipboard: el.shotClipboard.checked }))
+  el.shotCursor.addEventListener('change', () => void save({ shotCursor: el.shotCursor.checked }))
+  el.keyRecord.addEventListener('click', () => listenFor('record'))
+  el.keyShot.addEventListener('click', () => listenFor('shot'))
+  $('key-record-off').addEventListener('click', () => void save({ hotkeyRecord: '' }))
+  $('key-shot-off').addEventListener('click', () => void save({ hotkeyShot: '' }))
+  window.addEventListener('blur', () => listening && stopListening())
+  el.shoot.addEventListener('click', () => void api.takeScreenshot())
+  $('open-shot').addEventListener('click', () => void api.openLastShot())
+  $('reveal-shot').addEventListener('click', () => void api.showLastShot())
+  $('choose-shot-dir').addEventListener('click', async () => {
+    const dir = await api.chooseShotDir()
+    if (dir) await save({ shotDir: dir })
+  })
+  $('open-shot-dir').addEventListener('click', () => void api.openShotDir())
+  setupSettingsScroll()
   el.countdown.addEventListener('change', () => void save({ countdown: Number(el.countdown.value) }))
   $('choose-dir').addEventListener('click', async () => {
     settings = await api.chooseOutputDir()
@@ -360,6 +558,7 @@ function bind(): void {
 async function init(): Promise<void> {
   bind()
   setSettingsOpen(prefGet('settingsOpen') === '1')
+  tab = prefGet('tab') === 'shot' ? 'shot' : 'record'
   settings = await api.getSettings()
   renderSettings()
   api.onStatus(renderStatus)

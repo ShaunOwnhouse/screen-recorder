@@ -1,6 +1,6 @@
 'use strict'
 // End-to-end test of the real app: record → review → edit → save, then verify the saved files.
-//   node test/e2e/run.cjs "<path to packaged app>"   (packaged build, e.g. dist/win-unpacked/Screen Recorder.exe)
+//   node test/e2e/run.cjs "<path to packaged app>"   (packaged build, e.g. dist/win-unpacked/Screen Snap.exe)
 //   node test/e2e/run.cjs                            (runs from source with the local Electron)
 // Exits non-zero if anything fails. Results, logs and screenshots land in test-results/e2e/.
 const { _electron: electron } = require('playwright-core')
@@ -114,13 +114,53 @@ function redPixels(file, at, region, baseline) {
 
 /** One frame of the bare desktop (physical pixels) so desktop colours can be told apart from the app's UI. */
 function grabDesktop(w, h) {
-  if (!isWin) return null
-  const r = ff(
-    ['-hide_banner', '-v', 'error', '-f', 'gdigrab', '-framerate', '5', '-draw_mouse', '0', '-video_size', `${w}x${h}`, '-i', 'desktop',
-      '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
-    { encoding: 'buffer' }
-  )
+  if (!isWin && process.platform !== 'linux') return null
+  const input = isWin
+    ? ['-f', 'gdigrab', '-framerate', '5', '-draw_mouse', '0', '-video_size', `${w}x${h}`, '-i', 'desktop']
+    : ['-f', 'x11grab', '-framerate', '5', '-draw_mouse', '0', '-video_size', `${w}x${h}`, '-i', `${process.env.DISPLAY || ':0'}+0,0`]
+  const r = ff(['-hide_banner', '-v', 'error', ...input, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' })
   return r.stdout && r.stdout.length === w * h * 3 ? { buf: r.stdout, w, h } : null
+}
+
+/** Size and raw RGB of any image file (PNG, WebP, JPEG). */
+function decodeImage(file) {
+  const i = info(file)
+  const m = /Video: [^\n]*?, (\d{2,5})x(\d{2,5})/.exec(i)
+  const r = ff(['-hide_banner', '-v', 'error', '-i', file, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' })
+  return { width: m ? +m[1] : 0, height: m ? +m[2] : 0, rgb: r.stdout, codec: /Video: (\w+)/.exec(i)?.[1] ?? '', info: i }
+}
+
+/** Fraction of pixels that differ clearly from the bare desktop (the picture sits at ox,oy on it). */
+function diffFromDesktop(img, desktop, ox, oy, threshold = 40) {
+  let bad = 0
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      const a = (y * img.width + x) * 3
+      const b = ((y + oy) * desktop.w + (x + ox)) * 3
+      if (Math.abs(img.rgb[a] - desktop.buf[b]) > threshold || Math.abs(img.rgb[a + 1] - desktop.buf[b + 1]) > threshold || Math.abs(img.rgb[a + 2] - desktop.buf[b + 2]) > threshold) bad++
+    }
+  }
+  return bad / (img.width * img.height)
+}
+
+/** Checks a converted recording (HEVC / WebM / GIF / MKV / MOV): right container and codecs, plays through, right length. */
+function validateOther(label, file, want) {
+  if (!check(`${label}: file saved`, fs.existsSync(file) && fs.statSync(file).size > 1024, file)) return
+  const i = info(file)
+  check(`${label}: container`, want.container.test(i), (/Input #0, [^,]+(?:,[^,]+)?/.exec(i) || [''])[0])
+  const video = /Stream #.*Video: (.*)/.exec(i)?.[1] ?? ''
+  check(`${label}: video codec`, want.video.test(video), video.slice(0, 80))
+  if (want.pix) check(`${label}: 4:2:0 picture`, /yuv420p|pal8|bgra/.test(video) || want.pix.test(video), video.slice(0, 80))
+  if (want.audio) check(`${label}: audio codec`, want.audio.test(/Stream #.*Audio: (.*)/.exec(i)?.[1] ?? ''), (/Stream #.*Audio: (.*)/.exec(i) || [,'none'])[1].slice(0, 60))
+  else check(`${label}: no audio track`, !/Stream #.*Audio:/.test(i))
+  const size = /, (\d{2,5})x(\d{2,5})/.exec(video)
+  if (want.width) check(`${label}: size ${want.width}×${want.height}`, !!size && +size[1] === want.width && +size[2] === want.height, size ? `${size[1]}×${size[2]}` : 'no size')
+  if (want.maxWidth) check(`${label}: picture no wider than ${want.maxWidth}`, !!size && +size[1] <= want.maxWidth, size ? size[1] : 'no size')
+  const dur = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(i)
+  const seconds = dur ? +dur[1] * 3600 + +dur[2] * 60 + +dur[3] : 0
+  check(`${label}: duration ${want.min}–${want.max}s`, seconds >= want.min && seconds <= want.max, `${seconds.toFixed(2)}s`)
+  const d = fullDecode(file)
+  check(`${label}: every frame decodes cleanly`, d.ok, d.stderr.slice(0, 200))
 }
 
 /** Opens the file with Windows' own media stack (the one Media Player and Photos use). */
@@ -203,8 +243,15 @@ async function shot(page, name) {
   await page.screenshot({ path: path.join(RESULTS, `${name}.png`) }).catch(() => {})
 }
 
+const shotDir = path.join(userData, 'shots-saved')
 const SETTINGS = (over) => ({
   outputDir: outDir,
+  shotDir,
+  shotFormat: 'png',
+  shotClipboard: false,
+  shotCursor: false,
+  shotDelay: 0,
+  videoFormat: 'mp4',
   systemAudio: isWin, // exercises the Windows loopback path; there's no sound device on CI so it may fail softly
   micEnabled: true,
   micDevice: 'default',
@@ -226,6 +273,7 @@ async function setSettings(main, over) {
 async function record(app, main, label, { seconds, region, checkAffinity }) {
   log(`--- recording: ${label} ---`)
   await setSettings(main, { mode: region ? 'region' : 'fullscreen' })
+  await main.click('#tab-record')
   await main.click('#record')
 
   if (region) {
@@ -304,6 +352,60 @@ async function record(app, main, label, { seconds, region, checkAffinity }) {
   return { editor, status: st, infoLine, barBounds, barVisible: barInfo.visible }
 }
 
+/** Starts a screenshot from the panel; returns the review window once the picture is ready. */
+async function snap(app, main, label, { region, delay = 0 } = {}) {
+  log(`--- screenshot: ${label} ---`)
+  await setSettings(main, { shotMode: region ? 'region' : 'fullscreen', shotDelay: delay })
+  await main.click('#tab-shot')
+  await main.click('#shoot')
+  let expected = null
+  if (region) {
+    const overlay = await waitForWindow(app, 'overlay.html')
+    await overlay.waitForLoadState('domcontentloaded')
+    await overlay.waitForFunction(() => { const i = document.getElementById('frozen'); return !!i && i.complete && i.naturalWidth > 0 }, null, { timeout: 30000 })
+      .then(() => check(`${label}: the screen is frozen behind the selection`, true))
+      .catch(() => check(`${label}: the screen is frozen behind the selection`, false, 'frozen picture never loaded'))
+    await sleep(400)
+    await shot(overlay, `${label}-overlay`)
+    const vp = await overlay.evaluate(() => ({ w: innerWidth, h: innerHeight, styled: document.body.classList.contains('shot') }))
+    check(`${label}: selection overlay has the screenshot style`, vp.styled)
+    const fr = region.fractions || { x1: 0.1, y1: 0.15, x2: 0.6, y2: 0.6 }
+    const x1 = Math.round(vp.w * fr.x1), y1 = Math.round(vp.h * fr.y1)
+    const x2 = Math.round(vp.w * fr.x2), y2 = Math.round(vp.h * fr.y2)
+    await overlay.mouse.move(x1, y1)
+    await overlay.mouse.down()
+    await overlay.mouse.move(x2, y2, { steps: 12 })
+    await overlay.mouse.up()
+    expected = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+  }
+  const review = await waitForWindow(app, 'shot.html', 60000)
+  await review.waitForFunction(() => document.body.dataset.ready === '1', null, { timeout: 30000 })
+  await shot(review, `${label}-review`)
+  return { review, expected }
+}
+
+const shotFile = (name, ext = 'png') => path.join(shotDir, `${name}.${ext}`)
+const idleNow = async (main) => (await main.evaluate(() => window.api.getStatus())).state === 'idle'
+const clipboardSize = (app) => app.evaluate(({ clipboard }) => clipboard.readImage().getSize())
+
+/** Drags across the canvas (fractions of its size) with the mouse. */
+async function dragOnCanvas(page, from, to) {
+  const b = await page.locator('#view').boundingBox()
+  await page.mouse.move(b.x + b.width * from[0], b.y + b.height * from[1])
+  await page.mouse.down()
+  await page.mouse.move(b.x + b.width * to[0], b.y + b.height * to[1], { steps: 8 })
+  await page.mouse.up()
+}
+
+async function cutFirstThird(editor) {
+  const tl = await editor.locator('#timeline').boundingBox()
+  await editor.mouse.move(tl.x + 2, tl.y + 20)
+  await editor.mouse.down()
+  await editor.mouse.move(tl.x + tl.width * 0.3, tl.y + 20, { steps: 6 })
+  await editor.mouse.up()
+  await editor.click('#delete-sel')
+}
+
 async function save(app, editor, name) {
   await editor.fill('#name', name)
   await editor.click('#save')
@@ -344,7 +446,7 @@ async function save(app, editor, name) {
 
     // A picture of the bare desktop (the app's own windows hidden), so a red desktop icon isn't mistaken for the app's UI.
     let desktop = null
-    if (isWin) {
+    if (isWin || process.platform === 'linux') {
       const shown = await app.evaluate(({ BrowserWindow }) => {
         const ids = BrowserWindow.getAllWindows().filter((w) => w.isVisible()).map((w) => w.id)
         for (const id of ids) BrowserWindow.fromId(id).hide()
@@ -355,6 +457,110 @@ async function save(app, editor, name) {
       await app.evaluate(({ BrowserWindow }, ids) => { for (const id of ids) BrowserWindow.fromId(id)?.show() }, shown)
       await sleep(500)
       log('bare desktop captured for comparison:', desktop ? `${desktop.w}×${desktop.h}` : 'not available')
+    }
+
+    // ---- Settings area: a fixed-height box that scrolls, with section shortcuts ----
+    {
+      log('--- panel layout ---')
+      check('Panel: has Record and Screenshot tabs, Record selected', (await main.getAttribute('#tab-record', 'aria-selected')) === 'true' && (await main.getAttribute('#tab-shot', 'aria-selected')) === 'false')
+      check('Panel: named Screen Snap', (await main.title()) === 'Screen Snap' && /Screen Snap/.test(await main.textContent('.brand h1')), await main.title())
+      await shot(main, 'panel-settings-closed')
+      await main.click('#settings-toggle')
+      await main.waitForSelector('#settings-wrap:not([hidden])')
+      await sleep(400)
+      const m = await main.evaluate(() => {
+        const b = document.getElementById('settings-body')
+        return { clientH: b.clientHeight, scrollH: b.scrollHeight, app: Math.ceil(document.getElementById('app').getBoundingClientRect().height),
+          fadeHidden: document.getElementById('fade').classList.contains('hide'), win: window.innerHeight }
+      })
+      check('Settings: scroll inside a fixed-height area instead of growing the window', m.scrollH > m.clientH + 100 && m.clientH <= 250, JSON.stringify(m))
+      check('Settings open: the whole window stays compact (≤ 700 px)', m.app <= 700, `${m.app}px`)
+      check('Settings: "scroll for more" shows while there is more below', !m.fadeHidden)
+      await shot(main, 'panel-settings-open')
+      await main.click('#jump button[data-target=g-keys]')
+      await sleep(1200)
+      const k = await main.evaluate(() => {
+        const b = document.getElementById('settings-body')
+        const g = document.getElementById('g-keys').getBoundingClientRect()
+        const r = b.getBoundingClientRect()
+        return { visible: g.top < r.bottom && g.bottom > r.top, atEnd: b.scrollTop + b.clientHeight >= b.scrollHeight - 6,
+          active: document.querySelector('#jump button.on')?.dataset.target, fadeHidden: document.getElementById('fade').classList.contains('hide') }
+      })
+      check('Settings: tapping a section name scrolls to it and highlights it', k.visible && k.active === 'g-keys', JSON.stringify(k))
+      const bottom = await main.evaluate(async () => {
+        const b = document.getElementById('settings-body')
+        b.scrollTop = b.scrollHeight
+        await new Promise((r) => setTimeout(r, 200))
+        return { atEnd: b.scrollTop + b.clientHeight >= b.scrollHeight - 6, fadeHidden: document.getElementById('fade').classList.contains('hide') }
+      })
+      check('Settings: the fade goes away at the very bottom', bottom.fadeHidden && bottom.atEnd, JSON.stringify(bottom))
+      await shot(main, 'panel-settings-bottom')
+      const reach = await main.evaluate(async () => {
+        const b = document.getElementById('settings-body')
+        const seen = []
+        for (const id of ['g-rec', 'g-video', 'g-audio', 'g-saving', 'g-shots', 'g-keys']) {
+          const g = document.getElementById(id)
+          b.scrollTop = g.offsetTop - 50
+          await new Promise((r) => setTimeout(r, 50))
+          const gr = g.getBoundingClientRect(), br = b.getBoundingClientRect()
+          seen.push(gr.top < br.bottom && gr.bottom > br.top)
+        }
+        return seen
+      })
+      check('Settings: every section can be reached by scrolling', reach.every(Boolean), reach.join(','))
+
+      // Shortcuts: safe defaults, and changeable
+      log('--- shortcuts ---')
+      const registered = (acc) => app.evaluate(({ globalShortcut }, a) => globalShortcut.isRegistered(a), acc)
+      const st = await main.evaluate(() => window.api.getSettings())
+      const caps0 = await main.evaluate(() => window.api.getCapabilities())
+      check('Shortcuts: record and screenshot have different default keys', !!st.hotkeyRecord && !!st.hotkeyShot && st.hotkeyRecord !== st.hotkeyShot, `${st.hotkeyRecord} / ${st.hotkeyShot}`)
+      check('Shortcuts: both defaults are registered', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)), `${caps0.hotkey} / ${caps0.shotHotkey}`)
+      for (const acc of ['Control+Shift+R', 'CommandOrControl+Shift+R', 'Command+Shift+R']) {
+        check(`Shortcuts: the browser's hard-refresh key (${acc}) is NOT taken`, !(await registered(acc)))
+      }
+      for (const acc of ['Control+Shift+I', 'CommandOrControl+Shift+I', 'Command+Alt+I']) {
+        check(`Shortcuts: the browser's developer-tools key (${acc}) is NOT taken`, !(await registered(acc)))
+      }
+      const labelOk = (await main.textContent('#key-record')).includes(caps0.hotkey) && (await main.textContent('#key-shot')).includes(caps0.shotHotkey)
+      check('Shortcuts: settings show the current keys', labelOk, `${await main.textContent('#key-record')} | ${await main.textContent('#key-shot')}`)
+
+      await main.click('#key-record')
+      check('Shortcuts: clicking a key box waits for the new keys', /Press the new keys/.test(await main.textContent('#key-record')))
+      await main.keyboard.press('KeyQ')
+      check('Shortcuts: a bare letter is refused with an explanation', /Use Ctrl, Alt or Shift/.test(await main.textContent('#key-hint')) && /Press the new keys/.test(await main.textContent('#key-record')))
+      await main.keyboard.press('Control+Alt+KeyQ')
+      await sleep(500)
+      let now = await main.evaluate(() => window.api.getSettings())
+      check('Shortcuts: a new key combination is saved', now.hotkeyRecord === 'Control+Alt+Q', now.hotkeyRecord)
+      check('Shortcuts: the new keys work and the old ones are released', (await registered('Control+Alt+Q')) && !(await registered(st.hotkeyRecord)))
+      await main.click('#key-record')
+      await main.keyboard.press('Escape')
+      check('Shortcuts: Escape cancels without changing anything', (await main.evaluate(() => window.api.getSettings())).hotkeyRecord === 'Control+Alt+Q')
+      await main.click('#key-record')
+      await main.keyboard.press(st.hotkeyShot.replace(/\+([A-Z])$/, '+Key$1'))
+      await sleep(300)
+      check('Shortcuts: the same keys can\'t be used for both actions', /already used for the other action/.test(await main.textContent('#key-hint')) && (await main.evaluate(() => window.api.getSettings())).hotkeyRecord === 'Control+Alt+Q')
+      await main.keyboard.press('Escape')
+      // A key another app already owns is reported, not silently ignored.
+      await app.evaluate(({ globalShortcut }) => {
+        const real = globalShortcut.register.bind(globalShortcut)
+        globalShortcut.register = (accelerator, cb) => (accelerator === 'Control+Alt+W' ? false : real(accelerator, cb))
+      })
+      await main.click('#key-shot')
+      await main.keyboard.press('Control+Alt+KeyW')
+      await sleep(600)
+      const clash = await main.evaluate(async () => ({ caps: await window.api.getCapabilities(), s: await window.api.getSettings() }))
+      check('Shortcuts: a key used by another app shows "unavailable"', clash.s.hotkeyShot === 'Control+Alt+W' && clash.caps.shotHotkey === null && /unavailable/.test(await main.textContent('#key-shot')), await main.textContent('#key-shot'))
+      await main.click('#key-shot-off')
+      await sleep(500)
+      now = await main.evaluate(() => window.api.getSettings())
+      const capsOff = await main.evaluate(() => window.api.getCapabilities())
+      check('Shortcuts: a shortcut can be turned off', now.hotkeyShot === '' && capsOff.shotHotkey === null && !(await registered('Control+Alt+W')) && (await main.textContent('#key-shot')).trim() === 'Off')
+      await main.evaluate((d) => window.api.setSettings({ hotkeyRecord: d.r, hotkeyShot: d.s }), { r: st.hotkeyRecord, s: st.hotkeyShot })
+      await sleep(400)
+      check('Shortcuts: defaults come back', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)) && !(await registered('Control+Alt+Q')))
+      await main.click('#settings-toggle')
     }
 
     // 0) Prove the Windows playback check itself works: a normal 4:2:0 file must pass; the 4:4:4 format
@@ -481,16 +687,305 @@ async function save(app, editor, name) {
       check('Discard: nothing was saved to the output folder', !fs.existsSync(path.join(outDir, 'Recording discard.mp4')))
     }
 
-    // 9) The global hotkey is registered
+    // 9) Other save formats: the default stays MP4 · H.264; everything else warns, and really converts
     {
-      const hk = await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('CommandOrControl+Shift+R'))
-      check('Global hotkey (Ctrl/Cmd+Shift+R) is registered', hk === true)
+      log('--- save formats ---')
+      const caps = await main.evaluate(() => window.api.getCapabilities())
+      log('video formats this FFmpeg can write:', caps.videoFormats.join(', '), '| images:', caps.imageFormats.join(', '))
+      for (const f of ['mp4', 'mkv', 'mov', 'gif']) check(`Format "${f}" is available`, caps.videoFormats.includes(f))
+      for (const f of ['hevc', 'webm']) if (!caps.videoFormats.includes(f)) warn(`Format "${f}" not offered by this FFmpeg build`, 'skipped')
+      const W = evenFloor(display.w), H = evenFloor(display.h)
+
+      // A) default is MP4 · H.264 and shows no warning; a different pick shows one; "Use MP4" undoes it
+      {
+        const { editor } = await record(app, main, 'fmt-default', { seconds: 3 })
+        const options = await editor.$$eval('#format option', (o) => o.map((x) => x.value))
+        check('Format: MP4 · H.264 is first in the list and selected', options[0] === 'mp4' && (await editor.inputValue('#format')) === 'mp4', options.join(','))
+        check('Format: the recommended format shows no warning', await editor.isHidden('#format-notice'))
+        await editor.selectOption('#format', 'mkv')
+        const text = await editor.textContent('#format-notice')
+        check('Format: picking another format shows a risk notice', (await editor.isVisible('#format-notice')) && /MKV/.test(text) && /not sure/.test(text), text.slice(0, 120))
+        check('Format: the file extension follows the format', (await editor.textContent('#ext')) === '.mkv')
+        await editor.selectOption('#format', 'gif')
+        check('Format: GIF gets the strongest warning', /\bbad\b/.test(await editor.getAttribute('#format-notice', 'class')) && /GIF loses a lot/.test(await editor.textContent('#format-notice')))
+        await editor.click('#use-default')
+        check('Format: "Use MP4 (recommended)" puts it back and hides the notice', (await editor.inputValue('#format')) === 'mp4' && (await editor.isHidden('#format-notice')) && (await editor.textContent('#ext')) === '.mp4')
+        await editor.selectOption('#format', 'mkv')
+        await editor.fill('#name', 'e2e-format-mkv')
+        await editor.click('#save')
+        await waitGone(app, 'editor.html', 180000)
+        validateOther('MKV (re-wrapped, not re-encoded)', path.join(outDir, 'e2e-format-mkv.mkv'),
+          { container: /matroska/, video: /^h264 \(High\)/, audio: /aac/, width: W, height: H, min: 2, max: 12 })
+      }
+
+      // B) the default can be changed in Settings; MOV with a trim goes through the re-encode path
+      {
+        await main.click('#tab-record')
+        await main.click('#settings-toggle')
+        await main.waitForSelector('#settings-wrap:not([hidden])')
+        await main.selectOption('#video-format', 'mov')
+        await sleep(300)
+        const hint = await main.textContent('#video-format-hint')
+        check('Settings: choosing a non-default video format shows its warning', /MOV may not open everywhere/.test(hint), hint.slice(0, 100))
+        check('Settings: default video format is saved', (await main.evaluate(() => window.api.getSettings())).videoFormat === 'mov')
+        await main.click('#settings-toggle')
+        await setSettings(main, { videoFormat: 'mov' }) // the helper rewrites every setting, so keep the one just chosen in the UI
+        const { editor } = await record(app, main, 'fmt-mov', { seconds: 4 })
+        check('Format: the Settings default is pre-selected in the review window', (await editor.inputValue('#format')) === 'mov' && (await editor.textContent('#ext')) === '.mov')
+        await cutFirstThird(editor)
+        await editor.fill('#name', 'e2e-format-mov')
+        await editor.click('#save')
+        await waitGone(app, 'editor.html', 180000)
+        validateOther('MOV (trimmed, re-encoded)', path.join(outDir, 'e2e-format-mov.mov'),
+          { container: /mov,mp4/, video: /^h264 \(High\)/, audio: /aac/, width: W, height: H, min: 1, max: 5 })
+        check('MOV: starts instantly (moov before mdat)', isFaststart(path.join(outDir, 'e2e-format-mov.mov')))
+        await setSettings(main, { videoFormat: 'mp4' })
+      }
+
+      // C) H.265, WebM and GIF always convert
+      const converting = [
+        ['hevc', 'H.265', { container: /mov,mp4/, video: /^hevc/, audio: /aac/, width: W, height: H, min: 2, max: 12 }, 'mp4'],
+        ['webm', 'WebM VP9', { container: /matroska,webm/, video: /^vp9/, audio: /opus/, width: W, height: H, min: 2, max: 12 }, 'webm'],
+        ['gif', 'GIF', { container: /gif/, video: /^gif/, audio: null, maxWidth: 1280, min: 2, max: 12 }, 'gif']
+      ]
+      for (const [id, name, want, ext] of converting) {
+        if (!caps.videoFormats.includes(id)) continue
+        const { editor } = await record(app, main, `fmt-${id}`, { seconds: 3 })
+        await editor.selectOption('#format', id)
+        check(`Format: ${name} shows its notice`, await editor.isVisible('#format-notice'), (await editor.textContent('#format-notice')).slice(0, 100))
+        await editor.fill('#name', `e2e-format-${id}`)
+        await editor.click('#save')
+        await waitGone(app, 'editor.html', 300000)
+        validateOther(`${name} (converted)`, path.join(outDir, `e2e-format-${id}.${ext}`), want)
+      }
+    }
+
+    // 11) Screenshots
+    {
+      log('--- screenshots ---')
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      fs.mkdirSync(shotDir, { recursive: true })
+      const imgDims = (img) => `${img.width}×${img.height}`
+
+      // A) whole screen → exact pixels, no app UI in it, nothing saved until approved
+      {
+        const { review } = await snap(app, main, 'shot-whole')
+        const infoLine = await review.textContent('#info')
+        check('Screenshot: the picture is the full screen at real pixel size', infoLine.startsWith(`${display.w} × ${display.h} px`), infoLine)
+        check('Screenshot: back to idle once the picture is taken', await idleNow(main))
+        check('Screenshot: nothing is saved before you approve', fs.readdirSync(shotDir).length === 0, fs.readdirSync(shotDir).join(','))
+        check('Screenshot: PNG is selected and described as lossless, with no warning', (await review.inputValue('#format')) === 'png' && /\binfo\b/.test(await review.getAttribute('#format-notice', 'class')) && (await review.isHidden('#use-default')))
+        const defName = await review.inputValue('#name')
+        check('Screenshot: default name is "Screenshot <date> <time>"', /^Screenshot \d{4}-\d\d-\d\d \d\d-\d\d-\d\d$/.test(defName), defName)
+        await review.fill('#name', 'e2e-shot-whole')
+        await review.click('#save')
+        await waitGone(app, 'shot.html', 60000)
+        const f = shotFile('e2e-shot-whole')
+        check('Screenshot: file saved in the screenshots folder', fs.existsSync(f), f)
+        if (fs.existsSync(f)) {
+          const img = decodeImage(f)
+          check('Screenshot: saved as PNG at the full screen size', img.codec === 'png' && img.width === display.w && img.height === display.h, imgDims(img))
+          if (desktop) {
+            const d = diffFromDesktop(img, desktop, 0, 0)
+            check('Screenshot: none of the app\'s own windows are in the picture', d < 0.02, `${(d * 100).toFixed(2)}% of pixels differ from the bare desktop`)
+          }
+        }
+        await main.waitForSelector('#last-shot:not([hidden])', { timeout: 10000 }).then(() => check('Screenshot: "Last saved" shows it in the panel', true), () => check('Screenshot: "Last saved" shows it in the panel', false))
+      }
+
+      // B) select a region on the frozen screen
+      {
+        const region = { fractions: { x1: 0.1, y1: 0.15, x2: 0.6, y2: 0.6 } }
+        const { review, expected: e } = await snap(app, main, 'shot-region', { region })
+        const wantW = Math.round(e.w * display.f), wantH = Math.round(e.h * display.f)
+        const infoLine = await review.textContent('#info')
+        check('Screenshot: region picture is exactly the selected size', infoLine.startsWith(`${wantW} × ${wantH} px`), `${infoLine} (wanted ${wantW}×${wantH})`)
+        await review.fill('#name', 'e2e-shot-region')
+        await review.click('#save')
+        await waitGone(app, 'shot.html', 60000)
+        const img = decodeImage(shotFile('e2e-shot-region'))
+        check('Screenshot: region PNG has the selected pixel size', img.width === wantW && img.height === wantH, imgDims(img))
+        if (desktop) {
+          const d = diffFromDesktop(img, desktop, Math.round(e.x * display.f), Math.round(e.y * display.f))
+          check('Screenshot: the region matches that part of the real screen', d < 0.02, `${(d * 100).toFixed(2)}% of pixels differ`)
+        }
+      }
+
+      // C) draw, undo/redo, crop → everything is burned into the saved picture
+      {
+        const { review, expected: ed } = await snap(app, main, 'shot-edit', { region: { fractions: { x1: 0.05, y1: 0.05, x2: 0.85, y2: 0.85 } } })
+        const before = await review.textContent('#info')
+        const dims = /(\d+) × (\d+) px/.exec(before)
+        await review.click('#t-pen')
+        check('Screenshot editor: Pen tool is selected', (await review.getAttribute('#t-pen', 'aria-pressed')) === 'true')
+        await dragOnCanvas(review, [0.2, 0.2], [0.6, 0.4])
+        check('Screenshot editor: drawing marks the picture as edited', /edited/.test(await review.textContent('#info')) && !(await review.isDisabled('#undo')))
+        await review.click('#t-arrow')
+        await dragOnCanvas(review, [0.25, 0.6], [0.55, 0.5])
+        await review.click('#t-hl')
+        await dragOnCanvas(review, [0.15, 0.3], [0.5, 0.3])
+        await review.click('#t-text')
+        const cv = await review.locator('#view').boundingBox()
+        await review.mouse.click(cv.x + cv.width * 0.3, cv.y + cv.height * 0.12)
+        await review.keyboard.type('Hello')
+        await review.keyboard.press('Enter')
+        await review.click('#undo')
+        check('Screenshot editor: Undo takes back the last mark, Redo restores it', !(await review.isDisabled('#redo')))
+        await review.click('#redo')
+        check('Screenshot editor: Redo is used up again', await review.isDisabled('#redo'))
+        // crop: pull the bottom-right corner in
+        await review.click('#t-crop')
+        check('Screenshot editor: Crop shows its own buttons', await review.isVisible('#crop-apply'))
+        const stable = await review.evaluate(async () => {
+          const r = () => document.getElementById('view').getBoundingClientRect().width
+          const a = r()
+          await new Promise((res) => setTimeout(res, 400))
+          return Math.abs(a - r()) < 1
+        })
+        check('Screenshot editor: starting a crop does not make the picture jump around', stable)
+        const h = await review.locator('#crop-box i[data-h=se]').boundingBox()
+        await review.mouse.move(h.x + h.width / 2, h.y + h.height / 2)
+        await review.mouse.down()
+        await review.mouse.move(h.x + h.width / 2 - cv.width * 0.2, h.y + h.height / 2 - cv.height * 0.2, { steps: 6 })
+        await review.mouse.up()
+        await review.click('#crop-apply')
+        const after = await review.textContent('#info')
+        const nd = /(\d+) × (\d+) px/.exec(after)
+        check('Screenshot editor: Crop makes the picture smaller', +nd[1] < +dims[1] * 0.9 && +nd[2] < +dims[2] * 0.9, `${dims[1]}×${dims[2]} → ${nd[1]}×${nd[2]}`)
+        await review.fill('#name', 'e2e-shot-edit')
+        await review.click('#save')
+        await waitGone(app, 'shot.html', 60000)
+        const img = decodeImage(shotFile('e2e-shot-edit'))
+        check('Screenshot editor: saved picture has the cropped size', img.width === +nd[1] && img.height === +nd[2], `${imgDims(img)} (wanted ${nd[1]}×${nd[2]})`)
+        // red marks (pen + arrow) that were not already on the bare desktop; the crop kept the top-left corner of the region
+        let red = 0
+        const isRed = (b, i) => Math.abs(b[i] - 239) < 30 && Math.abs(b[i + 1] - 68) < 30 && Math.abs(b[i + 2] - 68) < 30
+        const ox = Math.round(ed.x * display.f), oy = Math.round(ed.y * display.f)
+        for (let y = 0; y < img.height; y++) {
+          for (let x = 0; x < img.width; x++) {
+            if (!isRed(img.rgb, (y * img.width + x) * 3)) continue
+            if (desktop && isRed(desktop.buf, ((y + oy) * desktop.w + (x + ox)) * 3)) continue
+            red++
+          }
+        }
+        check('Screenshot editor: pen and arrow marks are in the saved picture', red > 800, `${red} red pixels`)
+      }
+
+      // D) other image formats warn, and really convert
+      for (const [id, ext, codec, maxDiff] of [['webp', 'webp', 'webp', 0.02], ['jpeg', 'jpg', 'mjpeg', 0.03]]) {
+        if (!(await main.evaluate(() => window.api.getCapabilities())).imageFormats.includes(id)) { warn(`Image format "${id}" not offered by this FFmpeg build`, 'skipped'); continue }
+        const { review } = await snap(app, main, `shot-${id}`)
+        await review.selectOption('#format', id)
+        const note = await review.textContent('#format-notice')
+        check(`Screenshot: ${id.toUpperCase()} shows a risk notice with a way back to PNG`, /not sure/.test(note) && (await review.isVisible('#use-default')) && /\bnotice\b/.test(await review.getAttribute('#format-notice', 'class')), note.slice(0, 100))
+        check(`Screenshot: file extension follows the format`, (await review.textContent('#ext')) === `.${ext}`)
+        if (id === 'webp') {
+          await review.click('#use-default')
+          check('Screenshot: "Use PNG (recommended)" puts it back', (await review.inputValue('#format')) === 'png' && (await review.isHidden('#use-default')))
+          await review.selectOption('#format', id)
+        }
+        await review.fill('#name', `e2e-shot-${id}`)
+        await review.click('#save')
+        await waitGone(app, 'shot.html', 60000)
+        const f = shotFile(`e2e-shot-${id}`, ext)
+        check(`Screenshot: ${id.toUpperCase()} file saved`, fs.existsSync(f), f)
+        if (fs.existsSync(f)) {
+          const img = decodeImage(f)
+          check(`Screenshot: ${id.toUpperCase()} has the full screen size and the right codec`, img.codec === codec && img.width === display.w && img.height === display.h, `${img.codec} ${imgDims(img)}`)
+          if (desktop) {
+            const d = diffFromDesktop(img, desktop, 0, 0)
+            check(`Screenshot: ${id.toUpperCase()} matches the real screen`, d < maxDiff, `${(d * 100).toFixed(2)}% differ`)
+          }
+        }
+      }
+
+      // E) clipboard: automatic when switched on, and the Copy button
+      {
+        await setSettings(main, { shotClipboard: true })
+        await app.evaluate(({ clipboard }) => clipboard.clear())
+        const { review } = await snap(app, main, 'shot-clipboard')
+        const auto = await clipboardSize(app)
+        check('Screenshot: "copy as soon as I capture" puts the picture on the clipboard', auto.width === display.w && auto.height === display.h, `${auto.width}×${auto.height}`)
+        await setSettings(main, { shotClipboard: false })
+        await app.evaluate(({ clipboard }) => clipboard.clear())
+        await review.click('#copy')
+        await sleep(400)
+        const manual = await clipboardSize(app)
+        check('Screenshot: the Copy button copies the full-quality picture', manual.width === display.w && manual.height === display.h, `${manual.width}×${manual.height}`)
+        const countBefore = fs.readdirSync(shotDir).length
+        await review.click('#discard', { noWaitAfter: true }).catch(() => {})
+        await waitGone(app, 'shot.html', 30000)
+        check('Screenshot: Discard saves nothing', fs.readdirSync(shotDir).length === countBefore)
+        check('Screenshot: Discard returns to idle', await idleNow(main))
+      }
+
+      // F) Save as… and discarding an edited picture
+      {
+        const target = path.join(userData, 'elsewhere', 'picked.png')
+        await app.evaluate(({ dialog }, t) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: t }) }, target)
+        const { review } = await snap(app, main, 'shot-saveas')
+        await review.fill('#name', 'ignored-name')
+        await review.click('#save-as')
+        await waitGone(app, 'shot.html', 60000)
+        check('Screenshot: Save as… writes to the chosen path', fs.existsSync(target) && decodeImage(target).width === display.w, target)
+        check('Screenshot: Save as… did not also save to the default folder', !fs.existsSync(shotFile('ignored-name')))
+
+        const { review: r2 } = await snap(app, main, 'shot-discard-edited')
+        await r2.click('#t-pen')
+        await dragOnCanvas(r2, [0.3, 0.3], [0.5, 0.5])
+        const count = fs.readdirSync(shotDir).length
+        await r2.click('#discard', { noWaitAfter: true }).catch(() => {})
+        await waitGone(app, 'shot.html', 30000)
+        check('Screenshot: discarding an edited picture (after the confirm) saves nothing', fs.readdirSync(shotDir).length === count)
+      }
+
+      // G) Esc cancels the selection and brings the panel back
+      {
+        log('--- screenshot: cancel ---')
+        await setSettings(main, { shotMode: 'region', shotDelay: 0 })
+        await main.click('#tab-shot')
+        await main.click('#shoot')
+        const overlay = await waitForWindow(app, 'overlay.html')
+        await overlay.waitForLoadState('domcontentloaded')
+        await sleep(500)
+        await overlay.keyboard.press('Escape').catch(() => {})
+        await waitGone(app, 'overlay.html', 15000)
+        await sleep(500)
+        const panel = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.isVisible())
+        check('Screenshot: Esc cancels, the panel comes back and no review window opens', (await idleNow(main)) && panel === true && !app.windows().some((w) => !w.isClosed() && w.url().includes('shot.html')))
+      }
+
+      // H) delay: a countdown, then the picture — without the countdown in it; and it can be cancelled
+      {
+        const t0 = Date.now()
+        const { review } = await snap(app, main, 'shot-delay', { delay: 3 })
+        const took = (Date.now() - t0) / 1000
+        check('Screenshot: the delay waits before capturing', took >= 2.5, `${took.toFixed(1)}s`)
+        await review.fill('#name', 'e2e-shot-delay')
+        await review.click('#save')
+        await waitGone(app, 'shot.html', 60000)
+        if (desktop) {
+          const d = diffFromDesktop(decodeImage(shotFile('e2e-shot-delay')), desktop, 0, 0)
+          check('Screenshot: the countdown is not in the picture', d < 0.02, `${(d * 100).toFixed(2)}% differ`)
+        }
+        await setSettings(main, { shotDelay: 5, shotMode: 'fullscreen' })
+        await main.click('#shoot')
+        await waitForWindow(app, 'countdown.html', 15000)
+        check('Screenshot: status shows it is working on a screenshot', (await main.evaluate(() => window.api.getStatus())).state === 'snapping')
+        await main.evaluate(() => window.api.takeScreenshot())
+        await waitGone(app, 'countdown.html', 15000)
+        await sleep(600)
+        check('Screenshot: the shortcut/button again cancels a waiting screenshot', (await idleNow(main)) && !app.windows().some((w) => !w.isClosed() && w.url().includes('shot.html')))
+        await setSettings(main, { shotDelay: 0 })
+        await main.click('#tab-record')
+      }
     }
 
     // 10) Cancel during the countdown leaves nothing behind
     {
       log('--- cancel during countdown ---')
       await setSettings(main, { countdown: 5, mode: 'fullscreen' })
+      await main.click('#tab-record')
       await main.click('#record')
       const bar = await waitForWindow(app, 'bar.html')
       await bar.waitForSelector('#cancel:not([hidden])', { timeout: 15000 })
