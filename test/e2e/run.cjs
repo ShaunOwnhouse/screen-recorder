@@ -422,7 +422,8 @@ async function save(app, editor, name) {
   // A tiny update feed on this computer (Windows only: Linux runs from source, which never self-updates).
   let feedVersion = require(path.join(ROOT, 'package.json')).version
   const feedServer = http.createServer((req, res) => {
-    if (/latest\.yml$/.test(req.url)) {
+    // electron-updater asks for latest.yml?noCache=<token>, so ignore the query string
+    if (/latest\.yml$/.test(req.url.split('?')[0])) {
       res.writeHead(200, { 'Content-Type': 'text/yaml' })
       res.end(`version: ${feedVersion}\nfiles:\n  - url: Screen-Snap-Setup-${feedVersion}.exe\n    sha512: AAAA\n    size: 1\npath: Screen-Snap-Setup-${feedVersion}.exe\nsha512: AAAA\nreleaseDate: '2026-01-01T00:00:00.000Z'\n`)
     } else {
