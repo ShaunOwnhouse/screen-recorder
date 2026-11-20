@@ -18,6 +18,7 @@ import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
 import type { OverlayResult } from '../shared/api.ts'
 import type { Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
+import { awayPlacement, BAR_HEIGHT, BAR_WIDTH, barPlacement, overlaps } from './placement.ts'
 
 const HOTKEY = 'CommandOrControl+Shift+R'
 const RESOURCES = join(__dirname, '../../resources')
@@ -346,49 +347,10 @@ function runCountdown(target: Target, seconds: number, note?: string): Promise<b
   })
 }
 
-const BAR_WIDTH = 300
-const BAR_HEIGHT = 44
-
-const overlaps = (a: Rect, b: Rect, pad: number): boolean =>
-  a.x < b.x + b.width + pad && a.x + a.width + pad > b.x && a.y < b.y + b.height + pad && a.y + a.height + pad > b.y
-
-/**
- * Where the recording bar goes. Content protection should hide it from the video, but the surest way
- * to keep it out of a recording is to not put it in the recorded area at all: on another screen when
- * there is one, or beside the selected region.
- */
-export function barPlacement(target: Target): { display: Display; x: number; y: number } {
-  const gap = 12
-  const rec = target.rect
-  const home = target.display
-  const whole = rec.width >= home.bounds.width - 2 && rec.height >= home.bounds.height - 2
-  const other = screen.getAllDisplays().find((d) => d.id !== home.id)
-  const topCentre = (d: Display): { display: Display; x: number; y: number } => ({
-    display: d,
-    x: Math.round(d.workArea.x + (d.workArea.width - BAR_WIDTH) / 2),
-    y: d.workArea.y + gap
-  })
-  if (whole) return other ? topCentre(other) : topCentre(home)
-
-  const a = home.workArea
-  const cx = Math.round(a.x + (a.width - BAR_WIDTH) / 2)
-  const candidates = [
-    { x: cx, y: a.y + gap },
-    { x: cx, y: a.y + a.height - BAR_HEIGHT - gap },
-    { x: a.x + gap, y: a.y + gap },
-    { x: a.x + a.width - BAR_WIDTH - gap, y: a.y + gap },
-    { x: a.x + gap, y: a.y + a.height - BAR_HEIGHT - gap },
-    { x: a.x + a.width - BAR_WIDTH - gap, y: a.y + a.height - BAR_HEIGHT - gap }
-  ]
-  const free = candidates.find((c) => !overlaps({ x: c.x, y: c.y, width: BAR_WIDTH, height: BAR_HEIGHT }, rec, 8))
-  if (free) return { display: home, ...free }
-  return other ? topCentre(other) : { display: home, ...candidates[0] }
-}
-
 /** Small floating timer + Stop button, excluded from the recording like the Snipping Tool's bar. */
 function showBar(target: Target): void {
   closeBar()
-  const place = barPlacement(target)
+  const place = barPlacement(target.display, target.rect, screen.getAllDisplays())
   bar = new BrowserWindow({
     x: place.x,
     y: place.y,
@@ -663,13 +625,22 @@ async function startRecording(): Promise<void> {
 
   showBar(target)
   recorder.update({ state: 'countdown', countdown: undefined })
-  const barNote = `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
-  // The check runs while the countdown plays; the moment it sees the bar in the capture the bar is hidden.
+  const hideNote = `Stop with ${hotkeyLabel()} or the tray icon. The bar hides while recording so it can't appear in your video.`
+  let barMovedAway = false
+  // The timer sits on the screen being recorded. The check runs while the countdown plays; if the bar ever shows
+  // up in the capture it moves to the other screen (or hides, with only one screen) so it can't be in the video.
   const check =
     bar && overlaps(bar.getBounds(), target.rect, 0)
       ? barLeaksIntoCapture(bar, attemptsFor, () => {
-          bar?.hide()
-          setCountdownNote(barNote)
+          const away = bar ? awayPlacement(display, screen.getAllDisplays()) : null
+          if (bar && away) {
+            bar.setPosition(away.x, away.y)
+            barMovedAway = true
+            setCountdownNote('The timer is on your other screen so it can’t appear in your video.')
+          } else {
+            bar?.hide()
+            setCountdownNote(hideNote)
+          }
         })
       : Promise.resolve(false)
 
@@ -682,7 +653,7 @@ async function startRecording(): Promise<void> {
     restorePanel()
     return
   }
-  if (hideBar) bar?.hide()
+  if (hideBar && !barMovedAway) bar?.hide()
   // Capture starts now; FFmpeg's start-up check takes a moment before the state flips to 'recording'.
   recorder.update({ state: 'countdown', countdown: 0 })
 
