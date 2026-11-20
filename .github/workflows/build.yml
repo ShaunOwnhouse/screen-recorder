@@ -16,7 +16,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: write
     steps:
+      # Finished installers are published to ONE fixed page (Releases → "Latest build"). Release files don't use the Actions
+      # artifact storage, and the link never changes.
+      - name: Make sure the Latest build release exists
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest-build --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create latest-build --repo "$GITHUB_REPOSITORY" --target "${{ github.sha }}" --prerelease \
+              --title "Latest build" --notes "Newest build of Screen Snap from the main branch."
+
       - name: Delete artifacts from earlier runs
         continue-on-error: true
         env:
@@ -33,6 +46,8 @@ jobs:
     needs: tidy
     if: ${{ !cancelled() }}
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -93,8 +108,23 @@ jobs:
         shell: bash
         run: node test/e2e/run.cjs "dist/win-unpacked/Screen Snap.exe"
 
+      # Only reached when the end-to-end test above passed. Publishes the installers the test just ran.
+      - name: Publish the Windows build to the Latest build release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload latest-build dist/*.exe --clobber --repo "$GITHUB_REPOSITORY"
+          CHECKS=$(node -e "const r=require('./test-results/e2e/results.json');console.log(r.filter(x=>x.ok).length+'/'+r.length)")
+          gh release edit latest-build --repo "$GITHUB_REPOSITORY" --notes "Newest build of Screen Snap (commit ${GITHUB_SHA:0:7}).
+
+          **Windows:** the exact installers attached here were run through an end-to-end test on a real Windows machine (record, review, edit, save in every format, screenshots, shortcuts): $CHECKS checks passed.
+          **macOS:** the \`.dmg\` files are built but not yet tested on a Mac."
+
       - name: Upload end-to-end results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: e2e-windows
@@ -103,6 +133,7 @@ jobs:
           retention-days: 2
 
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: screen-snap-windows
           path: dist/*.exe
@@ -159,6 +190,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         if: env.STORE_READY == '1'
+        continue-on-error: true
         with:
           name: screen-snap-microsoft-store
           path: dist/*.appx
@@ -169,6 +201,8 @@ jobs:
     needs: tidy
     if: ${{ !cancelled() }}
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -221,7 +255,14 @@ jobs:
           file node_modules/ffmpeg-static/ffmpeg | tee /dev/stderr | grep -q x86_64
           npx electron-builder --mac --x64 --publish never
 
+      - name: Publish the macOS build to the Latest build release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload latest-build dist/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
+
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: screen-snap-mac
           path: dist/*.dmg
