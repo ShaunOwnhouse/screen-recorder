@@ -1,3 +1,4 @@
+import type { Project } from './project.ts'
 export type Quality = 'high' | 'veryhigh' | 'maximum' | 'studio' | 'lossless'
 export type CaptureMode = 'fullscreen' | 'region'
 export type Backend = 'auto' | 'ddagrab' | 'gdigrab'
@@ -41,6 +42,8 @@ export interface Settings {
   hotkeyRecord: string
   hotkeyShot: string
   hotkeyPause: string
+  /** The person's own colours and fonts for the editor. */
+  brand: Brand
   /** Download and install new versions in the background (the app still asks before restarting). */
   autoUpdate: boolean
 }
@@ -131,6 +134,32 @@ export interface RecordingMeta {
   hasAudio: boolean
 }
 
+export interface BrandFont {
+  /** What it is called in the font menus. */
+  name: string
+  /** File name inside the app's fonts folder. */
+  file: string
+}
+
+/** The person's own colours and fonts, offered everywhere something can be coloured or written. */
+export interface Brand {
+  colors: string[]
+  fonts: BrandFont[]
+}
+
+/** A file added to the video (or the music file), as the editor sees it. */
+export interface MediaInfo {
+  id: string
+  name: string
+  kind: 'video' | 'image' | 'audio'
+  duration: number
+  width: number
+  height: number
+  hasAudio: boolean
+  /** Where the editor's player can load it from. */
+  url: string
+}
+
 export interface EditorSource {
   name: string
   url: string
@@ -141,12 +170,24 @@ export interface EditorSource {
   /** Formats this computer can write, and the one chosen as default in Settings. */
   formats: VideoFormat[]
   format: VideoFormat
+  brand: Brand
+}
+
+/** A picture the editor drew (a comment, an arrow, a title card…) for FFmpeg to lay over the video. */
+export interface DrawnPicture {
+  /** The overlay's id, or `card:<clip id>` for a title card. */
+  key: string
+  /** Where it goes, in pixels of the finished video. */
+  x: number
+  y: number
+  width: number
+  height: number
+  png: Uint8Array
 }
 
 export interface SaveRequest {
-  segments: Segment[]
-  /** Normalised 0..1 crop of the frame, or null for the full frame. */
-  crop: Rect | null
+  project: Project
+  pictures: DrawnPicture[]
   fileName: string
   saveAs: boolean
   /** For 4:4:4 recordings: convert to 4:2:0 so Windows' player, phones and the web can play it. */

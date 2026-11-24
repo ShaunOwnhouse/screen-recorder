@@ -1,6 +1,6 @@
 import type { UpdateStatus } from './updates.ts'
 import type {
-  AudioLevels, Capabilities, EditorSource, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
+  AudioLevels, Brand, BrandFont, Capabilities, EditorSource, MediaInfo, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
   ShotSaveRequest, ShotSource
 } from './types.ts'
 
@@ -45,6 +45,19 @@ export interface EditorApi {
   load(): Promise<EditorLoad>
   reveal(): Promise<void>
   makeProxy(): Promise<string>
+  /** Opens the file picker for videos and pictures (kind 'clip') or one music file (kind 'music'). */
+  pickMedia(kind: 'clip' | 'music'): Promise<MediaInfo[]>
+  /** Adds files that were dropped onto the window. */
+  addMedia(paths: string[], kind: 'clip' | 'music'): Promise<MediaInfo[]>
+  /** The real location of a dropped file. */
+  pathFor(file: File): string
+  /** Loudness along an audio (or video) file, 0–1 per bucket, for drawing a waveform. */
+  waveform(id: string, buckets: number): Promise<number[]>
+  /** A row of small pictures across a video, as a data URL ('' if it has none). */
+  strip(id: string, count: number): Promise<string>
+  saveBrand(brand: Brand): Promise<Brand>
+  pickFont(): Promise<BrandFont | null>
+  fontData(file: string): Promise<Uint8Array>
   save(req: SaveRequest): Promise<{ ok: boolean; path?: string; error?: string }>
   cancelExport(): Promise<void>
   discard(): Promise<boolean>

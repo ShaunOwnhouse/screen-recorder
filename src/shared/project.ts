@@ -280,6 +280,26 @@ export function splitAt(p: Project, t: number): Edit | null {
   return { project: { ...p, clips }, select: second.id }
 }
 
+/** Takes the span [a, b) out of the timeline: later overlays slide left, ones inside it vanish, ones crossing it shrink. */
+export function cutOverlays(overlays: Overlay[], a: number, b: number): Overlay[] {
+  const cut = b - a
+  const out: Overlay[] = []
+  for (const o of overlays) {
+    if (o.end <= a + 1e-6) out.push(o)
+    else if (o.start >= b - 1e-6) out.push({ ...o, start: o.start - cut, end: o.end - cut })
+    else if (o.start >= a && o.end <= b) continue // lived entirely inside the removed piece
+    else if (o.start < a && o.end > b) out.push({ ...o, end: o.end - cut })
+    else if (o.start < a) out.push({ ...o, end: a })
+    else out.push({ ...o, start: a, end: o.end - cut })
+  }
+  return out.filter((o) => o.end - o.start >= 0.1)
+}
+
+/** Opens a gap of `len` seconds at `at`: later overlays slide right and ones that cross it stretch. */
+export function openGap(overlays: Overlay[], at: number, len: number): Overlay[] {
+  return overlays.map((o) => (o.start >= at - 1e-6 ? { ...o, start: o.start + len, end: o.end + len } : o.end > at ? { ...o, end: o.end + len } : o))
+}
+
 /** Removes a clip and closes the gap: later comments, shapes and so on slide left with the video. */
 export function deleteClip(p: Project, id: string): Edit | null {
   const placed = layout(p.clips)
@@ -287,20 +307,39 @@ export function deleteClip(p: Project, id: string): Edit | null {
   if (!hit || p.clips.length <= 1) return null
   const a = hit.start
   const b = hit.end
-  const cut = b - a
   const clips = p.clips.filter((c) => c.id !== id)
   if (clips.length && placed[0].clip.id === id) clips[0] = { ...clips[0], transition: 'cut' }
-  const overlays: Overlay[] = []
-  for (const o of p.overlays) {
-    if (o.end <= a + 1e-6) overlays.push(o)
-    else if (o.start >= b - 1e-6) overlays.push({ ...o, start: o.start - cut, end: o.end - cut })
-    else if (o.start >= a && o.end <= b) continue // lived entirely inside the removed piece
-    else if (o.start < a && o.end > b) overlays.push({ ...o, end: o.end - cut })
-    else if (o.start < a) overlays.push({ ...o, end: a })
-    else overlays.push({ ...o, start: a, end: o.end - cut })
-  }
+  const overlays = cutOverlays(p.overlays, a, b)
   const next = clips[Math.min(placed.findIndex((x) => x.clip.id === id), clips.length - 1)]
-  return { project: { ...p, clips, overlays: overlays.filter((o) => o.end - o.start >= 0.1) }, select: next?.id }
+  return { project: { ...p, clips, overlays }, select: next?.id }
+}
+
+/**
+ * Changes how much of a clip is used by dragging one of its edges. `to` is the new source time of that edge; `sourceLen`
+ * is how long the file is (null for pictures, which can be shown for as long as you like). Later overlays follow the edit.
+ */
+export function trimClip(p: Project, id: string, edge: 'start' | 'end', to: number, sourceLen: number | null): Project | null {
+  const placed = layout(p.clips)
+  const hit = placed.find((x) => x.clip.id === id)
+  if (!hit) return null
+  const c = hit.clip
+  const max = sourceLen === null ? Number.POSITIVE_INFINITY : sourceLen
+  let next: Clip
+  let overlays: Overlay[]
+  if (edge === 'start') {
+    const inn = clamp(to, 0, c.out - MIN_CLIP)
+    const delta = inn - c.in
+    if (Math.abs(delta) < 1e-6) return p
+    next = { ...c, in: inn }
+    overlays = delta > 0 ? cutOverlays(p.overlays, hit.start, hit.start + delta) : openGap(p.overlays, hit.start, -delta)
+  } else {
+    const out = clamp(to, c.in + MIN_CLIP, max)
+    const delta = out - c.out
+    if (Math.abs(delta) < 1e-6) return p
+    next = { ...c, out }
+    overlays = delta < 0 ? cutOverlays(p.overlays, hit.end + delta, hit.end) : openGap(p.overlays, hit.end, delta)
+  }
+  return { ...p, clips: p.clips.map((x) => (x.id === id ? next : x)), overlays }
 }
 
 export function moveClip(p: Project, id: string, toIndex: number): Project {
@@ -329,10 +368,7 @@ export function insertClip(p: Project, clip: Clip, t: number): Edit {
   if (clips.length) clips[0] = { ...clips[0], transition: 'cut' }
   // Everything after the new clip moves later by its length.
   const at = layout(clips).find((x) => x.clip.id === clip.id)!
-  const len = at.end - at.start
-  const overlays = p.overlays.map((o) =>
-    o.start >= at.start - 1e-6 ? { ...o, start: o.start + len, end: o.end + len } : o.end > at.start ? { ...o, end: o.end + len } : o
-  )
+  const overlays = openGap(p.overlays, at.start, at.end - at.start)
   return { project: { ...p, clips, overlays }, select: clip.id }
 }
 

@@ -16,7 +16,7 @@ import { clearShotTmp, Snapper } from './snap.ts'
 import { Updater } from './updater.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
-import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
+import { handleMediaProtocol, registerMediaScheme, setAddedMediaResolver } from './media-protocol.ts'
 import { joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
@@ -80,8 +80,10 @@ const editor = new EditorController({
     afterReview()
   },
   onDiscarded: () => afterReview(),
-  onClosed: () => maybeQuit()
+  onClosed: () => maybeQuit(),
+  saveBrand: (brand) => updateSettings({ brand }).brand
 })
+setAddedMediaResolver((id) => editor.addedPath(id))
 
 const shots = new ShotReview({
   preload: join(__dirname, '../preload/shot.js'),

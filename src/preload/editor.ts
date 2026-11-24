@@ -1,10 +1,18 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { EditorApi } from '../shared/api.ts'
 
 const editor: EditorApi = {
   load: () => ipcRenderer.invoke('editor:load'),
   reveal: () => ipcRenderer.invoke('editor:reveal'),
   makeProxy: () => ipcRenderer.invoke('editor:proxy'),
+  pickMedia: (kind) => ipcRenderer.invoke('editor:pick-media', kind),
+  addMedia: (paths, kind) => ipcRenderer.invoke('editor:add-media', paths, kind),
+  pathFor: (file) => webUtils.getPathForFile(file),
+  waveform: (id, buckets) => ipcRenderer.invoke('editor:waveform', id, buckets),
+  strip: (id, count) => ipcRenderer.invoke('editor:strip', id, count),
+  saveBrand: (brand) => ipcRenderer.invoke('editor:save-brand', brand),
+  pickFont: () => ipcRenderer.invoke('editor:pick-font'),
+  fontData: (file) => ipcRenderer.invoke('editor:font-data', file),
   save: (req) => ipcRenderer.invoke('editor:save', req),
   cancelExport: () => ipcRenderer.invoke('editor:cancel'),
   discard: () => ipcRenderer.invoke('editor:discard'),

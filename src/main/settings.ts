@@ -3,9 +3,22 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
 import { DEFAULT_PAUSE_HOTKEY, DEFAULT_RECORD_HOTKEY, DEFAULT_SHOT_HOTKEY } from '../shared/hotkeys.ts'
-import type { Settings } from '../shared/types.ts'
+import { basename } from 'node:path'
+import type { Brand, Settings } from '../shared/types.ts'
 
 const file = (): string => join(app.getPath('userData'), 'settings.json')
+
+const DEFAULT_BRAND_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6', '#ffffff', '#111827']
+
+/** Keeps only well-formed colours and fonts from a settings file. */
+function cleanBrand(b: unknown, fallback: Brand): Brand {
+  const raw = (b ?? {}) as Partial<Brand>
+  const colors = Array.isArray(raw.colors) ? raw.colors.filter((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c)).slice(0, 24) : fallback.colors
+  const fonts = Array.isArray(raw.fonts)
+    ? raw.fonts.filter((f) => f && typeof f.name === 'string' && typeof f.file === 'string' && f.file === basename(f.file)).slice(0, 24)
+    : []
+  return { colors, fonts }
+}
 
 function defaults(): Settings {
   return {
@@ -35,7 +48,8 @@ function defaults(): Settings {
     hotkeyRecord: process.platform === 'darwin' ? DEFAULT_RECORD_HOTKEY.mac : DEFAULT_RECORD_HOTKEY.win,
     hotkeyShot: process.platform === 'darwin' ? DEFAULT_SHOT_HOTKEY.mac : DEFAULT_SHOT_HOTKEY.win,
     hotkeyPause: process.platform === 'darwin' ? DEFAULT_PAUSE_HOTKEY.mac : DEFAULT_PAUSE_HOTKEY.win,
-    autoUpdate: true
+    autoUpdate: true,
+    brand: { colors: [...DEFAULT_BRAND_COLORS], fonts: [] }
   }
 }
 
@@ -51,7 +65,8 @@ function sanitize(s: Settings): Settings {
     hotkeyRecord: typeof s.hotkeyRecord === 'string' ? s.hotkeyRecord : d.hotkeyRecord,
     hotkeyShot: typeof s.hotkeyShot === 'string' ? s.hotkeyShot : d.hotkeyShot,
     hotkeyPause: typeof s.hotkeyPause === 'string' ? s.hotkeyPause : d.hotkeyPause,
-    autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate
+    autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate,
+    brand: cleanBrand(s.brand, d.brand)
   }
 }
 

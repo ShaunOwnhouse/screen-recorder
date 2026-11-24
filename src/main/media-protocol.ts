@@ -19,6 +19,22 @@ export function mediaUrl(fileName: string): string {
   return `${MEDIA_SCHEME}://pending/${encodeURIComponent(fileName)}`
 }
 
+/** A file the person added to the video in the editor (found by the editor's own id for it). */
+export function addedMediaUrl(id: string): string {
+  return `${MEDIA_SCHEME}://added/${encodeURIComponent(id)}`
+}
+
+let addedResolver: (id: string) => string | null = () => null
+export function setAddedMediaResolver(fn: (id: string) => string | null): void {
+  addedResolver = fn
+}
+
+const TYPES: Record<string, string> = {
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', bmp: 'image/bmp', gif: 'image/gif',
+  mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac'
+}
+
 /** Serves pending recordings to the editor's <video> with byte-range support so seeking works. */
 export function handleMediaProtocol(): void {
   protocol.handle(MEDIA_SCHEME, (req) => {
@@ -29,9 +45,10 @@ export function handleMediaProtocol(): void {
     if (url.hostname === 'shot') {
       const candidate = name === basename(name) ? join(shotTmpDir(), name) : null
       file = candidate && existsSync(candidate) ? candidate : null
-    } else file = resolvePending(name)
+    } else if (url.hostname === 'added') file = addedResolver(name)
+    else file = resolvePending(name)
     if (!file) return new Response('Not found', { status: 404 })
-    const type = /\.png$/i.test(file) ? 'image/png' : 'video/mp4'
+    const type = TYPES[(file.split('.').pop() ?? '').toLowerCase()] ?? 'application/octet-stream'
 
     const size = statSync(file).size
     const range = parseRange(req.headers.get('range'), size)
