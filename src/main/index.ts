@@ -18,7 +18,7 @@ import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, r
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme, setAddedMediaResolver } from './media-protocol.ts'
 import { cameraFileFor, cameraInfoFor, cameraRawFor, joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
-import { finishCamera, writeCameraInfo } from './camera.ts'
+import { alignCamera, convertCamera, writeCameraInfo } from './camera.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
@@ -54,7 +54,10 @@ interface CameraSession {
   startedAt: number
   /** True when the screen recording's own clock starts the moment it is launched (it has sound), false when it starts at the first picture. */
   clockAtLaunch: boolean
-  stopping: Promise<void> | null
+  /** Stopping the camera and turning what it recorded into a normal video (started the moment the screen recording is stopped). */
+  stopping: Promise<boolean> | null
+  rawPath: string
+  videoPath: string
 }
 let cameraSession: CameraSession | null = null
 let quitting = false
@@ -802,7 +805,7 @@ async function startRecording(): Promise<void> {
     const startCamera = (): Promise<void> =>
       audio.startCamera(cameraRawFor(finalPath)).then(
         (startedAt) => {
-          cameraSession = { startedAt, clockAtLaunch, stopping: null }
+          cameraSession = { startedAt, clockAtLaunch, stopping: null, rawPath: cameraRawFor(finalPath), videoPath: cameraFileFor(finalPath) }
           recorder.update({ camera: true })
         },
         (err: Error) => {
@@ -965,31 +968,41 @@ function registerIpc(): void {
 }
 
 recorder.on('status', (status) => {
-  if (status.state === 'saving' && cameraSession && !cameraSession.stopping) cameraSession.stopping = audio.stopCamera()
+  if (status.state === 'saving' && cameraSession && !cameraSession.stopping) cameraSession.stopping = stopCameraAndConvert(cameraSession)
   mainWindow?.webContents.send('rec:status', status)
   if (bar && !bar.isDestroyed()) bar.webContents.send('rec:status', status)
   updateTray()
 })
 
-/** Turns the camera's raw recording into a normal video next to the screen recording, and notes how they line up. */
+/** Stops the camera, and while the screen recording is still being finished, turns its picture into a normal video. */
+async function stopCameraAndConvert(cam: CameraSession): Promise<boolean> {
+  await audio.stopCamera()
+  return convertCamera(cam.rawPath, cam.videoPath, getSettings().fps, (t) => recorder.addNote(t))
+}
+
+/** Once the screen recording is saved: works out how the camera lines up with it and keeps a note of that next to it. */
 async function finishCameraFor(file: string, ok: boolean): Promise<void> {
   const cam = cameraSession
   cameraSession = null
   if (!cam) return
-  await (cam.stopping ?? audio.stopCamera())
+  const converted = await (cam.stopping ?? stopCameraAndConvert(cam))
   recorder.update({ camera: false })
-  const raw = cameraRawFor(file)
-  if (!ok) {
-    rmSync(raw, { force: true })
+  if (!ok || !converted) {
+    rmSync(cam.rawPath, { force: true })
+    rmSync(cam.videoPath, { force: true })
+    if (ok) recorder.update({ warning: 'The camera picture could not be saved, so the video has the screen only.' })
     return
   }
   const screenStart = cam.clockAtLaunch ? recorder.firstSpawnAt : recorder.firstFrameAt
-  const result = await finishCamera({
-    raw, out: cameraFileFor(file), screen: file, cameraStart: cam.startedAt, screenStart, fps: getSettings().fps,
-    note: (t) => recorder.addNote(t)
+  const result = await alignCamera({
+    raw: cam.rawPath, video: cam.videoPath, screen: file, cameraStart: cam.startedAt, screenStart, note: (t) => recorder.addNote(t)
   })
+  rmSync(cam.rawPath, { force: true })
   if (result) writeCameraInfo(cameraInfoFor(file), result)
-  else recorder.update({ warning: 'The camera picture could not be saved, so the video has the screen only.' })
+  else {
+    rmSync(cam.videoPath, { force: true })
+    recorder.update({ warning: 'The camera picture could not be saved, so the video has the screen only.' })
+  }
 }
 
 recorder.on('recorded', async (file: string, info: RecordedInfo) => {

@@ -22,6 +22,7 @@ If anything fails, send a screenshot plus the newest file from the logs folder. 
 - [ ] **Cancel:** ✕ Cancel on the bar during the countdown cancels; the recording shortcut also cancels or stops.
 - [ ] **Shortcuts:** Alt+Shift+R (Windows) / Control+Option+R (macOS) starts and stops recording from any app. In a browser, Ctrl/Cmd+Shift+R (hard refresh) and Ctrl+Shift+I (developer tools) still work normally.
 - [ ] **Pause / resume:** while recording, click **Pause** on the bar (or press Alt+Shift+P / Control+Option+P, or use the tray icon). The timer stops and says *Paused*. Do something different on screen, then **Resume**: the timer carries on from where it stopped. Stop and play it back: the paused part is not in the video, the picture and sound carry on smoothly across the join. Also try Stop while paused.
+- [ ] **Face camera:** switch on **Camera** in the main section (you should see yourself in the little preview; try another camera in the list if you have one). Record a short talk with the microphone on, pause and resume once, stop. In the review window your face is on the video: drag it, resize it, try Circle / Rounded / Square and the corners. Play it — your lips and voice should match; if not, move *Fix lip-sync* until they do. Cut part of the recording and check the camera is cut with it. Save and play the file back.
 - [ ] **Settings → Shortcuts:** click a key box, press new keys; it works. *Off* turns one off; a combination another app already uses shows "unavailable".
 
 ## Audio

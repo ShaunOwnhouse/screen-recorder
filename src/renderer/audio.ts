@@ -216,7 +216,7 @@ async function openCamera(p: { device: string; mic: string | null }): Promise<{ 
 function startCamera(): Promise<{ startedAt: number }> {
   if (!camStream) throw new Error('the camera is not open')
   const withAudio = camStream.getAudioTracks().length > 0
-  const mime = [`video/webm;codecs=vp9${withAudio ? ',opus' : ''}`, `video/webm;codecs=vp8${withAudio ? ',opus' : ''}`, 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m))
+  const mime = [`video/webm;codecs=vp8${withAudio ? ',opus' : ''}`, `video/webm;codecs=vp9${withAudio ? ',opus' : ''}`, 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m))
   camRecorder = new MediaRecorder(camStream, { mimeType: mime, videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 })
   chunkChain = Promise.resolve()
   camRecorder.ondataavailable = (e) => {
