@@ -316,7 +316,7 @@ export function buildEncoderProbeArgs(encoder: string, quality: Quality = 'veryh
 /** Lossless re-wrap: the same video and audio streams copied into another container (no re-encode). */
 export function buildCopyArgs(input: string, output: string, container: 'mp4' | 'mov' | 'mkv'): string[] {
   return [
-    '-hide_banner', '-loglevel', 'error', '-nostats', '-y', '-i', input, '-map', '0', '-c', 'copy',
+    '-hide_banner', '-loglevel', 'error', '-nostats', '-y', '-i', input, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy',
     ...(container === 'mkv' ? [] : ['-movflags', '+faststart']), '-progress', 'pipe:1', output
   ]
 }

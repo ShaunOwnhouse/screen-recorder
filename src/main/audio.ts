@@ -32,6 +32,8 @@ let pipeSeq = 0
 /** A local named pipe (Windows) or Unix socket (macOS) that FFmpeg reads raw PCM from. */
 export class PcmPipe {
   private sink: Socket | null = null
+  /** Called each time FFmpeg connects: that moment is when the recording's clock starts for this sound. */
+  onConnect: (() => void) | null = null
 
   private constructor(
     readonly path: string,
@@ -46,6 +48,7 @@ export class PcmPipe {
       // Only audio captured after FFmpeg connects is sent, so it lines up with the first video frame.
       pipe?.sink?.destroy()
       if (pipe) pipe.sink = socket
+      pipe?.onConnect?.()
       socket.on('error', () => socket.destroy())
     })
     pipe = new PcmPipe(path, server)
@@ -100,6 +103,10 @@ export class AudioCapture extends EventEmitter {
   /** The computer-sound pipe fed by the macOS helper. */
   private systemPipe: PcmPipe | null = null
   private helper: ChildProcess | null = null
+  /** When FFmpeg last connected to a sound pipe (ms), and who is waiting for the next time. */
+  lastConnectAt = 0
+  firstConnectAt = 0
+  private connectWaiters: Array<() => void> = []
   private rendererRunning = false
   private seq = 0
   private micLevel: number | null = null
@@ -199,6 +206,29 @@ export class AudioCapture extends EventEmitter {
     if (f) await new Promise<void>((resolve) => f.end(() => resolve()))
   }
 
+  private noteConnect(): void {
+    const now = Date.now()
+    this.lastConnectAt = now
+    if (!this.firstConnectAt) this.firstConnectAt = now
+    const waiting = this.connectWaiters.splice(0)
+    for (const w of waiting) w()
+  }
+
+  /** Resolves when FFmpeg next connects to a sound pipe (the moment a recording piece's clock starts), or after `ms`. */
+  nextConnect(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.connectWaiters = this.connectWaiters.filter((w) => w !== done)
+        resolve(false)
+      }, ms)
+      const done = (): void => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+      this.connectWaiters.push(done)
+    })
+  }
+
   /** `prime` briefly opens the default mic so device names are available (asks permission on macOS). */
   listMicrophones(prime = true): Promise<MicInfo[]> {
     return this.request<MicInfo[]>('audio:devices', { prime }).catch(() => [])
@@ -207,6 +237,8 @@ export class AudioCapture extends EventEmitter {
   /** Starts capture. With `pipe`, audio is served for FFmpeg; without, it only drives the level meters. */
   async start(cfg: AudioConfig, pipe: boolean): Promise<AudioStartResult> {
     await this.stop()
+    this.firstConnectAt = 0
+    this.lastConnectAt = 0
     const started: string[] = []
     const errors: string[] = []
     const inputs: AudioInput[] = []
@@ -217,6 +249,7 @@ export class AudioCapture extends EventEmitter {
       if (pipe) {
         if (rendererCfg.system) this.pipes.system = await PcmPipe.create()
         if (rendererCfg.mic) this.pipes.mic = await PcmPipe.create()
+        for (const p of [this.pipes.system, this.pipes.mic]) if (p) p.onConnect = () => this.noteConnect()
       }
       this.rendererRunning = true
       const res = await this.request<{ started: string[]; errors: string[] }>('audio:start', rendererCfg)
@@ -242,7 +275,10 @@ export class AudioCapture extends EventEmitter {
   private async startHelper(pipe: boolean): Promise<string | null> {
     const helper = spawnSystemAudio()
     if (!helper) return 'the macOS audio helper is missing from this build'
-    if (pipe) this.systemPipe = await PcmPipe.create()
+    if (pipe) {
+      this.systemPipe = await PcmPipe.create()
+      this.systemPipe.onConnect = () => this.noteConnect()
+    }
     this.helper = helper
     let stderr = ''
     helper.stderr!.setEncoding('utf8').on('data', (c: string) => (stderr += c))

@@ -46,6 +46,8 @@ export class EditorController {
   /** Files the person added to this video, by id (the recording itself is 'recording'). */
   private readonly added = new Map<string, Added>()
   private counter = 0
+  /** The recording holds more than one sound track (a mix and the two it was made from). */
+  private multiTrack = false
   /** Background FFmpeg jobs that read the recording to draw the timeline; they must not still be running when it is moved or deleted. */
   private readonly previewJobs = new Set<ChildProcess>()
   private readonly strips = new Map<string, string>()
@@ -212,6 +214,7 @@ export class EditorController {
    * and a track for each; those two are taken out as files of their own so the editor can use them separately.
    */
   private async loadTracks(file: string): Promise<{ pc: boolean; mic: boolean }> {
+    this.multiTrack = false
     const { stderr } = await runFfmpeg(['-hide_banner', '-i', file])
     const names: string[] = []
     const lines = stderr.split(/\r?\n/)
@@ -225,6 +228,7 @@ export class EditorController {
       names.push(name)
     })
     const has = (n: string): boolean => names.includes(n)
+    this.multiTrack = names.length > 1
     if (names.length >= 3 && has(TRACK_NAMES.pc) && has(TRACK_NAMES.mic)) {
       // extract both (a plain copy, quick); the editor plays and mixes them like any added sound
       for (const kind of ['pc', 'mic'] as const) {
@@ -320,7 +324,8 @@ export class EditorController {
     try {
       if (keepsFile && isPlain(project, meta.duration) && !convert) {
         // Untouched recording: no re-encode, zero quality loss — moved as-is (MP4) or re-wrapped (MKV/MOV).
-        if (format === 'mp4') moveFile(file, target)
+        // A recording with separate sound tracks is re-wrapped (no re-encode) so the saved file has just the mix, one track.
+        if (format === 'mp4' && !this.multiTrack) moveFile(file, target)
         else await this.run(buildCopyArgs(file, target, container), meta.duration)
       } else {
         scratch = mkdtempSync(join(app.getPath('userData'), 'export-'))

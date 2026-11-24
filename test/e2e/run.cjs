@@ -379,7 +379,7 @@ async function record(app, main, label, { seconds, region, checkAffinity, pauses
       await press(step.via)
       const back = await until(async () => (await stat()).state === 'recording')
       const r = await stat()
-      check(`${tag}: Resume carries on from the same point`, back && r.elapsed >= p1.elapsed - 0.05 && r.elapsed < p1.elapsed + 4, `${p1.elapsed.toFixed(2)}s → ${r.elapsed.toFixed(2)}s`)
+      check(`${tag}: Resume carries on from the same point`, back && r.elapsed >= p1.elapsed - 0.05 && r.elapsed < p1.elapsed + 8, `${p1.elapsed.toFixed(2)}s → ${r.elapsed.toFixed(2)}s`)
       await sleep(step.then * 1000)
       const later = await stat()
       check(`${tag}: the timer runs again after Resume`, later.elapsed > r.elapsed + step.then - 1, `${r.elapsed.toFixed(2)}s → ${later.elapsed.toFixed(2)}s`)

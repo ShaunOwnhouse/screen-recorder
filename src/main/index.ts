@@ -854,7 +854,11 @@ async function startRecording(): Promise<void> {
           void audio.stopCamera()
         }
       )
-    if (cameraReady && clockAtLaunch) await Promise.all([recorder.start(attempts, finalPath, newLogPath(stamp)), startCamera()])
+    // With sound, the screen recording's clock starts the moment FFmpeg connects to the sound pipes: the camera starts then.
+    if (cameraReady && clockAtLaunch) {
+      const connected = audio.nextConnect(20000)
+      await Promise.all([recorder.start(attempts, finalPath, newLogPath(stamp)), connected.then(() => startCamera())])
+    }
     else {
       await recorder.start(attempts, finalPath, newLogPath(stamp))
       if (cameraReady) await startCamera()
@@ -897,7 +901,11 @@ async function togglePause(): Promise<void> {
     return
   }
   if (state === 'paused' && !resuming) {
-    if (cam?.clockAtLaunch) await Promise.all([recorder.resume(), audio.resumeCamera()])
+    if (cam?.clockAtLaunch) {
+      // the new piece's clock starts when FFmpeg connects to the sound pipes (not when Resume is pressed: starting FFmpeg can take seconds)
+      const connected = audio.nextConnect(20000)
+      await Promise.all([recorder.resume(), connected.then(() => audio.resumeCamera())])
+    }
     else {
       await recorder.resume()
       if (cam) await audio.resumeCamera()
@@ -1035,7 +1043,7 @@ async function finishCameraFor(file: string, ok: boolean): Promise<void> {
     if (ok) recorder.update({ warning: 'The camera picture could not be saved, so the video has the screen only.' })
     return
   }
-  const screenStart = cam.clockAtLaunch ? recorder.firstSpawnAt : recorder.firstFrameAt
+  const screenStart = cam.clockAtLaunch ? audio.firstConnectAt || recorder.firstSpawnAt : recorder.firstFrameAt
   const result = await alignCamera({
     raw: cam.rawPath, video: cam.videoPath, screen: file, cameraStart: cam.startedAt, screenStart, note: (t) => recorder.addNote(t)
   })
