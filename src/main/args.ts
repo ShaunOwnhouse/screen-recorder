@@ -1,4 +1,4 @@
-import type { ImageFormat, Quality, Rect, Segment, VideoFormat } from '../shared/types.ts'
+import type { ImageFormat, Quality, Rect } from '../shared/types.ts'
 
 export interface DdaTarget {
   adapter: number
@@ -277,42 +277,6 @@ export function concatList(files: string[]): string {
   return files.map((f) => `file '${f.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n') + '\n'
 }
 
-export interface ExportArgsInput {
-  input: string
-  output: string
-  segments: Segment[]
-  /** Source pixels, already even-aligned, or null for the full frame. */
-  crop: Rect | null
-  hasAudio: boolean
-  fps: number
-  quality: Quality
-  encoder: string
-  pixelRate: number
-  basicTuning?: boolean
-  /** Only matters for the extension-less choice between Matroska (no faststart flag) and MP4/MOV. */
-  container?: 'mp4' | 'mov' | 'mkv'
-}
-
-export function buildExportArgs(o: ExportArgsInput): string[] {
-  const encoder = effectiveEncoder(o.encoder, o.quality)
-  const keep = o.segments.map(([a, b]) => `between(t\\,${a.toFixed(3)}\\,${b.toFixed(3)})`).join('+')
-
-  const v = [`select=${keep}`, 'setpts=N/FRAME_RATE/TB']
-  if (o.crop) v.push(`crop=${o.crop.width}:${o.crop.height}:${o.crop.x}:${o.crop.y}`)
-  v.push(`scale=${SWS_FLAGS}`, `format=${pixelFormatFor(encoder, o.quality)}`)
-
-  const args = ['-hide_banner', '-loglevel', 'error', '-nostats', '-y', '-i', o.input, '-vf', v.join(',')]
-  if (o.hasAudio) args.push('-af', `aselect=${keep},asetpts=N/SR/TB`)
-  else args.push('-an')
-  args.push('-fps_mode', 'cfr', '-r', String(o.fps))
-  args.push(...encoderArgs(encoder, o.quality, o.pixelRate, o.basicTuning), '-g', String(o.fps * 2))
-  args.push(...COLOR_TAGS)
-  if (o.hasAudio) args.push(...audioEncodeArgs(o.quality))
-  if (o.container !== 'mkv') args.push('-movflags', '+faststart')
-  args.push('-progress', 'pipe:1', o.output)
-  return args
-}
-
 /** Small H.264 4:2:0 copy for previewing recordings the built-in player can't decode (e.g. 4:4:4). */
 export function buildProxyArgs(input: string, output: string): string[] {
   return [
@@ -332,19 +296,6 @@ export function buildEncoderProbeArgs(encoder: string, quality: Quality = 'veryh
   ]
 }
 
-/** Converts a normalised crop into even, in-bounds source pixels (null if it covers the whole frame). */
-export function cropToPixels(crop: Rect | null, width: number, height: number): Rect | null {
-  if (!crop) return null
-  const evenOffset = (n: number): number => Math.max(0, Math.floor(n / 2) * 2)
-  const x = evenOffset(Math.round(crop.x * width))
-  const y = evenOffset(Math.round(crop.y * height))
-  const w = Math.min(even(Math.round(crop.width * width)), even(width - x))
-  const h = Math.min(even(Math.round(crop.height * height)), even(height - y))
-  if (w >= even(width) && h >= even(height)) return null
-  return { x, y, width: w, height: h }
-}
-
-
 // ---------- other save formats ----------
 
 /** Lossless re-wrap: the same video and audio streams copied into another container (no re-encode). */
@@ -355,56 +306,8 @@ export function buildCopyArgs(input: string, output: string, container: 'mp4' | 
   ]
 }
 
-export interface ConvertExportInput {
-  input: string
-  output: string
-  segments: Segment[]
-  /** Source pixels, already even-aligned, or null for the full frame. */
-  crop: Rect | null
-  hasAudio: boolean
-  fps: number
-  format: Extract<VideoFormat, 'hevc' | 'webm' | 'gif'>
-}
-
 export const GIF_MAX_FPS = 15
 export const GIF_MAX_WIDTH = 1280
-
-/** Re-encodes (with any trim / crop) into H.265, VP9 WebM or an animated GIF. */
-export function buildConvertArgs(o: ConvertExportInput): string[] {
-  const keep = o.segments.map(([a, b]) => `between(t\\,${a.toFixed(3)}\\,${b.toFixed(3)})`).join('+')
-  const trim = [`select=${keep}`, 'setpts=N/FRAME_RATE/TB']
-  if (o.crop) trim.push(`crop=${o.crop.width}:${o.crop.height}:${o.crop.x}:${o.crop.y}`)
-  const head = ['-hide_banner', '-loglevel', 'error', '-nostats', '-y', '-i', o.input]
-  const audioFilter = ['-af', `aselect=${keep},asetpts=N/SR/TB`]
-
-  if (o.format === 'gif') {
-    const fps = Math.min(GIF_MAX_FPS, Math.max(1, Math.round(o.fps)))
-    const graph =
-      `[0:v]${trim.join(',')},fps=${fps},scale='min(${GIF_MAX_WIDTH},iw)':-2:flags=lanczos,split[a][b];` +
-      '[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[v]'
-    return [...head, '-filter_complex', graph, '-map', '[v]', '-an', '-loop', '0', '-progress', 'pipe:1', o.output]
-  }
-
-  const video = [...trim, `scale=${SWS_FLAGS}`, 'format=yuv420p']
-  const args = [...head, '-vf', video.join(',')]
-  if (o.hasAudio) args.push(...audioFilter)
-  else args.push('-an')
-  args.push('-fps_mode', 'cfr', '-r', String(o.fps), '-g', String(o.fps * 2))
-  if (o.format === 'hevc') {
-    // H.265 at a visually lossless quality target. `hvc1` lets Apple players and Windows open it.
-    args.push('-c:v', 'libx265', '-preset', 'medium', '-crf', '15', '-tag:v', 'hvc1', '-x265-params', 'log-level=error', ...COLOR_TAGS)
-    if (o.hasAudio) args.push('-c:a', 'aac', '-b:a', '320k')
-    args.push('-movflags', '+faststart')
-  } else {
-    args.push(
-      '-c:v', 'libvpx-vp9', '-crf', '17', '-b:v', '0', '-deadline', 'good', '-cpu-used', '3', '-row-mt', '1', '-tile-columns', '2',
-      ...COLOR_TAGS
-    )
-    if (o.hasAudio) args.push('-c:a', 'libopus', '-b:a', '192k')
-  }
-  args.push('-progress', 'pipe:1', o.output)
-  return args
-}
 
 /** Turns the lossless PNG capture into a WebP (lossless) or a maximum-quality JPEG. */
 export function buildImageConvertArgs(input: string, output: string, format: Exclude<ImageFormat, 'png'>): string[] {

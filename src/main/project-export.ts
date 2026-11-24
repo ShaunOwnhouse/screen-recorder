@@ -54,7 +54,7 @@ const num = (n: number): string => (Math.round(n * 10000) / 10000).toString()
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
 
 /** The crop in whole, even source pixels (null = whole frame). */
-function cropPixels(crop: Rect | null, w: number, h: number): Rect | null {
+export function cropPixels(crop: Rect | null, w: number, h: number): Rect | null {
   if (!crop) return null
   const off = (n: number): number => Math.max(0, Math.floor(n / 2) * 2)
   const x = off(Math.round(crop.x * w))

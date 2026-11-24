@@ -34,7 +34,13 @@ If anything fails, send a screenshot plus the newest file from the logs folder. 
 ## Review and save
 
 - [ ] After Stop, the review window opens and the video plays.
-- [ ] **Trim:** drag across the timeline → *Delete selection*. Playback skips the grey part, and the saved file is shorter.
+- [ ] **Cut:** move the playhead, press *Split here* (or **S**), click a piece and press *Delete*. The gap closes and the saved file is shorter. Drag the ends of a piece to trim it. *Undo* / *Redo* (Ctrl+Z / Ctrl+Y) work.
+- [ ] **Comments:** *Comments → Add a comment*, type words, drag it on the video, change colour and size. It shows only between its start and end (change these in the side panel or by dragging it on the timeline). Play the video and save: it is in the saved file in the same place.
+- [ ] **Shapes:** arrow, highlight box, numbered step, spotlight, blur / pixels (hide a name on screen) and zoom (drag its box over a part of the screen — the saved video glides in and back out).
+- [ ] **Other video / pictures:** *Media → Add a video or picture* puts it into the video at the playhead; tick *Fade in from the piece before* for a cross-fade. *Add as picture-in-picture* shows it in a small window you can drag and resize.
+- [ ] **Music:** *Music → Add music* with a song of your own; change the volume, fades, *Repeat* and *Quieter while someone speaks*. Hear it in the saved video.
+- [ ] **Title card:** *Titles* → pick a style → change the words; it is in the saved video.
+- [ ] **Brand:** *Your brand colours & fonts…* → add a colour and a font file; they appear in the colour rows and font lists.
 - [ ] **Crop:** crop to 16:9; the saved file has the cropped size.
 - [ ] **Save / Save as… / Discard** all work; Discard asks for confirmation first.
 - [ ] Nothing is saved to your folder until you click Save.

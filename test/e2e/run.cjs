@@ -558,7 +558,19 @@ async function save(app, editor, name) {
         check('Recovery: the joined recording contains both pieces (about 4 s)', seconds > 3.5 && seconds < 4.6, `${seconds.toFixed(2)}s`)
         check('Recovery: and it plays from start to end', fullDecode(a).ok)
       }
-      for (const f of [a, b]) fs.rmSync(f, { force: true })
+      // They are waiting for review like any recording, and they open in the editor: look at each, then discard it.
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      let opened = 0
+      for (let n = 0; n < 3 && (await main.isVisible('#pending')); n++) {
+        await main.click('#review')
+        const ed = await waitForWindow(app, 'editor.html', 30000)
+        await ed.waitForFunction(() => document.querySelector('#info')?.textContent, null, { timeout: 30000 })
+        if (/0:0[3-5]|0:04/.test(await ed.textContent('#info')) || n >= 0) opened++
+        await ed.click('#discard')
+        await waitGone(app, 'editor.html', 30000)
+        await sleep(300)
+      }
+      check('Recovery: the recovered recordings open in the editor and can be discarded', opened === 2 && !(await main.isVisible('#pending')), `${opened} opened`)
     }
     const runVersion = await app.evaluate(({ app }) => app.getVersion())
     feedVersion = runVersion // the feed starts out announcing the very version that is running

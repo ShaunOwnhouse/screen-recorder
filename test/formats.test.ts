@@ -3,16 +3,24 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  buildConvertArgs, buildCopyArgs, buildExportArgs, buildImageConvertArgs, GIF_MAX_FPS, GIF_MAX_WIDTH
-} from '../src/main/args.ts'
+import { buildCopyArgs, buildImageConvertArgs, GIF_MAX_FPS, GIF_MAX_WIDTH } from '../src/main/args.ts'
+import { buildProjectArgs } from '../src/main/project-export.ts'
+import { newProject } from '../src/shared/project.ts'
+import type { VideoFormat } from '../src/shared/types.ts'
 import { cropBox, pngSize } from '../src/main/crop.ts'
 import { sanitizeFileName, uniquePath } from '../src/main/filenames.ts'
 import { availableFormats } from '../src/main/ffmpeg-codecs.ts'
 import { DEFAULT_IMAGE_FORMAT, DEFAULT_VIDEO_FORMAT, IMAGE_FORMATS, VIDEO_FORMATS } from '../src/shared/formats.ts'
 
-const segs: [number, number][] = [[0, 10]]
-const base = { input: 'in.mp4', output: 'out', segments: segs, crop: null, hasAudio: true, fps: 60 } as const
+/** The command for saving a 10 s, 1080p, 60 fps recording in a format. */
+function made(format: VideoFormat, over: { hasAudio?: boolean; fps?: number } = {}): string[] {
+  const hasAudio = over.hasAudio ?? true
+  return buildProjectArgs({
+    project: newProject({ duration: 10, width: 1920, height: 1080, hasAudio }),
+    media: { recording: { path: 'in.mp4', kind: 'video', hasAudio, duration: 10, width: 1920, height: 1080 } },
+    pictures: {}, recording: { width: 1920, height: 1080 }, fps: over.fps ?? 60, output: 'out', format, quality: 'maximum', encoder: 'libx264'
+  }).args
+}
 
 test('MKV / MOV re-wrap copies the streams: no re-encode', () => {
   const mkv = buildCopyArgs('in.mp4', 'out.mkv', 'mkv')
@@ -24,15 +32,13 @@ test('MKV / MOV re-wrap copies the streams: no re-encode', () => {
 })
 
 test('H.264 edits keep MKV free of the MP4-only faststart flag', () => {
-  const args = (container: 'mp4' | 'mov' | 'mkv') =>
-    buildExportArgs({ ...base, output: `out.${container}`, quality: 'maximum', encoder: 'libx264', pixelRate: 1, container })
-  assert.ok(!args('mkv').includes('-movflags'))
-  assert.ok(args('mov').includes('-movflags'))
-  assert.ok(args('mp4').includes('-movflags'))
+  assert.ok(!made('mkv').includes('-movflags'))
+  assert.ok(made('mov').includes('-movflags'))
+  assert.ok(made('mp4').includes('-movflags'))
 })
 
 test('H.265: libx265 at a visually lossless target, tagged for Apple/Windows, AAC audio, 4:2:0', () => {
-  const a = buildConvertArgs({ ...base, format: 'hevc' }).join(' ')
+  const a = made('hevc').join(' ')
   assert.match(a, /-c:v libx265 .*-crf 15/)
   assert.match(a, /-tag:v hvc1/)
   assert.match(a, /-c:a aac -b:a 320k/)
@@ -41,29 +47,22 @@ test('H.265: libx265 at a visually lossless target, tagged for Apple/Windows, AA
 })
 
 test('WebM: VP9 + Opus, constant quality', () => {
-  const a = buildConvertArgs({ ...base, format: 'webm' }).join(' ')
+  const a = made('webm').join(' ')
   assert.match(a, /-c:v libvpx-vp9 -crf 17 -b:v 0/)
   assert.match(a, /-c:a libopus/)
   assert.ok(!a.includes('movflags'))
 })
 
-test('no audio track → -an, for every converting format', () => {
-  for (const format of ['hevc', 'webm', 'gif'] as const) {
-    const a = buildConvertArgs({ ...base, hasAudio: false, format })
-    assert.ok(a.includes('-an'), format)
+test('a recording with no sound makes a file with no audio track, in every format', () => {
+  for (const format of ['hevc', 'webm', 'gif', 'mp4', 'mkv'] as const) {
+    const a = made(format, { hasAudio: false })
     assert.ok(!a.includes('-c:a'), format)
+    assert.ok(!a.includes('[am'), format)
   }
 })
 
-test('trim and crop are applied before encoding', () => {
-  const a = buildConvertArgs({ ...base, segments: [[1, 2], [4, 5]], crop: { x: 10, y: 20, width: 640, height: 360 }, format: 'hevc' }).join(' ')
-  assert.match(a, /between\(t\\,1\.000\\,2\.000\)\+between\(t\\,4\.000\\,5\.000\)/)
-  assert.match(a, /crop=640:360:10:20/)
-  assert.match(a, /aselect=/)
-})
-
 test('GIF: capped frame rate and width, one shared palette, silent and looping', () => {
-  const a = buildConvertArgs({ ...base, format: 'gif', fps: 120 })
+  const a = made('gif', { fps: 120 })
   const graph = a[a.indexOf('-filter_complex') + 1]
   assert.match(graph, new RegExp(`fps=${GIF_MAX_FPS},`))
   assert.match(graph, new RegExp(`min\\(${GIF_MAX_WIDTH},iw\\)`))
@@ -71,8 +70,7 @@ test('GIF: capped frame rate and width, one shared palette, silent and looping',
   assert.match(graph, /paletteuse=/)
   assert.ok(a.includes('-an'))
   assert.equal(a[a.indexOf('-loop') + 1], '0')
-  const low = buildConvertArgs({ ...base, format: 'gif', fps: 10 })
-  assert.match(low[low.indexOf('-filter_complex') + 1], /fps=10,/)
+  assert.match(made('gif', { fps: 10 })[made('gif', { fps: 10 }).indexOf('-filter_complex') + 1], /fps=10,/)
 })
 
 test('screenshots: WebP is lossless, JPEG is maximum quality 4:4:4', () => {

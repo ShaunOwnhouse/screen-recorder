@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildExportArgs, buildRecordArgs, cropToPixels, effectiveEncoder, encoderArgs, even, outputSize, type RecordArgsInput
+  buildRecordArgs, effectiveEncoder, encoderArgs, even, outputSize, type RecordArgsInput
 } from '../src/main/args.ts'
 import { buildGrabArgs, compareBar } from '../src/main/barprobe.ts'
 import { matchOutput, parseDxgiOutputs } from '../src/main/displays.ts'
 import { parseAvfoundationScreens, parseMediaInfo, parseRange, ProgressParser } from '../src/main/parse.ts'
-import { isFullRange, keepOnly, playablePosition, removeRange, totalDuration } from '../src/shared/segments.ts'
+import { cropPixels } from '../src/main/project-export.ts'
 
 const base: RecordArgsInput = {
   backend: 'gdigrab',
@@ -147,39 +147,11 @@ test('NVENC uses constant quality with adaptive quantisation', () => {
   assert.equal(after(encoderArgs('libx264', 'veryhigh', 3840 * 2160 * 60), '-preset'), 'superfast')
 })
 
-test('export keeps selected parts, crops, and keeps audio in sync', () => {
-  const args = buildExportArgs({
-    input: 'in.mp4', output: 'out.mp4', segments: [[1, 2.5], [4, 6]], crop: { x: 10, y: 20, width: 640, height: 360 },
-    hasAudio: true, fps: 60, quality: 'veryhigh', encoder: 'libx264', pixelRate: 0
-  })
-  assert.equal(
-    after(args, '-vf'),
-    'select=between(t\\,1.000\\,2.500)+between(t\\,4.000\\,6.000),setpts=N/FRAME_RATE/TB,crop=640:360:10:20,' +
-      'scale=flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp,format=yuv420p'
-  )
-  assert.equal(after(args, '-af'), 'aselect=between(t\\,1.000\\,2.500)+between(t\\,4.000\\,6.000),asetpts=N/SR/TB')
-})
-
 test('crop converts to even in-bounds pixels; full frame means no crop', () => {
-  assert.deepEqual(cropToPixels({ x: 0.1, y: 0.1, width: 0.5, height: 0.5 }, 1921, 1081), { x: 192, y: 108, width: 960, height: 540 })
-  assert.equal(cropToPixels({ x: 0, y: 0, width: 1, height: 1 }, 1920, 1080), null)
-  const edge = cropToPixels({ x: 0.9, y: 0.9, width: 0.2, height: 0.2 }, 1000, 1000)!
+  assert.deepEqual(cropPixels({ x: 0.1, y: 0.1, width: 0.5, height: 0.5 }, 1921, 1081), { x: 192, y: 108, width: 960, height: 540 })
+  assert.equal(cropPixels({ x: 0, y: 0, width: 1, height: 1 }, 1920, 1080), null)
+  const edge = cropPixels({ x: 0.9, y: 0.9, width: 0.2, height: 0.2 }, 1000, 1000)!
   assert.ok(edge.x + edge.width <= 1000 && edge.y + edge.height <= 1000)
-})
-
-test('segment editing: remove, keep only, playback skipping', () => {
-  let keep = removeRange([[0, 10]], 3, 5)
-  assert.deepEqual(keep, [[0, 3], [5, 10]])
-  keep = keepOnly(keep, 2, 7)
-  assert.deepEqual(keep, [[2, 3], [5, 7]])
-  assert.equal(totalDuration(keep), 3)
-  assert.equal(playablePosition(keep, 0), 2)
-  assert.equal(playablePosition(keep, 4), 5)
-  assert.equal(playablePosition(keep, 6), 6)
-  assert.equal(playablePosition(keep, 8), null)
-  assert.ok(isFullRange([[0, 10]], 10))
-  assert.ok(!isFullRange(keep, 10))
-  assert.deepEqual(removeRange([[0, 10]], 0, 10), [])
 })
 
 test('DXGI outputs parse and match displays by physical bounds', () => {

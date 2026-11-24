@@ -8,9 +8,11 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  buildConcatArgs, buildExportArgs, buildJoinReencodeArgs, buildProxyArgs, buildRecordArgs, buildRemuxArgs, concatList, type RecordArgsInput
+  buildConcatArgs, buildJoinReencodeArgs, buildProxyArgs, buildRecordArgs, buildRemuxArgs, concatList, type RecordArgsInput
 } from '../src/main/args.ts'
 import { parseMediaInfo } from '../src/main/parse.ts'
+import { buildProjectArgs } from '../src/main/project-export.ts'
+import { newProject } from '../src/shared/project.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
 const run = (args: string[]): void => void execFileSync(ffmpeg, args, { stdio: 'pipe' })
@@ -136,24 +138,6 @@ test('audio streamed over a unix socket (the macOS path) is recorded', { skip: p
   }
 })
 
-test('editor export trims to the kept parts and crops exactly', { timeout: 180000 }, () =>
-  inTemp((dir) => {
-    const pcm = join(dir, 'audio.f32')
-    run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4', '-ac', '2', '-f', 'f32le', pcm])
-    const src = record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, audio: [{ url: pcm, volume: 1 }] }, 4)
-    const out = join(dir, 'edited.mp4')
-    run(buildExportArgs({
-      input: src, output: out, segments: [[0.5, 1.5], [2.5, 3.5]], crop: { x: 100, y: 60, width: 1280, height: 720 },
-      hasAudio: true, fps: 30, quality: 'veryhigh', encoder: 'libx264', pixelRate: 1280 * 720 * 30
-    }))
-    const info = parseMediaInfo(probe(out))!
-    assert.equal(info.width, 1280)
-    assert.equal(info.height, 720)
-    assert.equal(info.fps, 30)
-    assert.ok(info.hasAudio)
-    assert.ok(Math.abs(info.duration - 2) < 0.15, `duration ${info.duration}`)
-  }))
-
 test('preview proxy is small 4:2:0 H.264', { timeout: 120000 }, () =>
   inTemp((dir) => {
     const src = record(dir, { rect: { x: 0, y: 0, width: 1920, height: 1080 }, fps: 30, quality: 'studio' })
@@ -169,9 +153,12 @@ test('a 4:4:4 recording converts to a play-everywhere 4:2:0 H.264 file', { timeo
     const src = record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, quality: 'studio' })
     assert.match(probe(src), /High 4:4:4/)
     const out = join(dir, 'compatible.mp4')
-    run(buildExportArgs({
-      input: src, output: out, segments: [[0, 1]], crop: null, hasAudio: false, fps: 30, quality: 'maximum', encoder: 'libx264', pixelRate: 0
-    }))
+    const built = buildProjectArgs({
+      project: newProject({ duration: 1, width: 1280, height: 720, hasAudio: false }),
+      media: { recording: { path: src, kind: 'video', hasAudio: false, duration: 1, width: 1280, height: 720 } },
+      pictures: {}, recording: { width: 1280, height: 720 }, fps: 30, output: out, format: 'mp4', quality: 'maximum', encoder: 'libx264'
+    })
+    run(built.args.slice(4))
     const info = probe(out)
     assert.match(info, /h264 \(High\)/)
     assert.match(info, /yuv420p\(tv, bt709/)

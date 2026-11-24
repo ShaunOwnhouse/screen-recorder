@@ -28,12 +28,15 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 - 30, 60 or 120 fps
 - Audio: computer sound and/or any microphone or headset, each with its own on/off switch and volume, optional noise reduction, and live level meters. A *Test* button lets you check levels before recording.
 - **Nothing is saved without your approval.** When you stop, the recording opens in a review window where you can:
-  - preview it
-  - trim it, or delete any parts (drag across the timeline, then *Keep only selection* or *Delete selection*)
+  - preview it, and **cut** it (Split at the playhead, delete a piece and the gap closes, drag the ends of a piece to trim; Undo / Redo for everything)
+  - add **comments and callouts** that appear for as long as you choose: speech bubbles, sticky notes, plain text, arrows, highlight boxes, numbered steps, a **spotlight** that darkens everything except one spot, **blur / pixels** to hide private details, and **zoom in on an area** that glides in and back out. Drag them on the video, change colour / size / font / timing in the side panel, and they can fade in and out
+  - add **other videos and pictures** (into the video at the playhead, with an optional cross-fade, or in a small **picture-in-picture** window), and **title cards** (dark, gradient or your brand colour)
+  - add **background music** from your own file: volume, fade in / out, repeat to fill the video, and *quieter while someone speaks*
+  - set your own **brand colours and fonts** (Your brand… in the side panel) that are offered everywhere you can colour or write something
   - crop it (free-form or 16:9 / 9:16 / 1:1 / 4:3)
   - then **Save**, **Save as…** or **Discard**
 
-  Unedited saves are moved as-is, with no re-encode. Edited saves are re-encoded at the original quality.
+  Unedited saves are moved as-is, with no re-encode. Edited saves are re-encoded at the original quality in a single pass; everything you drew is added at the saved video's own resolution, so it stays sharp.
 - Unsaved recordings survive app restarts and crashes and wait for review
 - **Pause and resume**: the bar (and the panel and tray icon) has a Pause button; Resume carries on from the same point and the paused time is left out of the video. Under the hood a paused recording is captured in pieces with identical settings and joined without re-encoding when you stop (if a join ever can't be played, it is re-encoded instead; if a crash interrupts a paused recording, the pieces are joined the next time the app starts)
 - Global shortcuts to start/stop a recording, pause/resume, and to take a screenshot from any app (default `Alt+Shift+R` / `Alt+Shift+P` / `Alt+Shift+S` on Windows, `Control+Option+R` / `Control+Option+P` / `Control+Option+S` on macOS). They deliberately avoid the keys browsers use (`Ctrl+Shift+R` hard refresh, `Ctrl+Shift+I` developer tools), and either can be changed or turned off in **Settings → Shortcuts**
@@ -136,7 +139,10 @@ npm run dist       # build the Windows installer into dist/
 | `src/main/ffmpeg.ts` | Locates FFmpeg; detects GPU encoders (incl. 4:4:4 support) and `ddagrab` |
 | `src/main/displays.ts` | Maps each monitor to its DXGI adapter/output for Desktop Duplication |
 | `src/main/audio.ts` | Computer-sound + mic capture, streamed to FFmpeg over a named pipe |
-| `src/main/editor.ts` | Review window: save / save as / discard, trim + crop export |
+| `src/main/editor.ts` | Review window: added files, waveform / timeline pictures, brand fonts, save / save as / discard |
+| `src/main/project-export.ts` | Turns an edited project (clips, fades, comments, blur, zoom, picture-in-picture, music) into one FFmpeg command, for every save format |
+| `src/shared/project.ts` | The editor's project model: clips, overlays, music, and the cut / trim / insert rules |
 | `src/main/mac-helper.ts`, `native/mac/MacHelper.swift` | macOS helper: display order for AVFoundation and computer sound via ScreenCaptureKit |
 | `src/main/index.ts` | Electron app: windows, tray, hotkey, region selection |
-| `src/renderer/` | Control panel, review editor, region overlay, audio capture page |
+| `src/renderer/` | Control panel, region overlay, audio capture page |
+| `src/renderer/editor/` | The editor: player, timeline, stage interaction, side panels, drawing, brand kit |
