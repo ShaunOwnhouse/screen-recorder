@@ -96,8 +96,13 @@ async function waitFor(fn, ms, every = 1000) {
     const appData = path.join(process.env.APPDATA, 'Screen Snap')
     fs.mkdirSync(appData, { recursive: true })
     fs.writeFileSync(path.join(appData, 'settings.json'), JSON.stringify({ fps: 30, quality: 'veryhigh', countdown: 5, shotFormat: 'png' }))
+    // The installer refuses to go on (and silently waits) while another copy of the app is still running, for instance one
+    // left over from the end-to-end test that ran just before this one, so make sure none is.
+    spawnSync('taskkill', ['/F', '/T', '/IM', 'Screen Snap.exe'], { windowsHide: true })
+    await sleep(3000)
     log(`installing ${OLD} silently into ${INSTALL_DIR}…`)
-    spawnSync(oldInstaller, ['/S', '/currentuser', `/D=${INSTALL_DIR}`], { windowsHide: true })
+    const inst = spawnSync(oldInstaller, ['/S', '/currentuser', `/D=${INSTALL_DIR}`], { windowsHide: true, timeout: 5 * 60 * 1000 })
+    log(`installer finished: exit ${inst.status}${inst.error ? `, ${inst.error.message}` : ''}`)
     check(`The older build (${OLD}) installed`, !!(await waitFor(() => fs.existsSync(EXE), 180000)) && exeVersion().startsWith(OLD), `${exeVersion()} at ${EXE}`)
 
     // 4) run it; it must find the update on its own feed and download it in the background
