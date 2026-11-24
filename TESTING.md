@@ -40,6 +40,8 @@ If anything fails, send a screenshot plus the newest file from the logs folder. 
 - [ ] **Shapes:** arrow, highlight box, numbered step, spotlight, blur / pixels (hide a name on screen) and zoom (drag its box over a part of the screen — the saved video glides in and back out).
 - [ ] **Other video / pictures:** *Media → Add a video or picture* puts it into the video at the playhead; tick *Fade in from the piece before* for a cross-fade. *Add as picture-in-picture* shows it in a small window you can drag and resize.
 - [ ] **Audio:** *Audio → Add audio files* and choose two or three songs/sounds at once. Each is its own bar: drag, trim the ends, **Split**, **Duplicate**; change volume, fades, *Repeat* and *Quieter while someone speaks*. Hear them all in the saved video.
+- [ ] **Two sounds:** record while playing a video (computer sound) and speaking (microphone). In the review window click the recording: *Sound from the recording* offers Everything / Computer sound only / My microphone only — play each. With the face camera on, check your voice comes from the webcam while the video's sound stays.
+- [ ] **Speed:** in the save bar choose *Speed* 2× and 0.5×; save and check the length and that the voice keeps its normal pitch.
 - [ ] **Separate the sound:** click a video piece (or the recording) → *Separate the sound*. The piece goes silent and a blue sound bar appears under it; move it, cut it, turn it down. Try *Save video only…* and *Save sound only…* (MP3/WAV/M4A) and play the saved files.
 - [ ] **Title card:** *Titles* → pick a style → change the words; it is in the saved video.
 - [ ] **Brand:** *Your brand colours & fonts…* → add a colour and a font file; they appear in the colour rows and font lists.
