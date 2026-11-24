@@ -285,7 +285,8 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     g.add(`[${video}][${stream}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:${window(a)}[${nv}]`)
     video = nv
   }
-  for (const a of p.overlays) {
+  // picture-in-picture windows sit on top of everything drawn (the editor's preview does the same)
+  for (const a of [...p.overlays.filter((x) => x.kind !== 'pip'), ...p.overlays.filter((x) => x.kind === 'pip')]) {
     const start = clamp(a.start, 0, T)
     const end = clamp(a.end, start, T)
     if (end - start < 0.05) continue

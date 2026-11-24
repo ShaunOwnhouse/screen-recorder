@@ -1,0 +1,272 @@
+'use strict'
+// The editor, used the way a person uses it: cut, comment, shapes, extra video/picture, music, title card, brand, crop, save.
+// Called from run.cjs with a freshly recorded video open in the review window.
+const fs = require('node:fs')
+const path = require('node:path')
+
+async function editorSuite(c) {
+  const { app, editor, main, check, warn, log, sleep, userData, ff, FFMPEG, save, validate, seekTo, editorState, answerPicker, pixelAt, nearColour, cutFirstThird, isWin } = c
+  const state = () => editorState(editor)
+  const store = (fn, arg) => editor.evaluate(fn, arg)
+  const tag = 'Editor'
+  const approx = (a, b, tol) => Math.abs(a - b) <= tol
+
+  // ---- media to add ----
+  const media = path.join(userData, 'extra-media')
+  fs.mkdirSync(media, { recursive: true })
+  const clip = path.join(media, 'blue clip.mp4')
+  const pic = path.join(media, 'logo.png')
+  const song = path.join(media, 'song.wav')
+  ff(['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=0x2040e0:s=640x360:r=30', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000', '-t', '3', '-vf', 'format=yuv420p', '-c:v', 'libx264', '-c:a', 'aac', clip])
+  ff(['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=0xe0c020:s=300x300', '-frames:v', '1', pic])
+  ff(['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=44100,volume=6', '-t', '5', song])
+
+  // ---- the screen ----
+  check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
+  check(`${tag}: the timeline has Video, Comments and Music rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Music/.test(await editor.textContent('#label-music')))
+  check(`${tag}: the preview shows the picture`, (await editor.locator('#layers video').count()) >= 1 && (await editor.locator('#frame').boundingBox()).width > 100)
+  const start = await state()
+
+  // ---- cutting ----
+  await cutFirstThird(editor)
+  let s = await state()
+  check(`${tag}: cutting the first third leaves one shorter piece`, s.clips.length === 1 && s.clips[0].in > 0 && approx(s.duration, start.duration * 0.7, 0.35), `${s.duration.toFixed(2)}s of ${start.duration.toFixed(2)}s`)
+  await editor.click('#undo')
+  s = await state()
+  check(`${tag}: Undo brings the cut part back`, s.clips.length === 2 && approx(s.duration, start.duration, 0.05), `${s.clips.length} pieces`)
+  await editor.click('#redo')
+  s = await state()
+  check(`${tag}: Redo cuts it again`, s.clips.length === 1 && approx(s.duration, start.duration * 0.7, 0.35))
+  await seekTo(editor, s.duration * 0.5)
+  await editor.keyboard.press('s')
+  check(`${tag}: the S key splits at the playhead`, (await state()).clips.length === 2)
+  await editor.keyboard.press('Control+z')
+  check(`${tag}: Ctrl+Z undoes it`, (await state()).clips.length === 1)
+
+  // dragging the end of a piece trims it and pulls everything later up
+  const before = await state()
+  const edge = await editor.locator('.blk.clip .edge.r').first().boundingBox()
+  await editor.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2)
+  await editor.mouse.down()
+  await editor.mouse.move(edge.x - 70, edge.y + edge.height / 2, { steps: 8 })
+  await editor.mouse.up()
+  s = await state()
+  const px = await store(() => window.__editor.store.pxPerSec)
+  check(`${tag}: dragging the end of a piece trims it`, approx(before.duration - s.duration, 70 / px, 0.3), `${(before.duration - s.duration).toFixed(2)}s shorter (expected ${(70 / px).toFixed(2)}s)`)
+  await editor.click('#undo')
+  s = await state()
+  const D = s.duration
+
+  // ---- a comment ----
+  await seekTo(editor, D * 0.15)
+  await editor.click('#tool-comments')
+  await editor.click('#add-comment')
+  await editor.fill('#prop-text', 'This is where you open Settings')
+  s = await state()
+  const bubble = s.overlays[0]
+  check(`${tag}: Add a comment puts a speech bubble at the playhead`, s.overlays.length === 1 && bubble.kind === 'bubble' && approx(bubble.start, s.playhead, 0.4), `${bubble?.kind} from ${bubble?.start?.toFixed(2)}s`)
+  check(`${tag}: its words can be typed in the side panel`, bubble.text === 'This is where you open Settings')
+  check(`${tag}: it appears in the Comments row of the timeline`, /This is where/.test(await editor.locator('.blk.over').first().textContent()))
+  check(`${tag}: it has a selection box on the video`, await editor.isVisible('#sel'))
+  const fb = await editor.locator('#frame').boundingBox()
+  const sb = await editor.locator('#sel').boundingBox()
+  await editor.mouse.move(sb.x + sb.width * 0.3, sb.y + sb.height * 0.6)
+  await editor.mouse.down()
+  await editor.mouse.move(sb.x + sb.width * 0.3 + fb.width * 0.1, sb.y + sb.height * 0.6 + fb.height * 0.05, { steps: 8 })
+  await editor.mouse.up()
+  let moved = (await state()).overlays[0]
+  check(`${tag}: dragging it on the video moves it`, approx(moved.x - bubble.x, 0.1, 0.03) && approx(moved.y - bubble.y, 0.05, 0.03), `x ${bubble.x.toFixed(2)}→${moved.x.toFixed(2)}, y ${bubble.y.toFixed(2)}→${moved.y.toFixed(2)}`)
+  check(`${tag}: its pointer moved with it`, approx(moved.tx - bubble.tx, 0.1, 0.03))
+  const grip = await editor.locator('#sel i.edge-e').boundingBox()
+  await editor.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await editor.mouse.down()
+  await editor.mouse.move(grip.x + grip.width / 2 + fb.width * 0.08, grip.y + grip.height / 2, { steps: 6 })
+  await editor.mouse.up()
+  const wider = (await state()).overlays[0]
+  check(`${tag}: the handle on its side makes it wider`, wider.w > moved.w + 0.04, `${moved.w.toFixed(2)}→${wider.w.toFixed(2)}`)
+  await editor.click('#prop-style .swatch[data-color="#fde047"]')
+  await editor.locator('#prop-size').fill('46')
+  await editor.locator('#prop-from').fill('0.5')
+  await editor.locator('#prop-from').press('Tab')
+  s = await state()
+  check(`${tag}: colour, size and start time can be changed`, s.overlays[0].bg === '#fde047' && s.overlays[0].size === 46 && approx(s.overlays[0].start, 0.5, 0.06), `${s.overlays[0].bg} ${s.overlays[0].size} ${s.overlays[0].start}`)
+  await editor.uncheck('#prop-fade')
+  check(`${tag}: fading in and out can be switched off`, (await state()).overlays[0].fade === false)
+  await editor.check('#prop-fade')
+  await editor.click('#prop-duplicate')
+  check(`${tag}: Duplicate makes a second one`, (await state()).overlays.length === 2)
+  await editor.click('#prop-delete')
+  check(`${tag}: Delete removes it`, (await state()).overlays.length === 1)
+  // pick the first one again from the timeline
+  await editor.click('.blk.over >> nth=0')
+  check(`${tag}: clicking it on the timeline selects it`, (await state()).selection?.kind === 'overlay')
+  // move and stretch it on the timeline
+  const pxs = await store(() => window.__editor.store.pxPerSec)
+  const first = (await state()).overlays[0]
+  await editor.locator('#prop-to').fill(String(+(first.start + 2).toFixed(2)))
+  await editor.locator('#prop-to').press('Tab')
+  const t0 = (await state()).overlays[0]
+  check(`${tag}: the end time can be typed in too`, approx(t0.end - t0.start, 2, 0.1), `${t0.start.toFixed(2)}→${t0.end.toFixed(2)}`)
+  const blk = await editor.locator('.blk.over').first().boundingBox()
+  await editor.mouse.move(blk.x + blk.width / 2, blk.y + blk.height / 2)
+  await editor.mouse.down()
+  await editor.mouse.move(blk.x + blk.width / 2 + 60, blk.y + blk.height / 2, { steps: 6 })
+  await editor.mouse.up()
+  const t1 = (await state()).overlays[0]
+  check(`${tag}: dragging a comment along the timeline moves when it is shown`, approx(t1.start - t0.start, 60 / pxs, 0.15) && approx(t1.end - t0.end, 60 / pxs, 0.15), `${t0.start.toFixed(2)}→${t1.start.toFixed(2)}`)
+  const redge = await editor.locator('.blk.over .edge.r').first().boundingBox()
+  await editor.mouse.move(redge.x + redge.width / 2, redge.y + redge.height / 2)
+  await editor.mouse.down()
+  await editor.mouse.move(redge.x + redge.width / 2 + 40, redge.y + redge.height / 2, { steps: 6 })
+  await editor.mouse.up()
+  const t2 = (await state()).overlays[0]
+  check(`${tag}: dragging its end makes it last longer`, t2.end - t1.end > 0.4 && approx(t2.start, t1.start, 0.05), `${t1.end.toFixed(2)}→${t2.end.toFixed(2)}`)
+
+  // ---- shapes, spotlight, blur, zoom ----
+  await editor.click('#tool-shapes')
+  for (const id of ['add-arrow', 'add-box', 'add-step', 'add-spotlight', 'add-blur', 'add-zoom']) await editor.click(`#${id}`)
+  s = await state()
+  check(`${tag}: arrow, box, step, spotlight, blur and zoom can all be added`, ['arrow', 'box', 'step', 'spotlight', 'blur', 'zoom'].every((k) => s.overlays.some((o) => o.kind === k)), s.overlays.map((o) => o.kind).join(','))
+  check(`${tag}: a zoom area has handles on all sides`, (await editor.locator('#sel i.h').count()) === 8)
+  const lanes = await editor.locator('.blk.over').count()
+  check(`${tag}: everything shows in the timeline`, lanes === 7, `${lanes} bars`)
+  // arrange the scene: comment-ish things early, the spotlight/blur/zoom later
+  await store(([D]) => {
+    const st = window.__editor.store
+    const early = [0.05 * D, 0.6 * D]
+    const late = [0.65 * D, 0.95 * D]
+    st.edit((p) => ({ ...p, overlays: p.overlays.map((o) => {
+      const [a, b] = ['spotlight', 'blur', 'zoom'].includes(o.kind) ? late : early
+      return { ...o, start: Math.round(a * 30) / 30, end: Math.round(b * 30) / 30 }
+    }) }))
+  }, [D])
+  await editor.evaluate(() => window.__editor.store.select(null))
+  await seekTo(editor, D * 0.8)
+  await sleep(500)
+  const zoomed = await editor.$eval('#layers', (e) => e.style.transform)
+  check(`${tag}: while a zoom is on, the picture is magnified`, /scale\(/.test(zoomed), zoomed)
+  check(`${tag}: blur areas are shown on the video`, (await editor.locator('.blur-box:visible').count()) >= 1)
+
+  // ---- other video, pictures, picture-in-picture ----
+  await editor.click('#tool-media')
+  await answerPicker(app, [clip])
+  await seekTo(editor, D * 0.5)
+  const durBefore = (await state()).duration
+  await editor.click('#add-media')
+  await editor.waitForFunction(() => window.__editor.store.project.clips.some((c) => c.media !== 'recording'), null, { timeout: 15000 })
+  s = await state()
+  const added = s.clips.find((k) => k.name === 'blue clip.mp4')
+  check(`${tag}: a video can be added into the middle`, !!added && approx(s.duration, durBefore + 3, 0.2) && s.clips.length >= 3, `${durBefore.toFixed(2)}→${s.duration.toFixed(2)}s, ${s.clips.length} pieces`)
+  await editor.check('#prop-transition')
+  s = await state()
+  check(`${tag}: it can fade in from the piece before (the two overlap)`, s.clips.find((k) => k.name === 'blue clip.mp4').transition === 'fade' && approx(s.duration, durBefore + 3 - 0.5, 0.2), `${s.duration.toFixed(2)}s`)
+  await answerPicker(app, [pic])
+  await editor.click('#add-media')
+  await editor.waitForFunction(() => window.__editor.store.project.clips.some((c) => c.kind === 'image'), null, { timeout: 15000 })
+  s = await state()
+  const still = s.clips.find((k) => k.kind === 'image')
+  check(`${tag}: a picture can be added and is shown for 5 seconds`, !!still && approx(still.out - still.in, 5, 0.05))
+  await answerPicker(app, [clip])
+  await editor.click('#add-pip')
+  await editor.waitForFunction(() => window.__editor.store.project.overlays.some((o) => o.kind === 'pip'), null, { timeout: 15000 })
+  await sleep(800)
+  check(`${tag}: a video can be shown in a small window (picture-in-picture)`, (await editor.locator('#pips .pip:visible').count()) === 1)
+  await store(() => {
+    const st = window.__editor.store
+    const D = st.duration
+    st.edit((p) => ({ ...p, overlays: p.overlays.map((o) => (o.kind === 'pip' ? { ...o, start: Math.round(0.7 * D * 30) / 30, end: Math.round(0.95 * D * 30) / 30 } : o)) }))
+  })
+
+  // ---- music ----
+  await editor.click('#tool-music')
+  await answerPicker(app, [song])
+  await editor.click('#add-music')
+  await editor.waitForFunction(() => !!window.__editor.store.project.music, null, { timeout: 15000 })
+  s = await state()
+  check(`${tag}: music can be added from a file`, s.music?.name === 'song.wav' && s.music.loop === true)
+  check(`${tag}: the music shows in the timeline with its waveform`, (await editor.locator('.blk.music-blk canvas.wave').count()) === 1)
+  await editor.locator('#prop-music-volume').fill('0.3')
+  await editor.uncheck('#prop-music-duck')
+  await editor.locator('#prop-music-fadeout').fill('3')
+  s = await state()
+  check(`${tag}: its volume, fades and "quieter while someone speaks" can be set`, approx(s.music.volume, 0.3, 0.01) && s.music.duck === false && s.music.fadeOut === 3, JSON.stringify(s.music))
+  await editor.check('#prop-music-duck')
+
+  // ---- title card ----
+  await editor.click('#tool-titles')
+  await store(() => window.__editor.store.seek(window.__editor.store.duration))
+  await editor.click('#add-title-gradient')
+  await editor.fill('#prop-card-title', 'Thanks for watching')
+  s = await state()
+  const card = await store(() => window.__editor.store.project.clips.find((k) => k.card)?.card)
+  check(`${tag}: a title card can be added and its words changed`, card?.title === 'Thanks for watching' && s.clips[s.clips.length - 1].kind === 'image', JSON.stringify(card))
+
+  // ---- brand colours and fonts ----
+  await editor.click('#open-brand')
+  check(`${tag}: "Your brand" opens`, await editor.isVisible('#brand-add-color'))
+  await editor.fill('#brand-hex', '#7c3aed')
+  await editor.click('#brand-add-color')
+  const font = isWin ? 'C:\\Windows\\Fonts\\arial.ttf' : ['/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', '/usr/share/fonts/dejavu/DejaVuSans.ttf'].find((f) => fs.existsSync(f))
+  if (font && fs.existsSync(font)) {
+    await answerPicker(app, [font])
+    await editor.click('#brand-add-font')
+    await editor.waitForSelector('.brand-font', { timeout: 10000 })
+  } else warn(`${tag}: no font file on this computer to try "Add a font"`)
+  await editor.click('#brand-save')
+  await sleep(300)
+  s = await state()
+  const saved = (await main.evaluate(() => window.api.getSettings())).brand
+  check(`${tag}: new brand colours (and fonts) are kept`, s.brand.colors.includes('#7c3aed') && saved.colors.includes('#7c3aed') && (!font || saved.fonts.length === 1), JSON.stringify(saved))
+  await editor.click('.blk.over >> nth=0')
+  check(`${tag}: brand colours appear wherever something can be coloured`, (await editor.locator('#prop-style .swatch[data-color="#7c3aed"]').count()) === 1)
+  if (font && fs.existsSync(font)) check(`${tag}: brand fonts appear in the font list`, (await editor.locator('#prop-font option').allTextContents()).some((t) => /\(yours\)/.test(t)))
+
+  // ---- playing ----
+  await store(() => window.__editor.store.seek(0))
+  await editor.click('#play')
+  await sleep(1600)
+  const played = (await state()).playhead
+  await editor.click('#play')
+  check(`${tag}: playing moves the playhead along`, played > 0.8, `${played.toFixed(2)}s after 1.6 s`)
+  const vt = await editor.evaluate(() => window.__editor.player.activeVideo?.currentTime ?? 0)
+  check(`${tag}: and the video under it`, vt > 0.3, `${vt.toFixed(2)}`)
+
+  // ---- crop ----
+  await editor.click('#tool-crop')
+  await editor.selectOption('#aspect', '1:1')
+  const crop = await editor.textContent('#crop-size')
+  const [kw, kh] = crop.split('×').map((x) => parseInt(x, 10))
+  check(`${tag}: crop picks a square area`, kw === kh && kw > 100, crop)
+  check(`${tag}: the preview is square while it is chosen... and stays cropped afterwards`, !!(await editor.locator('#crop-box').boundingBox()))
+  await editor.click('#tool-comments')
+  s = await state()
+  const [cw, ch] = [s.out.width, s.out.height]
+  log(`editor: ${s.duration.toFixed(1)} s, ${cw}×${ch}, ${s.overlays.length} overlays, ${s.clips.length} pieces, music ${s.music?.name}`)
+
+  // ---- save ----
+  const saveDuration = s.duration
+  const file = await save(app, editor, 'e2e-edited')
+  validate('Edited (cut, comments, shapes, media, music, title, crop)', file, { width: cw, height: ch, audio: true, minSeconds: saveDuration - 0.7, maxSeconds: saveDuration + 0.8 })
+  const d = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(ff(['-hide_banner', '-i', file]).stderr)
+  const seconds = d ? +d[1] * 3600 + +d[2] * 60 + +d[3] : 0
+  check(`${tag}: the saved video is as long as the editor said`, approx(seconds, saveDuration, 0.7), `${seconds.toFixed(2)}s vs ${saveDuration.toFixed(2)}s`)
+
+  // what is drawn on the video is in the saved file, in the right place and colour
+  const step = s.overlays.find((o) => o.kind === 'step')
+  const tMid = (step.start + step.end) / 2
+  const r = step.size * 0.8 * (ch / 1080)
+  const sample = pixelAt(file, tMid, step.x * cw + r * 0.55, step.y * ch, cw, ch)
+  check(`${tag}: the numbered step is in the saved video, in its colour and place`, nearColour(sample, [0xef, 0x44, 0x44], 45), `pixel ${sample} at ${tMid.toFixed(2)}s`)
+  const b = s.overlays.find((o) => o.kind === 'bubble')
+  const bs = b.size * (ch / 1080)
+  const bp = pixelAt(file, tMid, b.x * cw + bs * 0.3, b.y * ch + bs * 0.65, cw, ch)
+  check(`${tag}: the comment is in the saved video with the style chosen`, nearColour(bp, [0xfd, 0xe0, 0x47], 45), `pixel ${bp}`)
+  const lastSecond = ff(['-hide_banner', '-sseof', '-1.5', '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-']).stderr
+  const lastPeak = /max_volume: (-?[\d.]+) dB/.exec(lastSecond)
+  check(`${tag}: the music plays under the whole video`, !!lastPeak, lastPeak ? `peak ${lastPeak[1]} dB near the end` : 'no audio at the end')
+  const cardPx = pixelAt(file, saveDuration - 1, cw * 0.05, ch * 0.05, cw, ch)
+  check(`${tag}: the title card is the last thing in the video`, nearColour(cardPx, [0x4f, 0x46, 0xe5], 70) || nearColour(cardPx, [0x93, 0x33, 0xea], 70) || (cardPx && cardPx[2] > 150 && cardPx[0] < 190), `pixel ${cardPx}`)
+  return file
+}
+
+module.exports = { editorSuite }

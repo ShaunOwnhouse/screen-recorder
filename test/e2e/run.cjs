@@ -9,6 +9,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const http = require('node:http')
+const { editorSuite } = require('./editor-suite.cjs')
 
 const ROOT = path.resolve(__dirname, '../..')
 const FFMPEG = require('ffmpeg-static')
@@ -21,6 +22,9 @@ const isWin = process.platform === 'win32'
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-e2e-'))
 const outDir = path.join(userData, 'saved')
 
+const ONLY = (process.env.E2E_ONLY || '').split(',').filter(Boolean)
+/** E2E_ONLY=edit,pause runs just those parts (for quick local checks); unset runs everything. */
+const only = (name) => !ONLY.length || ONLY.includes(name)
 const results = []
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a)
@@ -395,7 +399,7 @@ async function record(app, main, label, { seconds, region, checkAffinity, pauses
     await shot(editor, `${label}-editor`)
     throw new Error(`review window could not open the recording: ${loadError}`)
   }
-  await editor.waitForFunction(() => document.querySelector('video').readyState >= 2, null, { timeout: 60000 })
+  await editor.waitForFunction(() => (document.querySelector('#layers video')?.readyState ?? 0) >= 2, null, { timeout: 60000 })
     .then(() => check(`${label}: review window can play the video`, true))
     .catch(() => check(`${label}: review window can play the video`, false, 'preview never became ready'))
   await shot(editor, `${label}-editor`)
@@ -447,14 +451,40 @@ async function dragOnCanvas(page, from, to) {
   await page.mouse.up()
 }
 
+/** Clicks the timeline ruler at a time, the way a person moves the playhead. */
+async function seekTo(editor, t) {
+  const box = await editor.locator('#tl-ruler').boundingBox()
+  const px = await editor.evaluate(() => window.__editor.store.pxPerSec)
+  await editor.mouse.click(box.x + t * px, box.y + 12)
+  await sleep(150)
+}
+
+const editorState = (editor) => editor.evaluate(() => {
+  const s = window.__editor.store
+  return { duration: s.duration, playhead: s.playhead, clips: s.project.clips.map((c) => ({ id: c.id, name: c.name, kind: c.kind, in: c.in, out: c.out, transition: c.transition })),
+    overlays: s.project.overlays.map((o) => ({ ...o })), music: s.project.music, crop: s.project.crop, out: s.outputSize, brand: s.brand, selection: s.selection }
+})
+
+/** Splits at 30 % and deletes the first piece, like cutting the start off. */
 async function cutFirstThird(editor) {
-  const tl = await editor.locator('#timeline').boundingBox()
-  await editor.mouse.move(tl.x + 2, tl.y + 20)
-  await editor.mouse.down()
-  await editor.mouse.move(tl.x + tl.width * 0.3, tl.y + 20, { steps: 6 })
-  await editor.mouse.up()
+  const dur = (await editorState(editor)).duration
+  await seekTo(editor, dur * 0.3)
+  await editor.click('#split')
+  await editor.click('.blk.clip >> nth=0')
   await editor.click('#delete-sel')
 }
+
+/** Makes the next "Add video / music / font" dialog answer with these files. */
+const answerPicker = (app, files) => app.evaluate(({ dialog }, files) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: files }) }, files)
+
+/** The colour of one pixel of a saved video at a time, as a player shows it. */
+function pixelAt(file, t, x, y, w, h) {
+  const r = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', `scale=${w}:${h}:in_color_matrix=bt709:in_range=tv:out_range=pc,format=rgb24`, '-f', 'rawvideo', '-'], { maxBuffer: 256 * 1024 * 1024 })
+  const d = r.stdout
+  const i = (Math.round(y) * w + Math.round(x)) * 3
+  return d.length > i + 2 ? [d[i], d[i + 1], d[i + 2]] : null
+}
+const nearColour = (a, b, tol = 40) => !!a && a.every((v, i) => Math.abs(v - b[i]) <= tol)
 
 async function save(app, editor, name) {
   await editor.fill('#name', name)
@@ -558,7 +588,7 @@ async function save(app, editor, name) {
     }
 
     // ---- Settings area: a fixed-height box that scrolls, with section shortcuts ----
-    {
+    if (only('panel')) {
       log('--- panel layout ---')
       check('Panel: has Record and Screenshot tabs, Record selected', (await main.getAttribute('#tab-record', 'aria-selected')) === 'true' && (await main.getAttribute('#tab-shot', 'aria-selected')) === 'false')
       check('Panel: named Screen Snap', (await main.title()) === 'Screen Snap' && /Screen Snap/.test(await main.textContent('.brand h1')), await main.title())
@@ -673,7 +703,7 @@ async function save(app, editor, name) {
     }
 
     // ---- Updates: the installed app updates itself (Settings → Updates) ----
-    {
+    if (only('updates')) {
       log('--- updates ---')
       await main.click('#settings-toggle')
       await main.waitForSelector('#settings-wrap:not([hidden])')
@@ -734,7 +764,7 @@ async function save(app, editor, name) {
     }
 
     // 1) Whole screen, Maximum, with audio → save untouched
-    {
+    if (only('maximum')) {
       const { editor, status, barBounds, barVisible } = await record(app, main, 'maximum', { seconds: 5, checkAffinity: true })
       const file = await save(app, editor, 'e2e-maximum')
       validate('Maximum whole screen', file, {
@@ -755,7 +785,7 @@ async function save(app, editor, name) {
     }
 
     // 1b) Pause and resume (twice) → one continuous file that leaves out the paused time
-    {
+    if (only('pause')) {
       const wallStart = Date.now()
       const { editor, pauseLog, finalElapsed } = await record(app, main, 'paused', {
         seconds: 2.5,
@@ -781,32 +811,23 @@ async function save(app, editor, name) {
     }
 
     // 1c) Stop while paused → everything recorded so far is kept
-    {
+    if (only('pause')) {
       const { editor } = await record(app, main, 'pause-stop', { seconds: 2.5, pauses: [{ via: 'bar', hold: 1.5, stopWhilePaused: true }] })
       const file = await save(app, editor, 'e2e-pause-stop')
       validate('Stopped while paused', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 1.5, maxSeconds: 6 })
     }
 
-    // 2) Edit: cut the start, crop to 16:9 → save (re-encoded)
-    {
+    // 2) The editor, used the way a person uses it: cut, comment, shapes, media, music, title card, brand, crop → save
+    if (only('edit')) {
       const { editor } = await record(app, main, 'edit', { seconds: 6 })
-      const tl = await editor.locator('#timeline').boundingBox()
-      await editor.mouse.move(tl.x + 2, tl.y + 20)
-      await editor.mouse.down()
-      await editor.mouse.move(tl.x + tl.width * 0.3, tl.y + 20, { steps: 6 })
-      await editor.mouse.up()
-      await editor.click('#delete-sel')
-      await editor.click('#crop-toggle')
-      await editor.selectOption('#aspect', '16:9')
-      const crop = await editor.textContent('#crop-size')
-      const [cw, ch] = crop.split('×').map((s) => parseInt(s.trim(), 10))
-      log('editing: cut first 30%, crop', crop)
-      const file = await save(app, editor, 'e2e-edited')
-      validate('Edited (trim + crop)', file, { width: cw, height: ch, audio: true, minSeconds: 2, maxSeconds: 8 })
+      await editorSuite({
+        app, editor, main, check, warn, log, sleep, userData, ff, FFMPEG, save, validate, seekTo, editorState, answerPicker, pixelAt, nearColour,
+        cutFirstThird, isWin
+      })
     }
 
     // 3) Studio (4:4:4) → "Make it play everywhere" (ticked by default) → standard 4:2:0
-    {
+    if (only('studio')) {
       await setSettings(main, { quality: 'studio' })
       const { editor, infoLine } = await record(app, main, 'studio', { seconds: 3 })
       check('Studio: recorded as 4:4:4', /4:4:4/.test(infoLine), infoLine)
@@ -819,7 +840,7 @@ async function save(app, editor, name) {
 
     // 4) Region covering the top of the screen: the bar must move out of the recorded area, so it
     //    can't be in the video no matter what the capture method does with window exclusion.
-    {
+    if (only('region')) {
       const region = { fractions: { x1: 0.02, y1: 0.03, x2: 0.98, y2: 0.55 } }
       const { editor, barBounds } = await record(app, main, 'region', { seconds: 3, region })
       const e = region.expected
@@ -837,7 +858,7 @@ async function save(app, editor, name) {
     }
 
     // 5) Other quality/frame-rate settings also produce playable files
-    {
+    if (only('quality')) {
       await setSettings(main, { quality: 'veryhigh', fps: 30 })
       const { editor } = await record(app, main, 'veryhigh30', { seconds: 4 })
       const file = await save(app, editor, 'e2e-veryhigh-30fps')
@@ -846,14 +867,14 @@ async function save(app, editor, name) {
     }
 
     // 6) A longer recording: stays in sync and stops cleanly
-    {
+    if (only('long')) {
       const { editor } = await record(app, main, 'long', { seconds: 30 })
       const file = await save(app, editor, 'e2e-long')
       validate('Long recording (30 s)', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 29, maxSeconds: 45, fps: 60, syncAv: true })
     }
 
     // 7) Save as… writes to the chosen path
-    {
+    if (only('saveas')) {
       const target = path.join(outDir, 'chosen-elsewhere.mp4')
       await app.evaluate(({ dialog }, t) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: t }) }, target)
       const { editor } = await record(app, main, 'saveas', { seconds: 3 })
@@ -864,7 +885,7 @@ async function save(app, editor, name) {
     }
 
     // 8) Discard deletes the recording and leaves nothing to review
-    {
+    if (only('discard')) {
       await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
       const { editor } = await record(app, main, 'discard', { seconds: 3 })
       await editor.click('#discard')
@@ -876,7 +897,7 @@ async function save(app, editor, name) {
     }
 
     // 9) Other save formats: the default stays MP4 · H.264; everything else warns, and really converts
-    {
+    if (only('formats')) {
       log('--- save formats ---')
       const caps = await main.evaluate(() => window.api.getCapabilities())
       log('video formats this FFmpeg can write:', caps.videoFormats.join(', '), '| images:', caps.imageFormats.join(', '))
@@ -949,7 +970,7 @@ async function save(app, editor, name) {
     }
 
     // 11) Screenshots
-    {
+    if (only('screenshots')) {
       log('--- screenshots ---')
       await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
       fs.mkdirSync(shotDir, { recursive: true })
@@ -1169,7 +1190,7 @@ async function save(app, editor, name) {
     }
 
     // 10) Cancel during the countdown leaves nothing behind
-    {
+    if (only('cancel')) {
       log('--- cancel during countdown ---')
       await setSettings(main, { countdown: 5, mode: 'fullscreen' })
       await main.click('#tab-record')

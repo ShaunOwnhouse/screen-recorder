@@ -21,65 +21,50 @@
         </div>
       </header>
 
-      <section class="stage-wrap">
-        <div id="stage" class="stage">
-          <video id="video" preload="auto" playsinline></video>
-          <div id="crop" class="crop" hidden>
-            <div id="crop-box" class="crop-box">
-              <span class="crop-size" id="crop-size"></span>
-              <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i>
-              <i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i>
+      <div class="work">
+        <nav id="rail" class="rail" aria-label="Tools"></nav>
+        <aside id="drawer" class="drawer" aria-label="Add things"></aside>
+        <section class="stage-wrap">
+          <div id="stage" class="stage">
+            <div id="frame" class="frame">
+              <div id="layers" class="layers"></div>
+              <div id="pips" class="pips"></div>
+              <canvas id="overlay-canvas" class="overlay-canvas"></canvas>
+              <div id="sel" class="sel-box" hidden></div>
+              <div id="crop" class="crop" hidden>
+                <div id="crop-box" class="crop-box">
+                  <span class="crop-size" id="crop-size"></span>
+                  <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i>
+                  <i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i>
+                </div>
+              </div>
             </div>
+            <div id="stage-msg" class="stage-msg" hidden></div>
           </div>
-          <div id="stage-msg" class="stage-msg" hidden></div>
-        </div>
-      </section>
-
-      <section class="transport">
-        <button id="play" type="button" class="icon-btn" aria-label="Play">
-          <svg id="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
-        </button>
-        <span id="time" class="time">0:00.0 / 0:00.0</span>
-        <div class="spacer"></div>
-        <span id="kept" class="muted"></span>
-      </section>
-
-      <section class="timeline-wrap">
-        <div id="timeline" class="timeline" tabindex="0" aria-label="Timeline">
-          <div id="segments" class="segments"></div>
-          <div id="selection" class="selection" hidden>
-            <span class="handle" data-edge="in"></span>
-            <span class="handle" data-edge="out"></span>
+          <div class="transport">
+            <button id="play" type="button" class="icon-btn" aria-label="Play">
+              <svg id="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+            </button>
+            <span id="time" class="time">0:00.0 / 0:00.0</span>
+            <span class="spacer"></span>
+            <span class="hint">Drag things on the video to move them · corner handles resize</span>
           </div>
-          <div id="playhead" class="playhead"></div>
-        </div>
-        <div class="hint">Drag across the timeline to select a part, then keep it or delete it. Grey parts are removed.</div>
-      </section>
+        </section>
+        <aside id="props" class="props" aria-label="Settings for the selected thing"></aside>
+      </div>
 
-      <section class="tools">
-        <div class="group">
-          <button id="mark-in" type="button" class="ghost" title="Mark start (I)">Mark start <kbd>I</kbd></button>
-          <button id="mark-out" type="button" class="ghost" title="Mark end (O)">Mark end <kbd>O</kbd></button>
+      <section class="tl-wrap">
+        <div class="tl-tools">
+          <button id="split" type="button" class="ghost" title="Cut the piece at the playhead (S)">✂ Split here <kbd>S</kbd></button>
+          <button id="delete-sel" type="button" class="ghost" title="Delete the selected piece, comment or music (Delete)">Delete <kbd>Del</kbd></button>
+          <button id="undo" type="button" class="ghost" title="Undo (Ctrl+Z)">Undo</button>
+          <button id="redo" type="button" class="ghost" title="Redo (Ctrl+Y)">Redo</button>
+          <span class="spacer"></span>
+          <button id="add-media-bar" type="button" class="ghost">+ Add video or picture</button>
+          <button id="add-music-bar" type="button" class="ghost">♪ Add music</button>
+          <label class="zoom">Zoom <input id="tl-zoom" type="range" min="0" max="100" step="1" value="40" aria-label="Timeline zoom" /></label>
         </div>
-        <div class="group">
-          <button id="keep-sel" type="button" class="ghost" disabled>Keep only selection</button>
-          <button id="delete-sel" type="button" class="ghost" disabled>Delete selection <kbd>Del</kbd></button>
-        </div>
-        <div class="group">
-          <button id="undo" type="button" class="ghost" disabled>Undo</button>
-          <button id="reset" type="button" class="ghost" disabled>Reset</button>
-        </div>
-        <div class="group">
-          <button id="crop-toggle" type="button" class="ghost" aria-pressed="false">Crop</button>
-          <select id="aspect" hidden aria-label="Crop shape">
-            <option value="free">Free</option>
-            <option value="16:9">16:9</option>
-            <option value="9:16">9:16 (vertical)</option>
-            <option value="1:1">1:1</option>
-            <option value="4:3">4:3</option>
-          </select>
-          <button id="crop-reset" type="button" class="ghost" hidden>Remove crop</button>
-        </div>
+        <div id="timeline" class="timeline" aria-label="Timeline"></div>
       </section>
 
       <footer class="save">
@@ -114,6 +99,7 @@
         </div>
       </footer>
 
+      <div id="modal" class="modal" hidden></div>
       <div id="busy" class="busy" hidden>
         <div class="busy-card">
           <strong id="busy-title">Saving…</strong>

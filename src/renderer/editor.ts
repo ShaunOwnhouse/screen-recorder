@@ -1,21 +1,21 @@
-import { isFullRange, keepOnly, playablePosition, removeRange, totalDuration } from '../shared/segments.ts'
+import { isDrawn, isPlain, newProject, type Clip, type Overlay } from '../shared/project.ts'
 import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
-import type { EditorSource, Rect, Segment, VideoFormat } from '../shared/types.ts'
+import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts'
+import { Actions } from './editor/actions.ts'
+import { loadBrandFonts } from './editor/brand.ts'
+import { frameFor, renderCardPicture, renderOverlayPicture } from './editor/draw.ts'
+import { Panels } from './editor/panels.ts'
+import { Player } from './editor/player.ts'
+import { Stage } from './editor/stage.ts'
+import { clampNum, fmtTime, Store } from './editor/store.ts'
+import { Timeline } from './editor/timeline.ts'
 
 const api = window.editor
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
 
-const video = $<HTMLVideoElement>('video')
 const stage = $('stage')
+const frame = $('frame')
 const stageMsg = $('stage-msg')
-const timeline = $('timeline')
-const segmentsEl = $('segments')
-const selectionEl = $('selection')
-const playhead = $('playhead')
-const cropLayer = $('crop')
-const cropBox = $('crop-box')
-const cropSize = $('crop-size')
-const aspectSel = $<HTMLSelectElement>('aspect')
 const nameInput = $<HTMLInputElement>('name')
 const compat = $<HTMLInputElement>('compat')
 const formatSel = $<HTMLSelectElement>('format')
@@ -26,304 +26,66 @@ const busyBar = $('busy-bar')
 const busyDetail = $('busy-detail')
 const busyCancel = $<HTMLButtonElement>('busy-cancel')
 
-let src: EditorSource | null = null
-let duration = 0
-let keep: Segment[] = []
-let history: Segment[][] = []
-let sel: { a: number; b: number } | null = null
-let crop: Rect | null = null
-let cropOn = false
+let src: EditorSource
+let store: Store
+let player: Player
+let actions: Actions
+let timeline: Timeline
 let triedProxy = false
 let saving = false
-
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
-
-function fmt(t: number): string {
-  const s = Math.max(0, t)
-  const m = Math.floor(s / 60)
-  const sec = s - m * 60
-  return `${m}:${sec.toFixed(1).padStart(4, '0')}`
-}
 
 function fmtBytes(b: number): string {
   return b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(1)} MB` : `${(b / 1024 ** 3).toFixed(2)} GB`
 }
 
-function frameStep(): number {
-  return 1 / (src?.meta.fps || 30)
-}
-
-// ---------- timeline ----------
-
-function timeAt(clientX: number): number {
-  const r = timeline.getBoundingClientRect()
-  return clamp(((clientX - r.left) / r.width) * duration, 0, duration)
-}
-
-function pct(t: number): string {
-  return `${(duration ? (t / duration) * 100 : 0).toFixed(4)}%`
-}
-
-function renderTimeline(): void {
-  const parts: HTMLElement[] = []
-  let cursor = 0
-  const add = (a: number, b: number, kind: 'kept' | 'removed'): void => {
-    if (b - a <= 0) return
-    const d = document.createElement('div')
-    d.className = `seg ${kind}`
-    d.style.left = pct(a)
-    d.style.width = `${((b - a) / duration) * 100}%`
-    parts.push(d)
-  }
-  for (const [a, b] of keep) {
-    add(cursor, a, 'removed')
-    add(a, b, 'kept')
-    cursor = b
-  }
-  add(cursor, duration, 'removed')
-  segmentsEl.replaceChildren(...parts)
-
-  selectionEl.hidden = !sel
-  if (sel) {
-    const [a, b] = sel.a <= sel.b ? [sel.a, sel.b] : [sel.b, sel.a]
-    selectionEl.style.left = pct(a)
-    selectionEl.style.width = `${((b - a) / duration) * 100}%`
-  }
-  renderToolState()
-}
-
-function renderPlayhead(): void {
-  playhead.style.left = pct(video.currentTime)
-  $('time').textContent = `${fmt(video.currentTime)} / ${fmt(duration)}`
-}
-
-function renderToolState(): void {
-  const hasSel = !!sel && Math.abs(sel.b - sel.a) >= 0.05
-  ;($('keep-sel') as HTMLButtonElement).disabled = !hasSel
-  ;($('delete-sel') as HTMLButtonElement).disabled = !hasSel
-  ;($('undo') as HTMLButtonElement).disabled = !history.length
-  ;($('reset') as HTMLButtonElement).disabled = isFullRange(keep, duration) && !crop
-  const edited = !isFullRange(keep, duration)
-  $('kept').textContent = edited ? `Final length ${fmt(totalDuration(keep))}` : ''
-}
-
-function applyEdit(next: Segment[]): void {
-  if (!next.length) {
-    flash('That would remove the whole recording.')
-    return
-  }
-  history.push(keep)
-  keep = next
-  sel = null
-  renderTimeline()
-  const pos = playablePosition(keep, video.currentTime)
-  video.currentTime = pos ?? keep[0][0]
-}
-
-function flash(text: string): void {
+function note(text: string): void {
   stageMsg.textContent = text
   stageMsg.hidden = false
-  setTimeout(() => (stageMsg.hidden = true), 2500)
+  setTimeout(() => (stageMsg.hidden = true), 2600)
 }
 
-let drag: { mode: 'new' | 'in' | 'out'; startX: number; startT: number } | null = null
+// ---------- the stage ----------
 
-timeline.addEventListener('pointerdown', (e) => {
-  if (!duration) return
-  timeline.setPointerCapture(e.pointerId)
-  const edge = (e.target as HTMLElement).dataset.edge as 'in' | 'out' | undefined
-  if (edge && sel) {
-    if (sel.a > sel.b) sel = { a: sel.b, b: sel.a }
-    drag = { mode: edge, startX: e.clientX, startT: 0 }
-    return
-  }
-  const t = timeAt(e.clientX)
-  drag = { mode: 'new', startX: e.clientX, startT: t }
-  video.currentTime = t
-})
-
-timeline.addEventListener('pointermove', (e) => {
-  if (!drag) return
-  const t = timeAt(e.clientX)
-  if (drag.mode === 'new') {
-    if (Math.abs(e.clientX - drag.startX) < 4) return
-    sel = { a: drag.startT, b: t }
-  } else if (sel) {
-    if (drag.mode === 'in') sel.a = t
-    else sel.b = t
-  }
-  video.currentTime = t
-  renderTimeline()
-})
-
-timeline.addEventListener('pointerup', (e) => {
-  if (drag?.mode === 'new' && Math.abs(e.clientX - drag.startX) < 4) sel = null
-  drag = null
-  renderTimeline()
-})
-
-function markIn(): void {
-  const t = video.currentTime
-  sel = sel ? { a: t, b: Math.max(sel.a, sel.b) } : { a: t, b: duration }
-  renderTimeline()
-}
-
-function markOut(): void {
-  const t = video.currentTime
-  sel = sel ? { a: Math.min(sel.a, sel.b), b: t } : { a: 0, b: t }
-  renderTimeline()
-}
-
-function selRange(): [number, number] {
-  return sel!.a <= sel!.b ? [sel!.a, sel!.b] : [sel!.b, sel!.a]
-}
-
-// ---------- playback ----------
-
-function togglePlay(): void {
-  if (video.paused) {
-    const pos = playablePosition(keep, video.currentTime)
-    video.currentTime = pos ?? keep[0]?.[0] ?? 0
-    void video.play()
-  } else video.pause()
-}
-
-function tick(): void {
-  if (!video.paused && keep.length) {
-    // Skip over removed parts so playback previews the final cut.
-    const pos = playablePosition(keep, video.currentTime)
-    if (pos === null) {
-      video.pause()
-      video.currentTime = keep[keep.length - 1][1]
-    } else if (pos > video.currentTime + 0.02) video.currentTime = pos
-  }
-  renderPlayhead()
-  requestAnimationFrame(tick)
-}
-
-video.addEventListener('play', () => ($('play-icon').innerHTML = '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>'))
-video.addEventListener('pause', () => ($('play-icon').innerHTML = '<path d="M8 5v14l11-7z"/>'))
-
-// ---------- crop ----------
-
-function contentRect(): { left: number; top: number; width: number; height: number } {
+/** Sizes the picture to the shape of the finished video, as big as fits. */
+function layoutFrame(): void {
   const r = stage.getBoundingClientRect()
-  const ar = src ? src.meta.width / src.meta.height : 16 / 9
-  let width = r.width
-  let height = width / ar
-  if (height > r.height) {
-    height = r.height
-    width = height * ar
+  const maxW = Math.max(40, r.width - 28)
+  const maxH = Math.max(40, r.height - 28)
+  const aspect = store.aspect
+  let w = maxW
+  let h = w / aspect
+  if (h > maxH) {
+    h = maxH
+    w = h * aspect
   }
-  return { left: (r.width - width) / 2, top: (r.height - height) / 2, width, height }
+  frame.style.width = `${Math.floor(w)}px`
+  frame.style.height = `${Math.floor(h)}px`
+  player.invalidate()
 }
 
-function aspectRatio(): number | null {
-  const v = aspectSel.value
-  if (v === 'free') return null
-  const [w, h] = v.split(':').map(Number)
-  return w / h
+function updatePlayIcon(): void {
+  $('play-icon').innerHTML = store.playing ? '<path d="M6 5h4v14H6zM14 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>'
 }
 
-function renderCrop(): void {
-  cropLayer.hidden = !cropOn
-  $('crop-toggle').setAttribute('aria-pressed', String(cropOn))
-  aspectSel.hidden = !cropOn
-  $('crop-reset').hidden = !cropOn
-  if (!cropOn || !crop || !src) return
-  const c = contentRect()
-  Object.assign(cropLayer.style, { left: `${c.left}px`, top: `${c.top}px`, width: `${c.width}px`, height: `${c.height}px` })
-  Object.assign(cropBox.style, {
-    left: `${crop.x * 100}%`,
-    top: `${crop.y * 100}%`,
-    width: `${crop.width * 100}%`,
-    height: `${crop.height * 100}%`
+function updateTools(): void {
+  ;($('undo') as HTMLButtonElement).disabled = !store.canUndo
+  ;($('redo') as HTMLButtonElement).disabled = !store.canRedo
+  const sel = store.selection
+  ;($('delete-sel') as HTMLButtonElement).disabled = !sel
+  ;($('split') as HTMLButtonElement).disabled = !store.project.clips.some((c, i, all) => {
+    void c
+    void i
+    void all
+    return true
   })
-  const w = Math.floor((crop.width * src.meta.width) / 2) * 2
-  const h = Math.floor((crop.height * src.meta.height) / 2) * 2
-  cropSize.textContent = `${w} × ${h}`
-  renderToolState()
-}
-
-function fitAspect(): void {
-  if (!src) return
-  const ratio = aspectRatio()
-  if (!ratio) return
-  // Largest rectangle of this shape that fits the frame, centred.
-  const frameRatio = src.meta.width / src.meta.height
-  let w = 1
-  let h = frameRatio / ratio
-  if (h > 1) {
-    h = 1
-    w = ratio / frameRatio
-  }
-  crop = { x: (1 - w) / 2, y: (1 - h) / 2, width: w, height: h }
-}
-
-let cropDrag: { handle: string; x: number; y: number; start: Rect } | null = null
-
-cropLayer.addEventListener('pointerdown', (e) => {
-  if (!crop) return
-  const handle = (e.target as HTMLElement).dataset.h ?? (e.target === cropBox || cropBox.contains(e.target as Node) ? 'move' : null)
-  if (!handle) return
-  cropLayer.setPointerCapture(e.pointerId)
-  cropDrag = { handle, x: e.clientX, y: e.clientY, start: { ...crop } }
-  e.preventDefault()
-})
-
-cropLayer.addEventListener('pointermove', (e) => {
-  if (!cropDrag || !src) return
-  const c = contentRect()
-  const dx = (e.clientX - cropDrag.x) / c.width
-  const dy = (e.clientY - cropDrag.y) / c.height
-  const s = cropDrag.start
-  const minW = 32 / c.width
-  const minH = 32 / c.height
-  let { x, y, width, height } = s
-
-  if (cropDrag.handle === 'move') {
-    x = clamp(s.x + dx, 0, 1 - s.width)
-    y = clamp(s.y + dy, 0, 1 - s.height)
-  } else {
-    const h = cropDrag.handle
-    if (h.includes('w')) {
-      x = clamp(s.x + dx, 0, s.x + s.width - minW)
-      width = s.x + s.width - x
-    }
-    if (h.includes('e')) width = clamp(s.width + dx, minW, 1 - s.x)
-    if (h.includes('n')) {
-      y = clamp(s.y + dy, 0, s.y + s.height - minH)
-      height = s.y + s.height - y
-    }
-    if (h.includes('s')) height = clamp(s.height + dy, minH, 1 - s.y)
-
-    const ratio = aspectRatio()
-    if (ratio) {
-      // Normalised units differ per axis, so convert the pixel ratio before locking.
-      const rn = ratio * (src.meta.height / src.meta.width)
-      if (h === 'n' || h === 's') width = height * rn
-      else height = width / rn
-      if (h.includes('n')) y = s.y + s.height - height
-      if (h.includes('w')) x = s.x + s.width - width
-      if (x < 0 || y < 0 || x + width > 1 + 1e-6 || y + height > 1 + 1e-6) return
-    }
-  }
-  crop = { x, y, width, height }
-  renderCrop()
-})
-
-cropLayer.addEventListener('pointerup', () => (cropDrag = null))
-
-function setCropMode(on: boolean): void {
-  cropOn = on
-  if (on && !crop) {
-    if (aspectRatio()) fitAspect()
-    else crop = { x: 0.05, y: 0.05, width: 0.9, height: 0.9 }
-  }
-  renderCrop()
+  $('time').textContent = `${fmtTime(store.playhead)} / ${fmtTime(store.duration)}`
 }
 
 // ---------- saving ----------
+
+const currentFormat = (): VideoFormat => formatSel.value as VideoFormat
+/** HEVC, WebM and GIF are always made fresh; MKV / MOV are re-wraps when nothing was edited. */
+const alwaysConverts = (f: VideoFormat): boolean => f === 'hevc' || f === 'webm' || f === 'gif'
 
 function showBusy(title: string, detail: string, cancellable: boolean): void {
   busy.hidden = false
@@ -334,10 +96,6 @@ function showBusy(title: string, detail: string, cancellable: boolean): void {
   busyCancel.hidden = !cancellable
   busyCancel.textContent = 'Cancel'
 }
-
-const currentFormat = (): VideoFormat => formatSel.value as VideoFormat
-/** MKV / MOV with a 4:4:4 file kept as-is is only a re-wrap; HEVC, WebM and GIF always convert. */
-const alwaysConverts = (f: VideoFormat): boolean => f === 'hevc' || f === 'webm' || f === 'gif'
 
 function renderFormat(): void {
   const f = videoFormat(currentFormat())
@@ -350,23 +108,43 @@ function renderFormat(): void {
     $('notice-text').textContent = n.text
   }
   // The 4:4:4 → 4:2:0 choice only matters when the file stays H.264; the other formats are always 4:2:0.
-  $('compat-row').hidden = !src?.meta.yuv444 || alwaysConverts(currentFormat())
+  $('compat-row').hidden = !src.meta.yuv444 || alwaysConverts(currentFormat())
+}
+
+/** The pictures FFmpeg needs: every comment, arrow and so on, and every title card, drawn at the size of the finished video. */
+async function drawPictures(): Promise<DrawnPicture[]> {
+  const { width, height } = store.outputSize
+  const f = frameFor(width / height)
+  const fonts = new Set<string>()
+  for (const o of store.project.overlays) if ('font' in o && o.font) fonts.add(o.font)
+  for (const c of store.project.clips) if (c.card) fonts.add(c.card.font)
+  for (const name of fonts) if (name !== 'sans') await document.fonts.load(`16px "${name}"`).catch(() => undefined)
+  const out: DrawnPicture[] = []
+  for (const o of store.project.overlays.filter(isDrawn)) {
+    const p = await renderOverlayPicture(o as Overlay, f, height)
+    out.push({ key: o.id, ...p })
+  }
+  for (const c of store.project.clips as Clip[]) {
+    if (!c.card) continue
+    out.push({ key: `card:${c.id}`, x: 0, y: 0, width, height, png: await renderCardPicture(c.card, f, width, height) })
+  }
+  return out
 }
 
 async function save(saveAs: boolean): Promise<void> {
   if (!src || saving) return
   saving = true
-  video.pause()
+  store.setPlaying(false)
   const format = currentFormat()
-  const trimmed = !isFullRange(keep, duration) || (!!crop && cropOn)
+  const plain = isPlain(store.project, src.meta.duration)
   const converting = alwaysConverts(format)
-  const edited = trimmed || converting || (compat.checked && !!src.meta.yuv444)
+  const edited = !plain || converting || (compat.checked && !!src.meta.yuv444)
   showBusy(
-    converting ? `Converting to ${videoFormat(format).ext.toUpperCase()}…` : trimmed ? 'Exporting your edit…' : format === 'mp4' ? 'Saving…' : 'Saving a copy…',
+    converting ? `Converting to ${videoFormat(format).ext.toUpperCase()}…` : !plain ? 'Making your video…' : format === 'mp4' ? 'Saving…' : 'Saving a copy…',
     converting
       ? 'Making a new copy in this format — this can take a while for long recordings.'
-      : trimmed
-        ? 'Re-encoding at the same quality as the recording.'
+      : !plain
+        ? 'Putting your edits together at the same quality as the recording.'
         : format === 'mp4'
           ? 'Moving the original — no re-encode, no quality loss.'
           : 'Re-wrapping the video — no re-encode, no quality loss.',
@@ -374,14 +152,13 @@ async function save(saveAs: boolean): Promise<void> {
   )
   if (saveAs) busy.hidden = true
 
-  const res = await api.save({
-    segments: keep,
-    crop: cropOn ? crop : null,
-    fileName: nameInput.value,
-    saveAs,
-    compatible: compat.checked,
-    format
-  })
+  let res: { ok: boolean; path?: string; error?: string }
+  try {
+    const pictures = plain ? [] : await drawPictures()
+    res = await api.save({ project: store.project, pictures, fileName: nameInput.value, saveAs, compatible: compat.checked, format })
+  } catch (err) {
+    res = { ok: false, error: (err as Error).message }
+  }
   saving = false
   if (res.ok) return // The main process closes this window.
   if (!res.error) {
@@ -409,82 +186,72 @@ busyCancel.addEventListener('click', () => {
 
 // ---------- wiring ----------
 
-function bind(): void {
-  $('play').addEventListener('click', togglePlay)
-  video.addEventListener('click', togglePlay)
-  $('mark-in').addEventListener('click', markIn)
-  $('mark-out').addEventListener('click', markOut)
-  $('keep-sel').addEventListener('click', () => sel && applyEdit(keepOnly(keep, ...selRange())))
-  $('delete-sel').addEventListener('click', () => sel && applyEdit(removeRange(keep, ...selRange())))
-  $('undo').addEventListener('click', () => {
-    const prev = history.pop()
-    if (prev) keep = prev
-    renderTimeline()
-  })
-  $('reset').addEventListener('click', () => {
-    history.push(keep)
-    keep = [[0, duration]]
-    sel = null
-    crop = null
-    setCropMode(false)
-    renderTimeline()
-  })
-  $('crop-toggle').addEventListener('click', () => setCropMode(!cropOn))
-  $('crop-reset').addEventListener('click', () => {
-    crop = null
-    setCropMode(false)
-    renderToolState()
-  })
-  aspectSel.addEventListener('change', () => {
-    fitAspect()
-    if (!aspectRatio() && !crop) crop = { x: 0.05, y: 0.05, width: 0.9, height: 0.9 }
-    renderCrop()
-  })
-  $('save').addEventListener('click', () => void save(false))
-  $('save-as').addEventListener('click', () => void save(true))
-  $('discard').addEventListener('click', () => void api.discard())
-  window.addEventListener('resize', renderCrop)
+function typing(e: Event): boolean {
+  const t = e.target
+  return t instanceof HTMLInputElement ? !['range', 'checkbox', 'color', 'button'].includes(t.type) : t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement
+}
 
+function bindKeys(panels: { refresh: () => void }): void {
   window.addEventListener('keydown', (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || saving) return
+    if (saving || !store) return
+    const mod = e.ctrlKey || e.metaKey
+    if (mod && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+      if (typing(e)) return
+      e.preventDefault()
+      store.undo()
+      panels.refresh()
+      return
+    }
+    if (mod && ((e.key === 'y' || e.key === 'Y') || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))) {
+      if (typing(e)) return
+      e.preventDefault()
+      store.redo()
+      panels.refresh()
+      return
+    }
+    if (typing(e) || mod) return
     if (e.key === ' ') {
       e.preventDefault()
-      togglePlay()
-    } else if (e.key === 'i' || e.key === 'I') markIn()
-    else if (e.key === 'o' || e.key === 'O') markOut()
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && sel) applyEdit(removeRange(keep, ...selRange()))
-    else if (e.key === 'Escape') {
-      sel = null
-      renderTimeline()
-    } else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) $('undo').click()
+      player.toggle()
+    } else if (e.key === 's' || e.key === 'S') actions.split()
+    else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault()
+      actions.deleteSelected()
+    } else if (e.key === 'Escape') store.select(null)
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault()
-      video.pause()
-      const step = e.shiftKey ? 1 : frameStep()
-      video.currentTime = clamp(video.currentTime + (e.key === 'ArrowLeft' ? -step : step), 0, duration)
-    }
+      store.setPlaying(false)
+      const step = e.shiftKey ? 1 : 1 / store.fps
+      store.seek(store.snap(store.playhead + (e.key === 'ArrowLeft' ? -step : step)))
+    } else if (e.key === '+' || e.key === '=') timeline.setZoom(store.pxPerSec * 1.25)
+    else if (e.key === '-') timeline.setZoom(store.pxPerSec / 1.25)
   })
 }
 
-async function loadPreview(url: string): Promise<void> {
-  video.src = url
-  video.load()
+function bindDrops(): void {
+  const AUDIO = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|wma)$/i
+  window.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types.includes('Files')) return
+    e.preventDefault()
+    document.body.classList.add('dropzone-on')
+  })
+  window.addEventListener('dragleave', (e) => {
+    if (e.target === document.documentElement || !e.relatedTarget) document.body.classList.remove('dropzone-on')
+  })
+  window.addEventListener('drop', async (e) => {
+    e.preventDefault()
+    document.body.classList.remove('dropzone-on')
+    const paths = [...(e.dataTransfer?.files ?? [])].map((f) => api.pathFor(f)).filter(Boolean)
+    const music = paths.filter((p) => AUDIO.test(p))
+    const clips = paths.filter((p) => !AUDIO.test(p))
+    if (clips.length) await actions.addClips(await api.addMedia(clips, 'clip'))
+    if (music[0]) await actions.addMusic(await api.addMedia([music[0]], 'music'))
+  })
 }
 
-video.addEventListener('loadedmetadata', () => {
-  if (!duration && Number.isFinite(video.duration) && video.duration > 0) {
-    duration = video.duration
-    keep = [[0, duration]]
-    renderTimeline()
-  }
-  stageMsg.hidden = true
-  renderCrop()
-})
-
-video.addEventListener('error', async () => {
+async function loadProxy(): Promise<void> {
   if (triedProxy) {
-    stageMsg.textContent = 'Preview unavailable — you can still trim, crop and save.'
-    stageMsg.hidden = false
+    note('Preview unavailable — you can still edit and save.')
     return
   }
   triedProxy = true
@@ -492,18 +259,20 @@ video.addEventListener('error', async () => {
   stageMsg.textContent = 'Preparing preview…'
   stageMsg.hidden = false
   const url = await api.makeProxy()
-  if (url) await loadPreview(url)
-  else {
-    stageMsg.textContent = 'Preview unavailable — you can still trim, crop and save.'
-  }
-})
+  stageMsg.hidden = true
+  if (url) {
+    player.recordingUrl = url
+    store.media.set('recording', { ...store.media.get('recording')!, url })
+    player.invalidate()
+  } else note('Preview unavailable — you can still edit and save.')
+}
 
 function showLoadError(message: string): void {
   stageMsg.replaceChildren()
   const text = document.createElement('p')
   text.textContent = message
-  const actions = document.createElement('div')
-  actions.className = 'msg-actions'
+  const actionsEl = document.createElement('div')
+  actionsEl.className = 'msg-actions'
   const discard = document.createElement('button')
   discard.type = 'button'
   discard.className = 'primary'
@@ -514,16 +283,15 @@ function showLoadError(message: string): void {
   reveal.className = 'ghost'
   reveal.textContent = 'Show file'
   reveal.addEventListener('click', () => void api.reveal())
-  actions.append(reveal, discard)
-  stageMsg.append(text, actions)
+  actionsEl.append(reveal, discard)
+  stageMsg.append(text, actionsEl)
   stageMsg.classList.add('interactive')
   stageMsg.hidden = false
-  for (const id of ['save', 'save-as', 'play', 'mark-in', 'mark-out', 'crop-toggle']) ($(id) as HTMLButtonElement).disabled = true
+  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar']) ($(id) as HTMLButtonElement).disabled = true
   nameInput.disabled = true
 }
 
 async function init(): Promise<void> {
-  bind()
   const loaded = await api.load()
   if ('error' in loaded) {
     showLoadError(loaded.error)
@@ -531,11 +299,75 @@ async function init(): Promise<void> {
   }
   src = loaded.source
   const m = src.meta
-  duration = m.duration
-  keep = [[0, duration]]
+  store = new Store(newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio }), m, src.brand)
+  store.media.set('recording', { id: 'recording', name: 'Recording', kind: 'video', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, url: src.url })
+  void loadBrandFonts(src.brand)
+
+  player = new Player(store, { frame, layers: $('layers'), pips: $('pips'), canvas: $<HTMLCanvasElement>('overlay-canvas') })
+  player.recordingUrl = src.url
+  player.onRecordingError = () => void loadProxy()
+
+  actions = new Actions(store)
+  actions.onNote = note
+
+  timeline = new Timeline(store, $('timeline'), {
+    strip: (id) => api.strip(id, 60),
+    wave: (id) => api.waveform(id, 700),
+    sourceLength: (c) => (c.kind === 'recording' ? m.duration : c.kind === 'image' ? null : (store.media.get(c.media)?.duration ?? null))
+  })
+  actions.onReveal = (t) => timeline.reveal(t)
+
+  const aspect = document.createElement('select')
+  aspect.id = 'aspect'
+  aspect.setAttribute('aria-label', 'Crop shape')
+  for (const [v, l] of [['free', 'Free'], ['16:9', '16:9'], ['9:16', '9:16 (vertical)'], ['1:1', '1:1'], ['4:3', '4:3']]) aspect.add(new Option(l, v))
+  const stg = new Stage(store, { stage, frame, sel: $('sel'), cropLayer: $('crop'), cropBox: $('crop-box'), cropSize: $('crop-size'), aspect }, player)
+  aspect.addEventListener('change', () => stg.fitAspect())
+  const panels = new Panels(store, actions, { rail: $('rail'), drawer: $('drawer'), props: $('props') }, { fit: () => stg.fitAspect(), select: aspect })
+  // entering the crop tool starts a crop if there isn't one
+  store.on((what) => {
+    if (what === 'tool' && store.cropMode && !store.project.crop) stg.fitAspect()
+  })
+  bindKeys({ refresh: () => store.emit('selection') })
+  void panels
+
+  store.on((what) => {
+    if (what === 'play') updatePlayIcon()
+    if (what === 'project' || what === 'tool') layoutFrame()
+    if (what === 'selection') {
+      // picking a comment on the timeline brings the playhead to where it is shown
+      const o = store.selectedOverlay
+      if (o && (store.playhead < o.start || store.playhead >= o.end)) store.seek(Math.min(o.end - 0.05, o.start + 0.05))
+    }
+    updateTools()
+  })
+  window.addEventListener('resize', layoutFrame)
+  new ResizeObserver(layoutFrame).observe(stage)
+
+  $('play').addEventListener('click', () => player.toggle())
+  $('split').addEventListener('click', () => actions.split())
+  $('delete-sel').addEventListener('click', () => actions.deleteSelected())
+  $('undo').addEventListener('click', () => {
+    store.undo()
+    store.emit('selection')
+  })
+  $('redo').addEventListener('click', () => {
+    store.redo()
+    store.emit('selection')
+  })
+  $('add-media-bar').addEventListener('click', () => void actions.addClips())
+  $('add-music-bar').addEventListener('click', () => void actions.addMusic())
+  const zoom = $<HTMLInputElement>('tl-zoom')
+  zoom.addEventListener('input', () => timeline.setZoom(6 * Math.pow(400 / 6, Number(zoom.value) / 100)))
+  zoom.value = String(Math.round((Math.log(store.pxPerSec / 6) / Math.log(400 / 6)) * 100))
+  $('save').addEventListener('click', () => void save(false))
+  $('save-as').addEventListener('click', () => void save(true))
+  $('discard').addEventListener('click', () => void api.discard())
+  bindDrops()
+
   nameInput.value = src.defaultName
   formatSel.replaceChildren(
-    ...VIDEO_FORMATS.filter((f) => src!.formats.includes(f.id)).map((f) => {
+    ...VIDEO_FORMATS.filter((f) => src.formats.includes(f.id)).map((f) => {
       const o = document.createElement('option')
       o.value = f.id
       o.textContent = f.label
@@ -551,18 +383,15 @@ async function init(): Promise<void> {
   renderFormat()
   $('dest').textContent = `Saves to ${src.outputDir}`
   $('info').textContent = [
-    `${m.width}×${m.height}`,
-    `${m.fps} fps`,
-    fmt(m.duration),
-    m.yuv444 ? '4:4:4 colour' : null,
-    m.hasAudio ? 'with audio' : 'no audio',
-    fmtBytes(src.sizeBytes)
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  await loadPreview(src.url)
-  renderTimeline()
-  requestAnimationFrame(tick)
+    `${m.width}×${m.height}`, `${m.fps} fps`, fmtTime(m.duration), m.yuv444 ? '4:4:4 colour' : null, m.hasAudio ? 'with audio' : 'no audio', fmtBytes(src.sizeBytes)
+  ].filter(Boolean).join(' · ')
+
+  layoutFrame()
+  updateTools()
+  updatePlayIcon()
+  store.emit('tool')
+  clampNum(0, 0, 1)
+  ;(window as unknown as { __editor: unknown }).__editor = { store, player, actions }
 }
 
 void init()

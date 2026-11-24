@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import { buildCopyArgs, buildProxyArgs } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
@@ -100,11 +100,12 @@ export class EditorController {
       this.win.focus()
       return
     }
+    const area = screen.getPrimaryDisplay().workArea
     this.win = new BrowserWindow({
-      width: 1180,
-      height: 840,
-      minWidth: 900,
-      minHeight: 640,
+      width: Math.min(1440, area.width - 24),
+      height: Math.min(920, area.height - 24),
+      minWidth: Math.min(1100, area.width - 24),
+      minHeight: Math.min(720, area.height - 24),
       show: false,
       title: 'Review recording',
       backgroundColor: '#101216',
