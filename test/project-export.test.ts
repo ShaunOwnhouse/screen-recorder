@@ -302,3 +302,80 @@ test('a crop makes the finished video that size, and everything else lines up wi
   run(built.args.slice(4))
   assert.match(info(join(dir, 'c.mp4')), /320x180/)
 }))
+
+// ---- the face camera ----
+
+/** A camera file that is red for its first 2 s and blue for the next 2 s. */
+function makeCamera(dir: string): string {
+  const path = join(dir, 'camera.mp4')
+  run(['-f', 'lavfi', '-i', 'color=c=0xe01010:s=640x480:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=0x1020e0:s=640x480:r=30:d=2',
+    '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[v]', '-map', '[v]',
+    '-c:v', 'libx264', '-colorspace', 'bt709', '-color_range', 'tv', path])
+  return path
+}
+
+function withCamera(dir: string, shape: 'circle' | 'rounded' | 'square', over: Partial<NonNullable<Project['camera']>> = {}): Setup {
+  const s = recordingSetup(dir, 4)
+  s.media.camera = { path: makeCamera(dir), kind: 'video', hasAudio: false, duration: 4, width: 640, height: 480 }
+  s.project.camera = {
+    media: 'camera', name: 'camera.mp4', duration: 4, width: 640, height: 480, offset: 0, nudge: 0, x: 0.6, y: 0.5, w: 0.3, shape, border: false, fade: false,
+    visible: true, ...over
+  }
+  return s
+}
+
+test('the face camera sits in its corner, round, and is not square', { timeout: 120000 }, inTemp((dir) => {
+  const s = withCamera(dir, 'circle')
+  const out = exportIt(dir, s)
+  // 0.3 of 640 = 192 px window at (384, 180): centre (480, 276)
+  assert.ok(near(frame(out.file, 0.5).at(480, 276), [0xe0, 0x10, 0x10], 30), `centre ${frame(out.file, 0.5).at(480, 276)}`)
+  assert.ok(near(frame(out.file, 0.5).at(388, 184), [0x20, 0xa0, 0x40], 30), 'the corner of its square is the recording, so the window is round')
+  assert.ok(near(frame(out.file, 0.5).at(100, 100), [0x20, 0xa0, 0x40], 20), 'nothing elsewhere')
+}))
+
+test('the camera shows the matching moment (red first, blue after 2 s) and keeps its place', { timeout: 120000 }, inTemp((dir) => {
+  const out = exportIt(dir, withCamera(dir, 'square'))
+  assert.ok(near(frame(out.file, 1).at(480, 276), [0xe0, 0x10, 0x10], 30))
+  assert.ok(near(frame(out.file, 3).at(480, 276), [0x10, 0x20, 0xe0], 30))
+}))
+
+test('cutting the recording cuts the camera with it', { timeout: 120000 }, inTemp((dir) => {
+  const s = withCamera(dir, 'square')
+  const c = s.project.clips[0]
+  // keep 0–1 s and 2.5–4 s of the recording: the second piece starts at timeline 1 s and should show camera time 2.5 s (blue)
+  s.project.clips = [{ ...c, out: 1 }, { ...c, id: newId('c'), in: 2.5, out: 4 }]
+  const out = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(out.file) - 2.5) < 0.2)
+  assert.ok(near(frame(out.file, 0.5).at(480, 276), [0xe0, 0x10, 0x10], 30), 'first piece: red')
+  assert.ok(near(frame(out.file, 1.5).at(480, 276), [0x10, 0x20, 0xe0], 30), 'second piece: the camera from the same moment (blue), not red')
+}))
+
+test('the camera is not shown over added pictures, and the lip-sync nudge moves it earlier', { timeout: 120000 }, inTemp((dir) => {
+  const s = withCamera(dir, 'square', { nudge: 0.5 })
+  const pic = makePng(dir, 'pic.png', '0x808080', 300, 300)
+  s.media.pic = { path: pic, kind: 'image', hasAudio: false, duration: 0, width: 300, height: 300 }
+  const rec = s.project.clips[0]
+  s.project.clips = [{ ...rec, out: 2 }, { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic', in: 0, out: 1, hasAudio: false, width: 300, height: 300 }]
+  const out = exportIt(dir, s)
+  // nudge 0.5: at timeline 1.7 the camera is at 2.2 s → already blue
+  assert.ok(near(frame(out.file, 1.7).at(480, 276), [0x10, 0x20, 0xe0], 30), `nudged ${frame(out.file, 1.7).at(480, 276)}`)
+  // over the picture (2–3 s) the camera is gone
+  assert.ok(!near(frame(out.file, 2.5).at(480, 276), [0x10, 0x20, 0xe0], 40) && !near(frame(out.file, 2.5).at(480, 276), [0xe0, 0x10, 0x10], 40))
+}))
+
+test('a border rings the camera in white, and a hidden camera leaves no trace', { timeout: 120000 }, inTemp((dir) => {
+  const bordered = exportIt(dir, withCamera(dir, 'circle', { border: true }))
+  // the window is 192 + 2×6 px; its left edge ring is white at (384 + 2, 276)
+  const ring = frame(bordered.file, 0.5).at(386, 276)
+  assert.ok(ring[0] > 200 && ring[1] > 200 && ring[2] > 200, `ring ${ring}`)
+  const hidden = exportIt(dir, withCamera(dir, 'circle', { visible: false }))
+  assert.ok(near(frame(hidden.file, 0.5).at(480, 276), [0x20, 0xa0, 0x40], 20))
+}))
+
+test('a rounded camera has soft corners and a square one fills its box', { timeout: 120000 }, inTemp((dir) => {
+  const r = exportIt(dir, withCamera(dir, 'rounded'))
+  assert.ok(near(frame(r.file, 0.5).at(386, 182), [0x20, 0xa0, 0x40], 30), 'the very corner is cut away')
+  assert.ok(near(frame(r.file, 0.5).at(480, 190), [0xe0, 0x10, 0x10], 30), 'but the middle of an edge is camera')
+  const sq = exportIt(dir, withCamera(dir, 'square'))
+  assert.ok(near(frame(sq.file, 0.5).at(387, 183), [0xe0, 0x10, 0x10], 30), 'a square one fills right to the corner')
+}))

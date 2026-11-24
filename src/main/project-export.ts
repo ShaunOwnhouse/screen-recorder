@@ -1,6 +1,6 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  clipLength, FADE_SECONDS, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
+  cameraPieces, clipLength, FADE_SECONDS, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -324,6 +324,48 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       `[${idx}:v]format=rgba${fade(a, len)},scale=out_color_matrix=bt709:out_range=tv:flags=bicubic,format=${alphaFormat},setpts=PTS+${num(start)}/TB[${label}]`
     )
     place(label, a, pic.x, pic.y)
+  }
+
+  // ---- the face camera: on top of everything, following the recording wherever it is shown ----
+  const camera = p.camera
+  const pieces = cameraPieces(p)
+  if (camera && pieces.length) {
+    const m = mediaOf(camera.media)
+    const D = evenPx(camera.w * W)
+    const bw = camera.border ? Math.max(2, Math.round(D * 0.03)) : 0
+    const full = D + bw * 2
+    const x = clamp(Math.round(camera.x * W), 0, W - full)
+    const y = clamp(Math.round(camera.y * H), 0, H - full)
+    // distance from the shape's edge in units of half the window (negative inside), the same for every colour plane
+    const hx = 'abs((X+0.5)/W-0.5)*2'
+    const hy = 'abs((Y+0.5)/H-0.5)*2'
+    const rr = 0.44
+    const dist =
+      camera.shape === 'circle'
+        ? `(hypot(${hx},${hy})-1)`
+        : camera.shape === 'rounded'
+          ? `(hypot(max(${hx}-${1 - rr},0),max(${hy}-${1 - rr},0))-${rr})`
+          : `(max(${hx},${hy})-1)`
+    const ring = (bw ? `gte(${dist},${num((-2 * bw) / full)})` : '0')
+    const shaped = camera.shape !== 'square'
+    const geq =
+      `geq=lum='if(${ring},235,lum(X,Y))':cb='if(${ring},128,cb(X,Y))':cr='if(${ring},128,cr(X,Y))'` +
+      `:a='${shaped ? `255*clip(0.5-${dist}*${num(full / 2)},0,1)` : '255'}'`
+    pieces.forEach((pc, i) => {
+      const len = pc.end - pc.start
+      const idx = g.file(['-ss', num(pc.from), '-t', num(len + 0.3)], m.path)
+      const label = g.label('cam')
+      const d = Math.min(FADE_SECONDS, len / 2)
+      const fadeIn = camera.fade && i === 0 && d > 0.02 ? `,fade=t=in:st=0:d=${num(d)}:alpha=1` : ''
+      const fadeOut = camera.fade && i === pieces.length - 1 && d > 0.02 ? `,fade=t=out:st=${num(len - d)}:d=${num(d)}:alpha=1` : ''
+      g.add(
+        `[${idx}:v]setpts=PTS-STARTPTS,fps=${fps},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
+          `format=${alphaFormat},${geq}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(pc.start)}/TB[${label}]`
+      )
+      const nv = g.label('vo')
+      g.add(`[${video}][${label}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:enable='between(t,${num(pc.start)},${num(pc.end)})'[${nv}]`)
+      video = nv
+    })
   }
 
   // ---- sound: each clip's own, then picture-in-picture sound, then music ----

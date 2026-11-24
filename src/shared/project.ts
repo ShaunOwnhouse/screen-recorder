@@ -207,10 +207,39 @@ export interface Music {
   duck: boolean
 }
 
+/**
+ * The person's own face on camera, recorded together with the screen. It is tied to the recording itself, not to the
+ * timeline: wherever a piece of the recording is shown, the camera from the same moment is shown with it, so cutting
+ * the recording cuts the camera too.
+ */
+export interface CameraTrack {
+  /** The camera file's id (registered with the editor like any other added file). */
+  media: string
+  name: string
+  /** How long the camera file is, seconds. */
+  duration: number
+  width: number
+  height: number
+  /** Camera time = recording time + offset (the camera may have started a moment after, or before, the screen). */
+  offset: number
+  /** The person's own fix for a camera that runs late (voice ahead of the lips), seconds: the camera is shown that much earlier. */
+  nudge: number
+  /** Top-left corner, as fractions of the frame. */
+  x: number
+  y: number
+  /** Width as a fraction of the frame width; the window is square. */
+  w: number
+  shape: 'circle' | 'rounded' | 'square'
+  border: boolean
+  fade: boolean
+  visible: boolean
+}
+
 export interface Project {
   clips: Clip[]
   overlays: Overlay[]
   music: Music | null
+  camera: CameraTrack | null
   /** Normalised crop of the recording (and so of the finished video), or null. */
   crop: Rect | null
 }
@@ -383,7 +412,7 @@ export function tidy(p: Project): Project {
 
 /** Is there anything beyond the untouched recording? Decides between moving the file as-is and re-encoding. */
 export function isPlain(p: Project, recordingDuration: number): boolean {
-  if (p.overlays.length || p.music || p.crop) return false
+  if (p.overlays.length || p.music || p.crop || (p.camera && p.camera.visible)) return false
   if (p.clips.length !== 1) return false
   const c = p.clips[0]
   return c.kind === 'recording' && c.volume === 1 && c.in <= 0.01 && c.out >= recordingDuration - 0.01
@@ -399,6 +428,38 @@ export function newProject(recording: { duration: number; width: number; height:
     ],
     overlays: [],
     music: null,
+    camera: null,
     crop: null
   }
+}
+
+export interface CameraPiece {
+  /** Where on the timeline this piece of camera shows. */
+  start: number
+  end: number
+  /** Where in the camera file it starts playing. */
+  from: number
+}
+
+/**
+ * Every stretch of the timeline that has the camera with it: one per piece of the recording that is showing, trimmed to
+ * what the camera file really covers. The camera is hidden over added videos, pictures and title cards.
+ */
+export function cameraPieces(p: Project): CameraPiece[] {
+  const cam = p.camera
+  if (!cam || !cam.visible) return []
+  const out: CameraPiece[] = []
+  for (const pl of layout(p.clips)) {
+    if (pl.clip.kind !== 'recording') continue
+    // the camera's own clock for the first moment of this piece
+    let from = pl.clip.in + cam.offset + cam.nudge
+    let start = pl.start
+    if (from < 0) {
+      start += -from // the camera had not started yet: it joins a moment later
+      from = 0
+    }
+    const end = Math.min(pl.end, start + Math.max(0, cam.duration - from))
+    if (end - start >= 0.05) out.push({ start, end, from })
+  }
+  return out
 }
