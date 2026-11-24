@@ -281,7 +281,7 @@ async function setSettings(main, over) {
 }
 
 /** Starts a recording, returns the review window once it has opened. */
-async function record(app, main, label, { seconds, region, checkAffinity, pauses }) {
+async function record(app, main, label, { seconds, region, checkAffinity, pauses, during }) {
   log(`--- recording: ${label} ---`)
   await setSettings(main, { mode: region ? 'region' : 'fullscreen' })
   await main.click('#tab-record')
@@ -341,6 +341,8 @@ async function record(app, main, label, { seconds, region, checkAffinity, pauses
   await sleep(seconds * 1000)
   const barText = await bar.textContent('#text')
   check(`${label}: timer is running`, /^\d\d:\d\d/.test(barText), barText)
+
+  if (during) await during()
 
   // Pause and resume the way a person does: the bar's button when the bar is on screen, otherwise the shortcut/tray command.
   const pauseLog = []
@@ -845,7 +847,28 @@ async function save(app, editor, name) {
       check('Camera: the choice is remembered', (await main.evaluate(() => window.api.getSettings())).camera === true)
       await shot(main, 'panel-camera')
       await setSettings(main, { camera: true })
-      const { editor, pauseLog } = await record(app, main, 'camera', { seconds: 2.5, pauses: [{ via: 'api', hold: 1.5, then: 2 }] })
+      const { editor, pauseLog } = await record(app, main, 'camera', {
+        seconds: 2.5,
+        pauses: [{ via: 'api', hold: 1.5, then: 2 }],
+        // you can see yourself while recording, in a window that is kept out of the recording
+        during: async () => {
+          const view = await waitForWindow(app, 'selfview.html', 15000).catch(() => null)
+          const info = view && (await app.evaluate(({ BrowserWindow }) => {
+            const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes('selfview.html'))
+            return w ? { visible: w.isVisible(), top: w.isAlwaysOnTop(), handle: w.getNativeWindowHandle().length === 8 ? w.getNativeWindowHandle().readBigUInt64LE(0).toString() : '0' } : null
+          }))
+          check('Camera: while recording, you can see yourself in a small window', !!info && info.visible && info.top, JSON.stringify(info))
+          if (view) {
+            await sleep(1200)
+            check('Camera: and it shows the live picture', await view.evaluate(() => { const v = document.getElementById('v'); return !!v && v.readyState >= 2 && v.videoWidth > 0 }))
+            if (isWin) {
+              const a = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'affinity.ps1'), '-Handle', info.handle], { encoding: 'utf8', timeout: 60000 })
+              check('Camera: Windows is asked to keep that window out of the recording', a.status === 0, `${a.stdout || ''}${a.stderr || ''}`.trim().slice(0, 160))
+            }
+          }
+        }
+      })
+      check('Camera: the self-view window is gone once recording has stopped', !app.windows().some((p) => !p.isClosed() && p.url().includes('selfview.html')))
       const pend = fs.readdirSync(path.join(userData, 'pending'))
       const cam = pend.find((f) => /\.camera\.mp4$/.test(f))
       const note = pend.find((f) => /\.camera\.json$/.test(f))

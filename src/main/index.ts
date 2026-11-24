@@ -32,7 +32,7 @@ const ICON = join(RESOURCES, 'icon.png')
 const PANEL_WIDTH = 460
 const IS_MAC = process.platform === 'darwin'
 type Attempt = Omit<RecordArgsInput, 'outputPath'>
-type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'shot.html' | 'audio.html' | 'countdown.html' | 'bar.html'
+type Page = 'index.html' | 'overlay.html' | 'editor.html' | 'shot.html' | 'audio.html' | 'countdown.html' | 'bar.html' | 'selfview.html'
 interface Target {
   display: Display
   /** DIP rectangle to record (the whole display, or a dragged region). */
@@ -502,6 +502,41 @@ function showBar(target: Target): void {
 function closeBar(): void {
   if (bar && !bar.isDestroyed()) bar.destroy()
   bar = null
+  closeSelfView()
+}
+
+/** The person's own camera, small, in a corner of the screen being recorded. Kept out of the recording like the bar is. */
+let selfView: BrowserWindow | null = null
+
+function closeSelfView(): void {
+  if (selfView && !selfView.isDestroyed()) selfView.destroy()
+  selfView = null
+}
+
+function showSelfView(display: Display, device: string): void {
+  closeSelfView()
+  const w = 256
+  const h = 144
+  const m = 18
+  const area = display.workArea
+  selfView = new BrowserWindow({
+    x: area.x + area.width - w - m, y: area.y + area.height - h - m, width: w, height: h, frame: false, transparent: false, backgroundColor: '#000000',
+    alwaysOnTop: true, skipTaskbar: true, focusable: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    hasShadow: true, show: false, title: 'You', webPreferences: { backgroundThrottling: false }
+  })
+  const win = selfView
+  win.setContentProtection(true)
+  win.setAlwaysOnTop(true, 'screen-saver')
+  if (IS_MAC) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  win.once('ready-to-show', () => {
+    win.showInactive()
+    win.setContentProtection(true)
+    setTimeout(() => !win.isDestroyed() && win.setContentProtection(true), 400)
+  })
+  win.on('closed', () => {
+    if (selfView === win) selfView = null
+  })
+  loadPage(win, 'selfview.html', { device })
 }
 
 /**
@@ -807,6 +842,7 @@ async function startRecording(): Promise<void> {
         (startedAt) => {
           cameraSession = { startedAt, clockAtLaunch, stopping: null, rawPath: cameraRawFor(finalPath), videoPath: cameraFileFor(finalPath) }
           recorder.update({ camera: true })
+          showSelfView(display, s.cameraDevice)
         },
         (err: Error) => {
           warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${err.message}`
@@ -968,6 +1004,7 @@ function registerIpc(): void {
 }
 
 recorder.on('status', (status) => {
+  if (status.state === 'saving') closeSelfView()
   if (status.state === 'saving' && cameraSession && !cameraSession.stopping) cameraSession.stopping = stopCameraAndConvert(cameraSession)
   mainWindow?.webContents.send('rec:status', status)
   if (bar && !bar.isDestroyed()) bar.webContents.send('rec:status', status)
