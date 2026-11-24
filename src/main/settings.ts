@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
-import { DEFAULT_RECORD_HOTKEY, DEFAULT_SHOT_HOTKEY } from '../shared/hotkeys.ts'
+import { DEFAULT_PAUSE_HOTKEY, DEFAULT_RECORD_HOTKEY, DEFAULT_SHOT_HOTKEY } from '../shared/hotkeys.ts'
 import type { Settings } from '../shared/types.ts'
 
 const file = (): string => join(app.getPath('userData'), 'settings.json')
@@ -34,6 +34,7 @@ function defaults(): Settings {
     shotCursor: false,
     hotkeyRecord: process.platform === 'darwin' ? DEFAULT_RECORD_HOTKEY.mac : DEFAULT_RECORD_HOTKEY.win,
     hotkeyShot: process.platform === 'darwin' ? DEFAULT_SHOT_HOTKEY.mac : DEFAULT_SHOT_HOTKEY.win,
+    hotkeyPause: process.platform === 'darwin' ? DEFAULT_PAUSE_HOTKEY.mac : DEFAULT_PAUSE_HOTKEY.win,
     autoUpdate: true
   }
 }
@@ -49,6 +50,7 @@ function sanitize(s: Settings): Settings {
     shotDelay: [0, 3, 5].includes(s.shotDelay) ? s.shotDelay : d.shotDelay,
     hotkeyRecord: typeof s.hotkeyRecord === 'string' ? s.hotkeyRecord : d.hotkeyRecord,
     hotkeyShot: typeof s.hotkeyShot === 'string' ? s.hotkeyShot : d.hotkeyShot,
+    hotkeyPause: typeof s.hotkeyPause === 'string' ? s.hotkeyPause : d.hotkeyPause,
     autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate
   }
 }

@@ -38,7 +38,8 @@
         animation: pulse 1.2s ease-in-out infinite;
       }
       .countdown .dot,
-      .saving .dot {
+      .saving .dot,
+      .paused .dot {
         background: #f59e0b;
       }
       @keyframes pulse {
@@ -78,11 +79,35 @@
         border-radius: 2px;
         background: #fff;
       }
-      #cancel {
+      #cancel,
+      #pause {
         background: #2a2f39;
+        font-weight: 600;
       }
-      #cancel:hover {
+      #cancel:hover,
+      #pause:hover {
         background: #3a404c;
+      }
+      #pause:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #pause .ico {
+        display: inline-block;
+        width: 9px;
+        height: 11px;
+      }
+      #pause .ico.bars {
+        border-left: 3px solid #fff;
+        border-right: 3px solid #fff;
+        box-sizing: border-box;
+      }
+      #pause .ico.play {
+        width: 0;
+        height: 0;
+        border-style: solid;
+        border-width: 5.5px 0 5.5px 9px;
+        border-color: transparent transparent transparent #fff;
       }
       [hidden] {
         display: none !important;
@@ -94,6 +119,7 @@
       <span class="dot" aria-hidden="true"></span>
       <span id="text"></span>
       <button id="cancel" type="button" title="Cancel" hidden>✕ Cancel</button>
+      <button id="pause" type="button" title="Pause recording" hidden><span class="ico bars"></span><span id="pause-text">Pause</span></button>
       <button id="stop" type="button" title="Stop recording" hidden><span class="sq"></span>Stop</button>
     </div>
     <script type="module" src="./bar.ts"></script>

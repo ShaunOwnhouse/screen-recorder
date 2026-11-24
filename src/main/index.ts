@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, shell,
   systemPreferences, Tray, type Display
 } from 'electron'
-import { buildRemuxArgs, type AudioInput, type RecordArgsInput } from './args.ts'
+import { buildConcatArgs, buildRemuxArgs, concatList, type AudioInput, type RecordArgsInput } from './args.ts'
 import { AudioCapture, type AudioConfig } from './audio.ts'
 import { dxgiOutputs, invalidateDxgiOutputs, matchOutput } from './displays.ts'
 import { EditorController } from './editor.ts'
@@ -17,7 +17,7 @@ import { Updater } from './updater.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme } from './media-protocol.ts'
-import { listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
+import { joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
@@ -45,6 +45,7 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let hotkeyRegistered = false
 let shotHotkeyRegistered = false
+let pauseHotkeyRegistered = false
 let quitting = false
 let bar: BrowserWindow | null = null
 let panelHiddenForRecording = false
@@ -220,6 +221,7 @@ function applyHotkeys(): void {
   }
   hotkeyRegistered = register(s.hotkeyRecord, () => void toggleRecording())
   shotHotkeyRegistered = s.hotkeyShot === s.hotkeyRecord ? false : register(s.hotkeyShot, () => void toggleScreenshot())
+  pauseHotkeyRegistered = [s.hotkeyRecord, s.hotkeyShot].includes(s.hotkeyPause) ? false : register(s.hotkeyPause, () => void togglePause())
   updateTray()
 }
 
@@ -231,11 +233,14 @@ function trayImage(recording: boolean): Electron.NativeImage {
 
 function updateTray(): void {
   if (!tray) return
-  const recording = recorder.getStatus().state === 'recording'
+  const { state } = recorder.getStatus()
+  const paused = state === 'paused'
+  const recording = state === 'recording' || paused
   tray.setImage(trayImage(recording))
-  tray.setToolTip(recording ? 'Screen Snap — recording' : 'Screen Snap')
+  tray.setToolTip(paused ? 'Screen Snap — paused' : recording ? 'Screen Snap — recording' : 'Screen Snap')
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...(recording ? [{ label: paused ? 'Resume recording' : 'Pause recording', click: () => void togglePause() }] : []),
       { label: recording ? 'Stop recording' : 'Start recording', click: () => void toggleRecording() },
       { label: 'Take a screenshot', click: () => void toggleScreenshot() },
       { label: 'Show window', click: showMainWindow },
@@ -287,6 +292,7 @@ async function getCapabilities(refresh = false): Promise<Capabilities> {
     microphones,
     hotkey: hotkeyRegistered ? label(getSettings().hotkeyRecord) : null,
     shotHotkey: shotHotkeyRegistered ? label(getSettings().hotkeyShot) : null,
+    pauseHotkey: pauseHotkeyRegistered ? label(getSettings().hotkeyPause) : null,
     videoFormats: formats.video,
     imageFormats: formats.image
   }
@@ -776,7 +782,7 @@ async function startRecording(): Promise<void> {
 
 async function toggleRecording(): Promise<void> {
   const { state } = recorder.getStatus()
-  if (state === 'recording') return recorder.stop()
+  if (state === 'recording' || state === 'paused') return recorder.stop()
   if (state === 'countdown') {
     startAborted = true // also covers the moment before the countdown window exists
     return cancelCountdown?.()
@@ -792,6 +798,13 @@ async function toggleRecording(): Promise<void> {
     recorder.update({ state: 'idle', countdown: undefined, error: (err as Error).message })
     showMainWindow()
   }
+}
+
+/** Pauses a recording that is running, or carries on a paused one from the same point. */
+async function togglePause(): Promise<void> {
+  const { state, resuming } = recorder.getStatus()
+  if (state === 'recording') return recorder.pause()
+  if (state === 'paused' && !resuming) return recorder.resume()
 }
 
 /** Starts a screenshot, or cancels one that is still waiting (countdown / choosing the area). */
@@ -830,7 +843,7 @@ function registerIpc(): void {
     }
     const updated = updateSettings(patch)
     if (patch.autoUpdate === true) void updater.check()
-    if ('hotkeyRecord' in patch || 'hotkeyShot' in patch) {
+    if ('hotkeyRecord' in patch || 'hotkeyShot' in patch || 'hotkeyPause' in patch) {
       applyHotkeys()
       mainWindow?.webContents.send('caps:changed')
     }
@@ -857,6 +870,7 @@ function registerIpc(): void {
   ipcMain.handle('update:download', () => updater.download())
   ipcMain.handle('update:install', () => updater.install())
   ipcMain.handle('rec:toggle', () => toggleRecording())
+  ipcMain.handle('rec:pause', () => togglePause())
   ipcMain.handle('shot:take', () => toggleScreenshot())
   ipcMain.handle('rec:status', () => recorder.getStatus())
   ipcMain.handle('rec:review', () => openReview())
@@ -916,7 +930,7 @@ recorder.on('recorded', async (file: string, info: RecordedInfo) => {
     showMainWindow()
     return
   }
-  recorder.update({ pending: basename(file) })
+  recorder.update({ pending: basename(file), ...(info.note ? { warning: info.note } : {}) })
   // Don't yank the editor away from a recording the user is already reviewing; it opens next.
   if (!editor.isOpen()) editor.open(file)
 })
@@ -929,7 +943,7 @@ app.on('activate', showMainWindow)
 app.on('before-quit', (e) => {
   quitting = true
   const { state } = recorder.getStatus()
-  if (state === 'recording' || state === 'saving') {
+  if (state === 'recording' || state === 'paused' || state === 'saving') {
     e.preventDefault()
     void recorder.stop().then(() => app.quit())
   }
@@ -952,7 +966,14 @@ void app.whenReady().then(async () => {
   screen.on('display-removed', notifyDisplays)
   screen.on('display-metrics-changed', notifyDisplays)
 
-  await recoverInterrupted(async (i, o) => (await runFfmpeg(buildRemuxArgs(i, o), 10 * 60 * 1000)).ok)
+  await recoverInterrupted(
+    async (i, o) => (await runFfmpeg(buildRemuxArgs(i, o), 10 * 60 * 1000)).ok,
+    async (inputs, o) => {
+      const list = joinListFor(o)
+      writeFileSync(list, concatList(inputs))
+      return (await runFfmpeg(buildConcatArgs(list, o), 10 * 60 * 1000)).ok && (await checkStructure(o)).ok
+    }
+  )
   // Recordings left over from earlier versions that can't be opened would only get in the way.
   for (const f of listPending()) if (!(await checkStructure(f)).ok) removePending(f)
   recorder.update({ pending: newestPending() })

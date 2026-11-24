@@ -40,6 +40,7 @@ export interface Settings {
   /** Global shortcuts (Electron accelerators); '' turns one off. */
   hotkeyRecord: string
   hotkeyShot: string
+  hotkeyPause: string
   /** Download and install new versions in the background (the app still asks before restarting). */
   autoUpdate: boolean
 }
@@ -76,18 +77,21 @@ export interface Capabilities {
   microphones: MicInfo[]
   hotkey: string | null
   shotHotkey: string | null
+  pauseHotkey: string | null
   /** Formats this computer's FFmpeg can actually write. */
   videoFormats: VideoFormat[]
   imageFormats: ImageFormat[]
 }
 
 /** 'snapping' = a screenshot is being taken (waiting, choosing the area, or capturing). */
-export type RecordingState = 'idle' | 'selecting' | 'countdown' | 'recording' | 'saving' | 'snapping'
+export type RecordingState = 'idle' | 'selecting' | 'countdown' | 'recording' | 'paused' | 'saving' | 'snapping'
 
 export interface RecordingStatus {
   state: RecordingState
   /** Seconds left while state is 'countdown'. */
   countdown?: number
+  /** Paused, and picking up again (the capture is starting back up). */
+  resuming?: boolean
   elapsed: number
   bytes: number
   droppedFrames: number

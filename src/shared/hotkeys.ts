@@ -60,3 +60,4 @@ export function acceleratorLabel(accelerator: string, mac: boolean): string {
 /** Defaults that other apps don't use: browsers own Ctrl+Shift+R (hard refresh) and Ctrl+Shift+I (developer tools). */
 export const DEFAULT_RECORD_HOTKEY = { win: 'Alt+Shift+R', mac: 'Control+Alt+R' }
 export const DEFAULT_SHOT_HOTKEY = { win: 'Alt+Shift+S', mac: 'Control+Alt+S' }
+export const DEFAULT_PAUSE_HOTKEY = { win: 'Alt+Shift+P', mac: 'Control+Alt+P' }

@@ -15,6 +15,7 @@ const api: Api = {
   chooseShotDir: () => ipcRenderer.invoke('settings:chooseShotDir'),
   openShotDir: () => ipcRenderer.invoke('shell:openShotDir'),
   toggleRecording: () => ipcRenderer.invoke('rec:toggle'),
+  togglePause: () => ipcRenderer.invoke('rec:pause'),
   takeScreenshot: () => ipcRenderer.invoke('shot:take'),
   getStatus: () => ipcRenderer.invoke('rec:status'),
   openOutputDir: () => ipcRenderer.invoke('shell:openDir'),

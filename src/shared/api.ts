@@ -13,6 +13,8 @@ export interface Api {
   chooseShotDir(): Promise<string | null>
   openShotDir(): Promise<void>
   toggleRecording(): Promise<void>
+  /** Pauses a recording, or picks it up again from the same point if it is paused. */
+  togglePause(): Promise<void>
   /** Starts a screenshot (or cancels one that is waiting for you to pick an area). */
   takeScreenshot(): Promise<void>
   getStatus(): Promise<RecordingStatus>

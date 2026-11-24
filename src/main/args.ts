@@ -250,6 +250,33 @@ export function buildRemuxArgs(input: string, output: string): string[] {
   return ['-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-map', '0', '-c', 'copy', '-movflags', '+faststart', output]
 }
 
+/**
+ * Joins the pieces of a paused-and-resumed recording into one MP4 without re-encoding anything. Every piece is made
+ * with identical settings, so the streams line up exactly. `list` is an FFmpeg concat list (see `concatList`).
+ */
+export function buildConcatArgs(list: string, output: string): string[] {
+  return ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-map', '0', '-c', 'copy', '-movflags', '+faststart', output]
+}
+
+/** Last resort if the straight join can't be played: decode every piece and encode the whole thing again, very high quality. */
+export function buildJoinReencodeArgs(inputs: string[], output: string, hasAudio: boolean, quality: Quality): string[] {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y']
+  for (const i of inputs) args.push('-i', i)
+  const legs = inputs.map((_, n) => `[${n}:v]${hasAudio ? `[${n}:a]` : ''}`).join('')
+  args.push('-filter_complex', `${legs}concat=n=${inputs.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? '[a]' : ''}`, '-map', '[v]')
+  if (hasAudio) args.push('-map', '[a]')
+  args.push(
+    '-c:v', 'libx264', '-preset', 'medium', '-crf', '12', '-pix_fmt', is444(quality) ? 'yuv444p' : 'yuv420p', ...COLOR_TAGS,
+    ...(hasAudio ? audioEncodeArgs(quality) : []), '-movflags', '+faststart', output
+  )
+  return args
+}
+
+/** The text of an FFmpeg concat list: one `file` line per piece, with quotes escaped. */
+export function concatList(files: string[]): string {
+  return files.map((f) => `file '${f.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n') + '\n'
+}
+
 export interface ExportArgsInput {
   input: string
   output: string

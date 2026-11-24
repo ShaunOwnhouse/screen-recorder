@@ -2,12 +2,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildExportArgs, buildProxyArgs, buildRecordArgs, buildRemuxArgs, type RecordArgsInput } from '../src/main/args.ts'
+import {
+  buildConcatArgs, buildExportArgs, buildJoinReencodeArgs, buildProxyArgs, buildRecordArgs, buildRemuxArgs, concatList, type RecordArgsInput
+} from '../src/main/args.ts'
 import { parseMediaInfo } from '../src/main/parse.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -184,3 +186,89 @@ test('studio recordings keep lossless ALAC audio; maximum uses 320k AAC', { time
     const max = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'maximum', audio: [{ url: pcm, volume: 1 }] }, 2))
     assert.match(max, /Audio: aac \(LC\).*48000 Hz, stereo/)
   }))
+
+// ---- pause and resume: a recording made in pieces is joined back into one seamless file ----
+
+/** Records one synthetic piece (with a sine tone for audio) like the app does between Resume and Pause/Stop. */
+function recordPiece(dir: string, n: number, seconds: number, o: Partial<RecordArgsInput> = {}): string {
+  const pcm = join(dir, `tone${n}.f32`)
+  run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${300 + n * 100}:sample_rate=48000:duration=${seconds}`, '-ac', '2', '-f', 'f32le', pcm])
+  const out = join(dir, `piece${n}.recording.mp4`)
+  const args = buildRecordArgs({
+    backend: 'gdigrab', rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, outputHeight: null, quality: 'veryhigh', encoder: 'libx264',
+    audio: [{ url: pcm, volume: 1 }], showCursor: true, ...o, outputPath: out
+  })
+  run(withSyntheticInput(args, o.fps ?? 30, seconds))
+  return out
+}
+
+function streamSeconds(file: string, kind: 'v' | 'a'): number {
+  // Decodes just one stream and reads how long it really is.
+  const err = (() => {
+    try {
+      execFileSync(ffmpeg, ['-hide_banner', '-i', file, '-map', `0:${kind}`, '-f', 'null', '-'], { stdio: 'pipe' })
+      return ''
+    } catch (e) {
+      return String((e as { stderr: Buffer }).stderr)
+    }
+  })()
+  void err
+  const out = execFileSync(ffmpeg, ['-hide_banner', '-nostats', '-i', file, '-map', `0:${kind}`, '-f', 'null', '-', '-progress', 'pipe:1'], { stdio: 'pipe' }).toString()
+  const us = [...out.matchAll(/out_time_us=(\d+)/g)].map((m) => Number(m[1]))
+  return Math.max(...us) / 1e6
+}
+
+for (const quality of ['veryhigh', 'studio'] as const) {
+  test(`pieces recorded around a pause join into one seamless ${quality} file`, { timeout: 180000 }, () =>
+    inTemp((dir) => {
+      const pieces = [recordPiece(dir, 1, 2, { quality }), recordPiece(dir, 2, 1.5, { quality }), recordPiece(dir, 3, 1, { quality })]
+      const list = join(dir, 'pieces.txt')
+      writeFileSync(list, concatList(pieces))
+      const joined = join(dir, 'joined.mp4')
+      run(buildConcatArgs(list, joined))
+
+      const meta = parseMediaInfo(probe(joined))!
+      assert.ok(Math.abs(meta.duration - 4.5) < 0.25, `duration ${meta.duration}`)
+      assert.equal(meta.width, 1280)
+      assert.equal(meta.height, 720)
+      assert.ok(meta.hasAudio)
+      const info = probe(joined)
+      assert.equal((info.match(/Stream #0:\d.*Video:/g) ?? []).length, 1)
+      assert.equal((info.match(/Stream #0:\d.*Audio:/g) ?? []).length, 1)
+      // Plays from start to end with no decode errors, and video and sound end together (no drift across the joins).
+      assert.equal(execFileSync(ffmpeg, ['-hide_banner', '-v', 'error', '-i', joined, '-f', 'null', '-'], { stdio: 'pipe' }).toString(), '')
+      const v = streamSeconds(joined, 'v')
+      const a = streamSeconds(joined, 'a')
+      assert.ok(Math.abs(v - 4.5) < 0.2, `video ${v}`)
+      assert.ok(Math.abs(a - v) < 0.15, `audio ${a} vs video ${v}`)
+      // Same colour tags and (for the playable tier) the same pixel format as a single-piece recording.
+      assert.match(info, quality === 'studio' ? /yuv444p/ : /yuv420p\(tv, bt709/)
+    }))
+}
+
+test('a joined recording starts like any other: faststart, so players open it instantly', { timeout: 120000 }, () =>
+  inTemp((dir) => {
+    const pieces = [recordPiece(dir, 1, 1), recordPiece(dir, 2, 1)]
+    const list = join(dir, 'p.txt')
+    writeFileSync(list, concatList(pieces))
+    const joined = join(dir, 'j.mp4')
+    run(buildConcatArgs(list, joined))
+    const head = readFileSync(joined).subarray(0, 4096).toString('latin1')
+    assert.ok(head.indexOf('moov') > 0 && head.indexOf('moov') < (readFileSync(joined).indexOf('mdat') >>> 0 || Infinity))
+  }))
+
+test('the fallback join (re-encode) also produces one playable file of the right length', { timeout: 180000 }, () =>
+  inTemp((dir) => {
+    const pieces = [recordPiece(dir, 1, 1.5), recordPiece(dir, 2, 1.5)]
+    const out = join(dir, 'r.mp4')
+    run(buildJoinReencodeArgs(pieces, out, true, 'veryhigh'))
+    const meta = parseMediaInfo(probe(out))!
+    assert.ok(Math.abs(meta.duration - 3) < 0.25, `duration ${meta.duration}`)
+    assert.ok(meta.hasAudio)
+    assert.equal(execFileSync(ffmpeg, ['-hide_banner', '-v', 'error', '-i', out, '-f', 'null', '-'], { stdio: 'pipe' }).toString(), '')
+    assert.match(probe(out), /yuv420p\(tv, bt709/)
+  }))
+
+test('the concat list quotes awkward file names', () => {
+  assert.equal(concatList(['C:\\Users\\Jo\'s PC\\a.mp4']), "file 'C:/Users/Jo'\\''s PC/a.mp4'\n")
+})

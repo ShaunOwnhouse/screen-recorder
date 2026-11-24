@@ -77,6 +77,10 @@ const el = {
   shotCursor: $<HTMLInputElement>('shot-cursor'),
   keyRecord: $<HTMLButtonElement>('key-record'),
   keyShot: $<HTMLButtonElement>('key-shot'),
+  keyPause: $<HTMLButtonElement>('key-pause'),
+  pauseBtn: $<HTMLButtonElement>('pause'),
+  pauseText: $('pause-text'),
+  pauseIcon: $('pause-icon'),
   keyHint: $('key-hint'),
   updateBanner: $('update-banner'),
   updateText: $('update-text'),
@@ -200,20 +204,23 @@ function setupSettingsScroll(): void {
 
 // ---------- shortcuts ----------
 
-let listening: 'record' | 'shot' | null = null
+type KeyAction = 'record' | 'shot' | 'pause'
+const KEY_FIELD = { record: 'hotkeyRecord', shot: 'hotkeyShot', pause: 'hotkeyPause' } as const
+let listening: KeyAction | null = null
 
 function stopListening(): void {
   listening = null
   window.removeEventListener('keydown', onShortcutKey, true)
   el.keyRecord.classList.remove('listening')
   el.keyShot.classList.remove('listening')
+  el.keyPause.classList.remove('listening')
   if (settings) renderHotkeys()
 }
 
-function listenFor(which: 'record' | 'shot'): void {
+function listenFor(which: KeyAction): void {
   if (listening) stopListening()
   listening = which
-  const btn = which === 'record' ? el.keyRecord : el.keyShot
+  const btn = which === 'record' ? el.keyRecord : which === 'shot' ? el.keyShot : el.keyPause
   btn.classList.add('listening')
   btn.textContent = 'Press the new keys…  (Esc to cancel, Backspace to turn off)'
   window.addEventListener('keydown', onShortcutKey, true)
@@ -228,7 +235,7 @@ function onShortcutKey(e: KeyboardEvent): void {
   const which = listening
   if (e.key === 'Backspace' || e.key === 'Delete') {
     stopListening()
-    void save(which === 'record' ? { hotkeyRecord: '' } : { hotkeyShot: '' })
+    void save({ [KEY_FIELD[which]]: '' })
     return
   }
   const accelerator = acceleratorFromKey(e, IS_MAC)
@@ -236,13 +243,13 @@ function onShortcutKey(e: KeyboardEvent): void {
     el.keyHint.textContent = 'Use Ctrl, Alt or Shift together with a letter, number or F-key (F-keys and Print Screen also work alone).'
     return
   }
-  const other = which === 'record' ? settings.hotkeyShot : settings.hotkeyRecord
-  if (accelerator === other) {
-    el.keyHint.textContent = 'That shortcut is already used for the other action.'
+  const taken = (Object.keys(KEY_FIELD) as KeyAction[]).some((k) => k !== which && accelerator === settings[KEY_FIELD[k]])
+  if (taken) {
+    el.keyHint.textContent = 'That shortcut is already used for another action.'
     return
   }
   stopListening()
-  void save(which === 'record' ? { hotkeyRecord: accelerator } : { hotkeyShot: accelerator })
+  void save({ [KEY_FIELD[which]]: accelerator })
 }
 
 function renderUpdate(s: UpdateStatus): void {
@@ -289,11 +296,15 @@ function renderHotkeys(): void {
   }
   const rec = describe(settings.hotkeyRecord, caps?.hotkey)
   const snap = describe(settings.hotkeyShot, caps?.shotHotkey)
+  const pause = describe(settings.hotkeyPause, caps?.pauseHotkey)
   if (listening !== 'record') el.keyRecord.textContent = rec.button
   if (listening !== 'shot') el.keyShot.textContent = snap.button
+  if (listening !== 'pause') el.keyPause.textContent = pause.button
+  el.pauseBtn.title = pause.hint.startsWith('or press') ? `Pause or resume (${caps?.pauseHotkey})` : 'Pause or resume'
   el.hotkeyHint.textContent = rec.hint
   el.shotHotkeyHint.textContent = snap.hint
-  const clash = (settings.hotkeyRecord && !caps?.hotkey && caps) || (settings.hotkeyShot && !caps?.shotHotkey && caps)
+  const clash =
+    (settings.hotkeyRecord && !caps?.hotkey && caps) || (settings.hotkeyShot && !caps?.shotHotkey && caps) || (settings.hotkeyPause && !caps?.pauseHotkey && caps)
   el.keyHint.textContent = clash
     ? 'A shortcut shows “unavailable” when another app already uses those keys. Pick different ones.'
     : 'Shortcuts work in any app, so avoid keys your other apps use — browsers use Ctrl+Shift+R (refresh) and Ctrl+Shift+I (developer tools).'
@@ -441,7 +452,8 @@ function renderLevels(levels: AudioLevels): void {
 
 function renderStatus(s: RecordingStatus): void {
   status = s
-  const recording = s.state === 'recording'
+  const recording = s.state === 'recording' || s.state === 'paused'
+  const paused = s.state === 'paused'
   el.idleView.hidden = recording
   el.recView.hidden = !recording
   el.quick.hidden = recording
@@ -454,12 +466,16 @@ function renderStatus(s: RecordingStatus): void {
 
   el.chip.className = `chip ${s.state === 'selecting' || s.state === 'snapping' ? 'saving' : s.state}`
   el.chip.textContent = {
-    idle: 'Ready', selecting: 'Choose what to record…', countdown: 'Starting…', recording: 'Recording', saving: 'Finishing…',
+    idle: 'Ready', selecting: 'Choose what to record…', countdown: 'Starting…', recording: 'Recording', paused: 'Paused', saving: 'Finishing…',
     snapping: 'Taking screenshot…'
   }[s.state]
   el.recordLabel.textContent =
     s.state === 'saving' ? 'Finishing recording…' : s.state === 'selecting' ? 'Choose what to record' : 'Start recording'
 
+  el.recView.classList.toggle('paused', paused)
+  el.pauseBtn.disabled = Boolean(s.resuming)
+  el.pauseText.textContent = paused ? (s.resuming ? 'Resuming…' : 'Resume') : 'Pause'
+  el.pauseIcon.className = `ico ${paused ? 'play' : 'bars'}`
   if (recording) {
     el.timer.textContent = formatTime(s.elapsed)
     el.recMeta.textContent = [s.resolution, s.encoder, s.audio ?? 'No audio', formatBytes(s.bytes)].filter(Boolean).join(' · ')
@@ -468,6 +484,7 @@ function renderStatus(s: RecordingStatus): void {
     el.recWarn.textContent = slow
       ? `Your computer is encoding slower than real time (${s.speed!.toFixed(2)}×). Try a GPU encoder, a lower frame rate, or "Very high" quality.`
       : `${s.droppedFrames} frames dropped.`
+    if (paused) el.recMeters.replaceChildren()
   } else {
     el.recMeters.replaceChildren()
   }
@@ -568,6 +585,9 @@ function bind(): void {
   el.keyShot.addEventListener('click', () => listenFor('shot'))
   $('key-record-off').addEventListener('click', () => void save({ hotkeyRecord: '' }))
   $('key-shot-off').addEventListener('click', () => void save({ hotkeyShot: '' }))
+  el.keyPause.addEventListener('click', () => listenFor('pause'))
+  $('key-pause-off').addEventListener('click', () => void save({ hotkeyPause: '' }))
+  el.pauseBtn.addEventListener('click', () => void api.togglePause())
   window.addEventListener('blur', () => listening && stopListening())
   el.shoot.addEventListener('click', () => void api.takeScreenshot())
   $('open-shot').addEventListener('click', () => void api.openLastShot())

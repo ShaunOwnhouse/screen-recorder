@@ -13,7 +13,7 @@ export interface Placement {
   y: number
 }
 
-export const BAR_WIDTH = 300
+export const BAR_WIDTH = 340
 export const BAR_HEIGHT = 44
 const GAP = 12
 

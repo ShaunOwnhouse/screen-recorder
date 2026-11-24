@@ -49,6 +49,11 @@ function maxVolume(file) {
   return m ? Number(m[1]) : -Infinity
 }
 
+function maxVolumeTail(file, seconds) {
+  const m = /max_volume: (-?[\d.]+) dB/.exec(ff(['-hide_banner', '-sseof', `-${seconds}`, '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-']).stderr)
+  return m ? Number(m[1]) : -Infinity
+}
+
 /** True if the top-level MP4 boxes put `moov` before `mdat` (so players can start immediately). */
 function isFaststart(file) {
   const fd = fs.openSync(file, 'r')
@@ -272,7 +277,7 @@ async function setSettings(main, over) {
 }
 
 /** Starts a recording, returns the review window once it has opened. */
-async function record(app, main, label, { seconds, region, checkAffinity }) {
+async function record(app, main, label, { seconds, region, checkAffinity, pauses }) {
   log(`--- recording: ${label} ---`)
   await setSettings(main, { mode: region ? 'region' : 'fullscreen' })
   await main.click('#tab-record')
@@ -332,6 +337,49 @@ async function record(app, main, label, { seconds, region, checkAffinity }) {
   await sleep(seconds * 1000)
   const barText = await bar.textContent('#text')
   check(`${label}: timer is running`, /^\d\d:\d\d/.test(barText), barText)
+
+  // Pause and resume the way a person does: the bar's button when the bar is on screen, otherwise the shortcut/tray command.
+  const pauseLog = []
+  if (pauses) {
+    const stat = () => main.evaluate(() => window.api.getStatus())
+    const until = async (fn, ms = 20000) => {
+      const t = Date.now()
+      while (Date.now() - t < ms) { if (await fn()) return true; await sleep(100) }
+      return false
+    }
+    const press = async (via) => {
+      if (via === 'bar' && barInfo.visible) await bar.click('#pause')
+      else await main.evaluate(() => window.api.togglePause())
+    }
+    check(`${label}: the bar has a Pause button next to Stop`, await bar.evaluate(() => !document.getElementById('pause').hidden && !document.getElementById('stop').hidden && document.getElementById('pause-text').textContent === 'Pause'))
+    let n = 0
+    for (const step of pauses) {
+      n++
+      const tag = `${label}: pause #${n} (${step.via})`
+      await press(step.via)
+      const paused = await until(async () => (await stat()).state === 'paused')
+      const p1 = await stat()
+      check(`${tag}: recording pauses`, paused, `state ${p1.state}, ${p1.elapsed.toFixed(1)}s`)
+      if (!paused) break
+      await sleep(step.hold * 1000)
+      const p2 = await stat()
+      check(`${tag}: the timer stays put while paused`, Math.abs(p2.elapsed - p1.elapsed) < 0.3, `${p1.elapsed.toFixed(2)}s → ${p2.elapsed.toFixed(2)}s after ${step.hold}s`)
+      const shown = await bar.evaluate(() => ({ text: document.getElementById('text').textContent, button: document.getElementById('pause-text').textContent, stop: !document.getElementById('stop').hidden }))
+      check(`${tag}: the bar says Paused and offers Resume and Stop`, /^Paused \d\d:\d\d/.test(shown.text) && shown.button === 'Resume' && shown.stop, JSON.stringify(shown))
+      const panel = await main.evaluate(() => ({ chip: document.getElementById('chip')?.textContent, button: document.getElementById('pause-text').textContent }))
+      check(`${tag}: the control panel agrees`, /Paused/.test(panel.chip ?? '') && panel.button === 'Resume', JSON.stringify(panel))
+      pauseLog.push({ pausedAt: p1.elapsed })
+      if (step.stopWhilePaused) break
+      await press(step.via)
+      const back = await until(async () => (await stat()).state === 'recording')
+      const r = await stat()
+      check(`${tag}: Resume carries on from the same point`, back && r.elapsed >= p1.elapsed - 0.05 && r.elapsed < p1.elapsed + 4, `${p1.elapsed.toFixed(2)}s → ${r.elapsed.toFixed(2)}s`)
+      await sleep(step.then * 1000)
+      const later = await stat()
+      check(`${tag}: the timer runs again after Resume`, later.elapsed > r.elapsed + step.then - 1, `${r.elapsed.toFixed(2)}s → ${later.elapsed.toFixed(2)}s`)
+    }
+  }
+  const finalElapsed = (await main.evaluate(() => window.api.getStatus())).elapsed
   // Stop exactly as a user would: the bar's Stop button, or (when the bar is hidden) the hotkey/tray command.
   if (barInfo.visible) await bar.click('#stop')
   else await main.evaluate(() => window.api.toggleRecording())
@@ -351,7 +399,7 @@ async function record(app, main, label, { seconds, region, checkAffinity }) {
     .then(() => check(`${label}: review window can play the video`, true))
     .catch(() => check(`${label}: review window can play the video`, false, 'preview never became ready'))
   await shot(editor, `${label}-editor`)
-  return { editor, status: st, infoLine, barBounds, barVisible: barInfo.visible }
+  return { editor, status: st, infoLine, barBounds, barVisible: barInfo.visible, pauseLog, finalElapsed }
 }
 
 /** Starts a screenshot from the panel; returns the review window once the picture is ready. */
@@ -419,6 +467,19 @@ async function save(app, editor, name) {
   fs.mkdirSync(userData, { recursive: true })
   fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify(SETTINGS({})))
 
+  // A recording the app was in the middle of when the computer lost power — one made in two pieces by a pause, one in a single
+  // piece, and one empty leftover. The app must turn the first two into normal recordings when it starts.
+  const pendingDirSeed = path.join(userData, 'pending')
+  fs.mkdirSync(pendingDirSeed, { recursive: true })
+  const makePiece = (file, hz) => ff(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30,format=yuv420p', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=48000`,
+    '-t', '2', '-c:v', 'libx264', '-c:a', 'aac', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', file])
+  const stemA = path.join(pendingDirSeed, 'Recording 2020-01-01 10-00-00')
+  const stemB = path.join(pendingDirSeed, 'Recording 2020-01-01 11-00-00')
+  makePiece(`${stemA}.recording.mp4`, 400)
+  makePiece(`${stemA}.recording2.mp4`, 600)
+  makePiece(`${stemB}.recording.mp4`, 500)
+  fs.writeFileSync(path.join(pendingDirSeed, 'Recording 2020-01-01 12-00-00.recording.mp4'), '')
+
   // A tiny update feed on this computer (Windows only: Linux runs from source, which never self-updates).
   let feedVersion = require(path.join(ROOT, 'package.json')).version
   const feedServer = http.createServer((req, res) => {
@@ -451,6 +512,24 @@ async function save(app, editor, name) {
     const main = await waitForWindow(app, 'index.html')
     await main.waitForFunction(() => !document.getElementById('footer').textContent.includes('Detecting'), null, { timeout: 60000 })
     log('panel ready:', await main.textContent('#footer'))
+    await sleep(1500)
+    {
+      log('--- recovery of interrupted recordings ---')
+      const left = fs.readdirSync(pendingDirSeed)
+      const a = path.join(pendingDirSeed, 'Recording 2020-01-01 10-00-00.mp4')
+      const b = path.join(pendingDirSeed, 'Recording 2020-01-01 11-00-00.mp4')
+      check('Recovery: a recording interrupted after a pause comes back as one normal recording', fs.existsSync(a), left.join(', '))
+      check('Recovery: a recording interrupted in one piece comes back too', fs.existsSync(b))
+      check('Recovery: no loose pieces or empty leftovers remain', !left.some((n) => /\.recording\d*\.mp4$|\.pieces\.txt$/.test(n)), left.join(', '))
+      if (fs.existsSync(a)) {
+        const i = info(a)
+        const dur = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(i)
+        const seconds = dur ? +dur[1] * 3600 + +dur[2] * 60 + +dur[3] : 0
+        check('Recovery: the joined recording contains both pieces (about 4 s)', seconds > 3.5 && seconds < 4.6, `${seconds.toFixed(2)}s`)
+        check('Recovery: and it plays from start to end', fullDecode(a).ok)
+      }
+      for (const f of [a, b]) fs.rmSync(f, { force: true })
+    }
     const runVersion = await app.evaluate(({ app }) => app.getVersion())
     feedVersion = runVersion // the feed starts out announcing the very version that is running
     await shot(main, 'panel')
@@ -535,6 +614,7 @@ async function save(app, editor, name) {
       const caps0 = await main.evaluate(() => window.api.getCapabilities())
       check('Shortcuts: record and screenshot have different default keys', !!st.hotkeyRecord && !!st.hotkeyShot && st.hotkeyRecord !== st.hotkeyShot, `${st.hotkeyRecord} / ${st.hotkeyShot}`)
       check('Shortcuts: both defaults are registered', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)), `${caps0.hotkey} / ${caps0.shotHotkey}`)
+      check('Shortcuts: pause has its own safe default key and it is registered', !!st.hotkeyPause && ![st.hotkeyRecord, st.hotkeyShot].includes(st.hotkeyPause) && (await registered(st.hotkeyPause)) && !!caps0.pauseHotkey, `${st.hotkeyPause} / ${caps0.pauseHotkey}`)
       for (const acc of ['Control+Shift+R', 'CommandOrControl+Shift+R', 'Command+Shift+R']) {
         check(`Shortcuts: the browser's hard-refresh key (${acc}) is NOT taken`, !(await registered(acc)))
       }
@@ -559,7 +639,7 @@ async function save(app, editor, name) {
       await main.click('#key-record')
       await main.keyboard.press(st.hotkeyShot.replace(/\+([A-Z])$/, '+Key$1'))
       await sleep(300)
-      check('Shortcuts: the same keys can\'t be used for both actions', /already used for the other action/.test(await main.textContent('#key-hint')) && (await main.evaluate(() => window.api.getSettings())).hotkeyRecord === 'Control+Alt+Q')
+      check('Shortcuts: the same keys can\'t be used for both actions', /already used for another action/.test(await main.textContent('#key-hint')) && (await main.evaluate(() => window.api.getSettings())).hotkeyRecord === 'Control+Alt+Q')
       await main.keyboard.press('Escape')
       // A key another app already owns is reported, not silently ignored.
       await app.evaluate(({ globalShortcut }) => {
@@ -578,7 +658,17 @@ async function save(app, editor, name) {
       check('Shortcuts: a shortcut can be turned off', now.hotkeyShot === '' && capsOff.shotHotkey === null && !(await registered('Control+Alt+W')) && (await main.textContent('#key-shot')).trim() === 'Off')
       await main.evaluate((d) => window.api.setSettings({ hotkeyRecord: d.r, hotkeyShot: d.s }), { r: st.hotkeyRecord, s: st.hotkeyShot })
       await sleep(400)
-      check('Shortcuts: defaults come back', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)) && !(await registered('Control+Alt+Q')))
+      await main.click('#key-pause')
+      await main.keyboard.press('Control+Alt+KeyY')
+      await sleep(400)
+      const pk = await main.evaluate(() => window.api.getSettings())
+      check('Shortcuts: the pause key can be changed, and the old one is released', pk.hotkeyPause === 'Control+Alt+Y' && (await registered('Control+Alt+Y')) && !(await registered(st.hotkeyPause)), pk.hotkeyPause)
+      await main.click('#key-pause-off')
+      await sleep(400)
+      check('Shortcuts: the pause key can be turned off', (await main.evaluate(() => window.api.getSettings())).hotkeyPause === '' && !(await registered('Control+Alt+Y')) && (await main.textContent('#key-pause')).trim() === 'Off')
+      await main.evaluate((d) => window.api.setSettings({ hotkeyPause: d }), st.hotkeyPause)
+      await sleep(300)
+      check('Shortcuts: defaults come back', (await registered(st.hotkeyRecord)) && (await registered(st.hotkeyShot)) && (await registered(st.hotkeyPause)) && !(await registered('Control+Alt+Q')))
       await main.click('#settings-toggle')
     }
 
@@ -662,6 +752,39 @@ async function save(app, editor, name) {
         check('Maximum whole screen: recording bar is NOT in the video', !found.ui, detail)
       }
       log('recorded with', status.backend, '/', status.encoder)
+    }
+
+    // 1b) Pause and resume (twice) → one continuous file that leaves out the paused time
+    {
+      const wallStart = Date.now()
+      const { editor, pauseLog, finalElapsed } = await record(app, main, 'paused', {
+        seconds: 2.5,
+        pauses: [{ via: 'bar', hold: 3.5, then: 2 }, { via: 'api', hold: 1.5, then: 1.5 }]
+      })
+      const wall = (Date.now() - wallStart) / 1000
+      const file = await save(app, editor, 'e2e-paused')
+      // ~6 s was recorded; the 5 s spent paused must not be in the file.
+      validate('Paused and resumed', file, {
+        width: evenFloor(display.w), height: evenFloor(display.h), audio: true, syncAv: true, minSeconds: 4.2, maxSeconds: 20
+      })
+      const i = info(file)
+      const dur = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(i)
+      const seconds = dur ? +dur[1] * 3600 + +dur[2] * 60 + +dur[3] : 0
+      check('Paused and resumed: the timer on the bar matches the length of the video', Math.abs(seconds - finalElapsed) < 2.5, `timer ${finalElapsed.toFixed(1)}s, video ${seconds.toFixed(1)}s`)
+      check('Paused and resumed: the time spent paused is not in the video', seconds < wall - 4, `${seconds.toFixed(1)}s of video from ${wall.toFixed(1)}s on the clock`)
+      const tail = maxVolumeTail(file, 3)
+      check('Paused and resumed: sound carries on after the last Resume (not just before the first pause)', tail > -60, `peak ${tail} dB in the last 3 s`)
+      check('Paused and resumed: one video stream and one audio stream (no leftovers from the pieces)',
+        (i.match(/Stream #.*Video:/g) || []).length === 1 && (i.match(/Stream #.*Audio:/g) || []).length === 1)
+      check('Paused and resumed: no loose pieces left in the working folder', !fs.readdirSync(path.join(userData, 'pending')).some((n) => /\.recording\d*\.mp4$|\.pieces\.txt$/.test(n)), fs.readdirSync(path.join(userData, 'pending')).join(', '))
+      log('paused at', pauseLog.map((p) => `${p.pausedAt.toFixed(1)}s`).join(', '))
+    }
+
+    // 1c) Stop while paused → everything recorded so far is kept
+    {
+      const { editor } = await record(app, main, 'pause-stop', { seconds: 2.5, pauses: [{ via: 'bar', hold: 1.5, stopWhilePaused: true }] })
+      const file = await save(app, editor, 'e2e-pause-stop')
+      validate('Stopped while paused', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 1.5, maxSeconds: 6 })
     }
 
     // 2) Edit: cut the start, crop to 16:9 → save (re-encoded)

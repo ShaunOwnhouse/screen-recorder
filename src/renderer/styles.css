@@ -97,7 +97,8 @@ input:focus-visible {
   color: #fca5a5;
 }
 
-.chip.saving {
+.chip.saving,
+.chip.paused {
   background: rgba(245, 158, 11, 0.15);
   color: #fcd34d;
 }
@@ -472,6 +473,54 @@ select {
   font-size: 12px;
 }
 
+.rec-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+}
+.rec-actions .stop-btn {
+  flex: 1;
+  margin-top: 0;
+}
+.pause-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 110px;
+  background: var(--surface-2);
+  color: inherit;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pause-btn:hover {
+  background: #3a404c;
+}
+.pause-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.pause-btn .ico.bars {
+  width: 10px;
+  height: 11px;
+  box-sizing: border-box;
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
+}
+.pause-btn .ico.play {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 6px 0 6px 10px;
+  border-color: transparent transparent transparent currentColor;
+}
+.rec-view.paused .pulse {
+  animation: none;
+  background: #f59e0b;
+}
 .stop-btn {
   margin-top: 6px;
   display: inline-flex;

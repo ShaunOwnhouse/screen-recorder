@@ -73,7 +73,10 @@
           <div id="rec-meta" class="rec-meta muted"></div>
           <div id="rec-meters" class="meters"></div>
           <div id="rec-warn" class="rec-warn" hidden></div>
-          <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop recording</button>
+          <div class="rec-actions">
+            <button id="pause" class="pause-btn" type="button"><span id="pause-icon" class="ico bars"></span><span id="pause-text">Pause</span></button>
+            <button id="stop" class="stop-btn" type="button"><span class="square"></span>Stop recording</button>
+          </div>
         </div>
 
         <div id="quick" class="quick">
@@ -313,6 +316,13 @@
             <div class="path-row">
               <button id="key-shot" type="button" class="keybtn" aria-label="Change the screenshot shortcut"></button>
               <button id="key-shot-off" type="button" class="ghost">Off</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Pause / resume recording</span>
+            <div class="path-row">
+              <button id="key-pause" type="button" class="keybtn" aria-label="Change the pause shortcut"></button>
+              <button id="key-pause-off" type="button" class="ghost">Off</button>
             </div>
           </div>
           <span id="key-hint" class="hint"></span>
