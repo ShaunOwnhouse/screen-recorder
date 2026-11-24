@@ -48,6 +48,8 @@ function defaults(): Settings {
     hotkeyRecord: process.platform === 'darwin' ? DEFAULT_RECORD_HOTKEY.mac : DEFAULT_RECORD_HOTKEY.win,
     hotkeyShot: process.platform === 'darwin' ? DEFAULT_SHOT_HOTKEY.mac : DEFAULT_SHOT_HOTKEY.win,
     hotkeyPause: process.platform === 'darwin' ? DEFAULT_PAUSE_HOTKEY.mac : DEFAULT_PAUSE_HOTKEY.win,
+    camera: false,
+    cameraDevice: 'default',
     autoUpdate: true,
     brand: { colors: [...DEFAULT_BRAND_COLORS], fonts: [] }
   }
@@ -65,6 +67,8 @@ function sanitize(s: Settings): Settings {
     hotkeyRecord: typeof s.hotkeyRecord === 'string' ? s.hotkeyRecord : d.hotkeyRecord,
     hotkeyShot: typeof s.hotkeyShot === 'string' ? s.hotkeyShot : d.hotkeyShot,
     hotkeyPause: typeof s.hotkeyPause === 'string' ? s.hotkeyPause : d.hotkeyPause,
+    camera: typeof s.camera === 'boolean' ? s.camera : d.camera,
+    cameraDevice: typeof s.cameraDevice === 'string' && s.cameraDevice ? s.cameraDevice : d.cameraDevice,
     autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate,
     brand: cleanBrand(s.brand, d.brand)
   }

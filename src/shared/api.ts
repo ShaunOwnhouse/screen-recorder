@@ -1,6 +1,6 @@
 import type { UpdateStatus } from './updates.ts'
 import type {
-  AudioLevels, Brand, BrandFont, Capabilities, EditorSource, MediaInfo, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
+  AudioLevels, Brand, BrandFont, CameraInfo, Capabilities, EditorSource, MediaInfo, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
   ShotSaveRequest, ShotSource
 } from './types.ts'
 
@@ -26,6 +26,8 @@ export interface Api {
   openLastShot(): Promise<void>
   openReview(): Promise<void>
   testAudio(on: boolean): Promise<string[]>
+  /** The cameras on this computer (opens the camera for a moment so they can be named). */
+  listCameras(): Promise<CameraInfo[]>
   fitHeight(height: number): Promise<void>
   getUpdateStatus(): Promise<UpdateStatus>
   checkForUpdates(): Promise<UpdateStatus>
@@ -91,7 +93,29 @@ export interface AudioConfigPayload {
   noiseSuppression: boolean
 }
 
+export interface CameraOpenPayload {
+  /** 'default' for the system's first camera. */
+  device: string
+  /** Also record this microphone with the camera (used to line the camera up with the screen), or null. */
+  mic: string | null
+}
+
+export interface CameraOpenResult {
+  ok: boolean
+  error?: string
+  width?: number
+  height?: number
+  hasAudio?: boolean
+}
+
 export interface AudioBridgeApi {
+  onCameraDevices(fn: () => Promise<CameraInfo[]>): void
+  onCameraOpen(fn: (p: CameraOpenPayload) => Promise<CameraOpenResult>): void
+  onCameraStart(fn: () => Promise<{ startedAt: number }>): void
+  onCameraPause(fn: () => Promise<void>): void
+  onCameraResume(fn: () => Promise<void>): void
+  onCameraStop(fn: () => Promise<void>): void
+  cameraChunk(chunk: Uint8Array): void
   onStart(fn: (cfg: AudioConfigPayload) => Promise<{ started: string[]; errors: string[] }>): void
   onStop(fn: () => Promise<void>): void
   onListDevices(fn: (opts?: { prime?: boolean }) => Promise<MicInfo[]>): void

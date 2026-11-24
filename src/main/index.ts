@@ -17,7 +17,8 @@ import { Updater } from './updater.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme, setAddedMediaResolver } from './media-protocol.ts'
-import { joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, cameraRawFor, joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
+import { finishCamera, writeCameraInfo } from './camera.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
@@ -46,6 +47,16 @@ let tray: Tray | null = null
 let hotkeyRegistered = false
 let shotHotkeyRegistered = false
 let pauseHotkeyRegistered = false
+
+/** A webcam recording going on alongside the screen recording. */
+interface CameraSession {
+  /** When the camera began (wall clock, ms). */
+  startedAt: number
+  /** True when the screen recording's own clock starts the moment it is launched (it has sound), false when it starts at the first picture. */
+  clockAtLaunch: boolean
+  stopping: Promise<void> | null
+}
+let cameraSession: CameraSession | null = null
 let quitting = false
 let bar: BrowserWindow | null = null
 let panelHiddenForRecording = false
@@ -620,6 +631,7 @@ async function ensureMacPermissions(s: Settings): Promise<void> {
     }
   }
   if (s.micEnabled) await systemPreferences.askForMediaAccess('microphone')
+  if (s.camera) await systemPreferences.askForMediaAccess('camera')
 }
 
 function windowsAttempts(base: Omit<Attempt, 'backend' | 'rect'>, s: Settings, display: Display, rect: Rect, ddagrab: boolean, outputs: Awaited<ReturnType<typeof dxgiOutputs>>): Attempt[] {
@@ -721,6 +733,14 @@ async function startRecording(): Promise<void> {
     }
   }
 
+  // The camera is opened now (so it is ready the instant recording starts) but only starts recording with the screen.
+  let cameraReady = false
+  if (s.camera) {
+    const res = await audio.openCamera({ device: s.cameraDevice, mic: s.micEnabled ? s.micDevice : null })
+    if (res.ok) cameraReady = true
+    else warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${res.error ?? 'it could not be opened'}`
+  }
+
   const base = {
     fps: s.fps,
     outputHeight: s.outputHeight,
@@ -763,6 +783,7 @@ async function startRecording(): Promise<void> {
   const hideBar = await check
   if (startAborted || !counted || startAborted) {
     await audio.stop()
+    if (cameraReady) await audio.stopCamera()
     closeBar()
     recorder.update({ state: 'idle', countdown: undefined })
     restorePanel()
@@ -774,9 +795,29 @@ async function startRecording(): Promise<void> {
 
   try {
     const stamp = timestamp()
-    await recorder.start(attempts, join(pendingDir(), `Recording ${stamp}.mp4`), newLogPath(stamp))
+    const finalPath = join(pendingDir(), `Recording ${stamp}.mp4`)
+    const clockAtLaunch = audioInputs.length > 0
+    // With sound, the screen recording's clock starts as it is launched: start the camera with it. Without, it starts at the first picture.
+    const startCamera = (): Promise<void> =>
+      audio.startCamera(cameraRawFor(finalPath)).then(
+        (startedAt) => {
+          cameraSession = { startedAt, clockAtLaunch, stopping: null }
+          recorder.update({ camera: true })
+        },
+        (err: Error) => {
+          warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${err.message}`
+          void audio.stopCamera()
+        }
+      )
+    if (cameraReady && clockAtLaunch) await Promise.all([recorder.start(attempts, finalPath, newLogPath(stamp)), startCamera()])
+    else {
+      await recorder.start(attempts, finalPath, newLogPath(stamp))
+      if (cameraReady) await startCamera()
+    }
   } catch (err) {
     await audio.stop()
+    if (cameraReady) await audio.stopCamera()
+    cameraSession = null
     throw err
   }
   recorder.update({ audio: audioLabel, warning, countdown: undefined })
@@ -805,8 +846,18 @@ async function toggleRecording(): Promise<void> {
 /** Pauses a recording that is running, or carries on a paused one from the same point. */
 async function togglePause(): Promise<void> {
   const { state, resuming } = recorder.getStatus()
-  if (state === 'recording') return recorder.pause()
-  if (state === 'paused' && !resuming) return recorder.resume()
+  const cam = cameraSession
+  if (state === 'recording') {
+    await Promise.all([recorder.pause(), cam ? audio.pauseCamera() : undefined])
+    return
+  }
+  if (state === 'paused' && !resuming) {
+    if (cam?.clockAtLaunch) await Promise.all([recorder.resume(), audio.resumeCamera()])
+    else {
+      await recorder.resume()
+      if (cam) await audio.resumeCamera()
+    }
+  }
 }
 
 /** Starts a screenshot, or cancels one that is still waiting (countdown / choosing the area). */
@@ -882,6 +933,7 @@ function registerIpc(): void {
     const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
     mainWindow.setContentSize(PANEL_WIDTH, Math.round(Math.min(Math.max(height, 320), area.height - 40)))
   })
+  ipcMain.handle('camera:list', () => audio.listCameras())
   ipcMain.handle('audio:test', async (_e, on: boolean) => {
     if (recorder.getStatus().state !== 'idle') return []
     if (!on) {
@@ -912,15 +964,38 @@ function registerIpc(): void {
 }
 
 recorder.on('status', (status) => {
+  if (status.state === 'saving' && cameraSession && !cameraSession.stopping) cameraSession.stopping = audio.stopCamera()
   mainWindow?.webContents.send('rec:status', status)
   if (bar && !bar.isDestroyed()) bar.webContents.send('rec:status', status)
   updateTray()
 })
 
+/** Turns the camera's raw recording into a normal video next to the screen recording, and notes how they line up. */
+async function finishCameraFor(file: string, ok: boolean): Promise<void> {
+  const cam = cameraSession
+  cameraSession = null
+  if (!cam) return
+  await (cam.stopping ?? audio.stopCamera())
+  recorder.update({ camera: false })
+  const raw = cameraRawFor(file)
+  if (!ok) {
+    rmSync(raw, { force: true })
+    return
+  }
+  const screenStart = cam.clockAtLaunch ? recorder.firstSpawnAt : recorder.firstFrameAt
+  const result = await finishCamera({
+    raw, out: cameraFileFor(file), screen: file, cameraStart: cam.startedAt, screenStart, fps: getSettings().fps,
+    note: (t) => recorder.addNote(t)
+  })
+  if (result) writeCameraInfo(cameraInfoFor(file), result)
+  else recorder.update({ warning: 'The camera picture could not be saved, so the video has the screen only.' })
+}
+
 recorder.on('recorded', async (file: string, info: RecordedInfo) => {
   void audio.stop()
   closeBar()
   restorePanel()
+  await finishCameraFor(file, info.ok)
   // Never open the review window on a recording that doesn't play — say what went wrong instead.
   if (!info.ok) {
     removePending(file)

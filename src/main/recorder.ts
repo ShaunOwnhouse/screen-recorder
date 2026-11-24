@@ -38,6 +38,10 @@ export class Recorder extends EventEmitter {
   private proc: ChildProcess | null = null
   private status: RecordingStatus = { state: 'idle', elapsed: 0, bytes: 0, droppedFrames: 0, speed: null, pending: null }
   private startedAt = 0
+  /** When the very first piece was started (wall clock, ms): what a camera recorded alongside is lined up with. */
+  firstSpawnAt = 0
+  /** When the first picture of the first piece arrived (wall clock, ms). */
+  firstFrameAt = 0
   private ticker: NodeJS.Timeout | null = null
   private finalPath = ''
   /** The capture method that started, reused to pick the recording back up after a pause. */
@@ -156,6 +160,10 @@ export class Recorder extends EventEmitter {
         clearTimeout(watchdog)
         this.proc = proc
         this.startedAt = spawnedAt
+        if (!this.pieces.length) {
+          this.firstSpawnAt = spawnedAt
+          this.firstFrameAt = Date.now()
+        }
         this.pieces.push(piecePath)
         const out = outputSize(attempt.rect, attempt.outputHeight)
         this.update({

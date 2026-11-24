@@ -3,10 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { basename, dirname, extname, join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import { buildCopyArgs, buildProxyArgs } from './args.ts'
-import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
+import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
 import { ProgressParser, parseMediaInfo } from './parse.ts'
-import { moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
 import { buildProjectArgs, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
 import { isPlain, type Project } from '../shared/project.ts'
@@ -46,8 +46,49 @@ export class EditorController {
   /** Files the person added to this video, by id (the recording itself is 'recording'). */
   private readonly added = new Map<string, Added>()
   private counter = 0
+  /** Background FFmpeg jobs that read the recording to draw the timeline; they must not still be running when it is moved or deleted. */
+  private readonly previewJobs = new Set<ChildProcess>()
   private readonly strips = new Map<string, string>()
   private readonly waves = new Map<string, number[]>()
+
+  /** Runs FFmpeg and returns what it printed, in a way that can be stopped (see `stopPreviewJobs`). */
+  private preview(args: string[], timeoutMs: number): Promise<{ ok: boolean; stdout: Buffer }> {
+    return new Promise((resolve) => {
+      const proc = spawn(ffmpegPath(), args, { windowsHide: true })
+      this.previewJobs.add(proc)
+      const out: Buffer[] = []
+      let size = 0
+      const timer = setTimeout(() => proc.kill(), timeoutMs)
+      proc.stdout.on('data', (c: Buffer) => {
+        size += c.length
+        if (size <= 256 * 1024 * 1024) out.push(c)
+      })
+      proc.stderr.resume()
+      const done = (ok: boolean): void => {
+        clearTimeout(timer)
+        this.previewJobs.delete(proc)
+        resolve({ ok, stdout: Buffer.concat(out) })
+      }
+      proc.once('error', () => done(false))
+      proc.once('close', (code) => done(code === 0))
+    })
+  }
+
+  /** Stops the jobs that draw the timeline and waits until they have let go of the files. */
+  private async stopPreviewJobs(): Promise<void> {
+    const jobs = [...this.previewJobs]
+    await Promise.all(
+      jobs.map(
+        (p) =>
+          new Promise<void>((resolve) => {
+            if (p.exitCode !== null) return resolve()
+            p.once('close', () => resolve())
+            p.kill()
+            setTimeout(resolve, 5000)
+          })
+      )
+    )
+  }
 
   /** Where the media:// protocol finds an added file. */
   addedPath(id: string): string | null {
@@ -130,6 +171,7 @@ export class EditorController {
 
   close(): void {
     this.file = null
+    for (const p of this.previewJobs) p.kill()
     if (this.win && !this.win.isDestroyed()) this.win.destroy()
   }
 
@@ -141,6 +183,7 @@ export class EditorController {
       return { error: 'This recording can’t be opened — it has no video in it (the recording probably failed). You can discard it.' }
     }
     const name = basename(file)
+    const camera = this.loadCamera(file)
     const formats = await this.deps.formats()
     const wanted = this.deps.settings().videoFormat
     return {
@@ -153,8 +196,25 @@ export class EditorController {
         outputDir: this.deps.settings().outputDir,
         formats,
         format: formats.includes(wanted) ? wanted : 'mp4',
-        brand: this.deps.settings().brand
+        brand: this.deps.settings().brand,
+        camera
       }
+    }
+  }
+
+  /** The face camera recorded with this recording, made available to the editor like any added file. */
+  private loadCamera(file: string): { info: MediaInfo; offset: number } | null {
+    const video = cameraFileFor(file)
+    const note = cameraInfoFor(file)
+    if (!existsSync(video) || !existsSync(note)) return null
+    try {
+      const j = JSON.parse(readFileSync(note, 'utf8')) as { offset: number; width: number; height: number; duration: number }
+      if (!(j.duration > 0) || !Number.isFinite(j.offset)) return null
+      const info: MediaInfo = { id: 'camera', name: 'Face camera', kind: 'video', duration: j.duration, width: j.width, height: j.height, hasAudio: false, url: addedMediaUrl('camera') }
+      this.added.set('camera', { info, path: video })
+      return { info, offset: j.offset }
+    } catch {
+      return null
     }
   }
 
@@ -176,6 +236,7 @@ export class EditorController {
     const file = this.file
     const win = this.win
     if (!file || !win || this.exportProc) return { ok: false }
+    await this.stopPreviewJobs()
     const meta = await probeMedia(file)
     if (!meta) return { ok: false, error: 'Could not read the recording.' }
 
@@ -314,7 +375,7 @@ export class EditorController {
     if (cached) return cached
     const path = this.pathOf(id)
     if (!path) return []
-    const res = await runFfmpegBinary(['-hide_banner', '-loglevel', 'error', '-i', path, '-vn', '-ac', '1', '-ar', '2000', '-t', '7200', '-f', 'f32le', '-'], 120000)
+    const res = await this.preview(['-hide_banner', '-loglevel', 'error', '-i', path, '-vn', '-ac', '1', '-ar', '2000', '-t', '7200', '-f', 'f32le', '-'], 120000)
     if (!res.ok || res.stdout.length < 8) return []
     const bytes = res.stdout
     const samples = new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length - (bytes.length % 4)))
@@ -340,7 +401,7 @@ export class EditorController {
     const duration = id === 'recording' ? (info?.duration ?? 0) : (this.added.get(id)?.info.duration ?? 0)
     if (!path || duration <= 0) return ''
     const n = Math.max(2, Math.min(80, Math.round(count)))
-    const res = await runFfmpegBinary(
+    const res = await this.preview(
       ['-hide_banner', '-loglevel', 'error', '-i', path, '-an', '-vf', `fps=${(n / duration).toFixed(5)},scale=-2:56,tile=${n}x1`, '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', '-'],
       120000
     )
@@ -411,6 +472,7 @@ export class EditorController {
       detail: 'It will be permanently deleted.'
     })
     if (res.response !== 0) return false
+    await this.stopPreviewJobs()
     removePending(file)
     this.close()
     this.deps.onDiscarded()

@@ -829,6 +829,34 @@ async function save(app, editor, name) {
       validate('Stopped while paused', file, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 1.5, maxSeconds: 6 })
     }
 
+    // 1d) Recording the webcam together with the screen (the test camera stands in for a real one)
+    if (only('camera')) {
+      await setSettings(main, { camera: true })
+      const { editor, pauseLog } = await record(app, main, 'camera', { seconds: 2.5, pauses: [{ via: 'api', hold: 1.5, then: 2 }] })
+      const pend = fs.readdirSync(path.join(userData, 'pending'))
+      const cam = pend.find((f) => /\.camera\.mp4$/.test(f))
+      const note = pend.find((f) => /\.camera\.json$/.test(f))
+      check('Camera: the picture from the camera was saved next to the recording', !!cam && !!note && !pend.some((f) => /\.camera\.webm$/.test(f)), pend.join(', '))
+      if (cam && note) {
+        const camPath = path.join(userData, 'pending', cam)
+        const i = info(camPath)
+        check('Camera: it is a normal H.264 video', /Video: h264/.test(i) && !/Audio:/.test(i), (/Video: .*/.exec(i) || [''])[0].slice(0, 80))
+        const dur = (f) => { const m = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(info(f)); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : 0 }
+        const screen = path.join(userData, 'pending', cam.replace('.camera.mp4', '.mp4'))
+        check('Camera: it is as long as the screen recording (the pause is left out of both)', Math.abs(dur(camPath) - dur(screen)) < 1.2, `camera ${dur(camPath).toFixed(2)}s, screen ${dur(screen).toFixed(2)}s`)
+        const meta = JSON.parse(fs.readFileSync(path.join(userData, 'pending', note), 'utf8'))
+        check('Camera: how it lines up with the screen was worked out', Number.isFinite(meta.offset) && Math.abs(meta.offset) < 4 && /voice|clock/.test(meta.method), JSON.stringify(meta))
+        check('Camera: its picture is not blank', (() => { const r = ff(['-hide_banner', '-i', camPath, '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YDIF', '-f', 'null', '-']); return /YDIF/.test(r.stderr) || fullDecode(camPath).ok })())
+      }
+      const src = await editor.evaluate(() => window.editor.load())
+      check('Camera: the review window is told about it', !!src.source?.camera && src.source.camera.info.duration > 1, JSON.stringify(src.source?.camera ?? null))
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      await editor.click('#discard')
+      await waitGone(app, 'editor.html', 30000)
+      check('Camera: discarding the recording removes the camera files too', !fs.readdirSync(path.join(userData, 'pending')).some((f) => /camera/.test(f)))
+      await setSettings(main, { camera: false })
+    }
+
     // 2) The editor, used the way a person uses it: cut, comment, shapes, media, music, title card, brand, crop → save
     if (only('edit')) {
       const { editor } = await record(app, main, 'edit', { seconds: 6 })

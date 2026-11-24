@@ -2,12 +2,14 @@ import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { rmSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
+import { createWriteStream, type WriteStream } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BrowserWindow, ipcMain, type IpcMainEvent } from 'electron'
 import type { AudioInput } from './args.ts'
 import { spawnSystemAudio } from './mac-helper.ts'
-import type { AudioLevels, MicInfo } from '../shared/types.ts'
+import type { CameraOpenPayload, CameraOpenResult } from '../shared/api.ts'
+import type { AudioLevels, CameraInfo, MicInfo } from '../shared/types.ts'
 
 export interface AudioConfig {
   system: boolean
@@ -100,6 +102,7 @@ export class AudioCapture extends EventEmitter {
   private micLevel: number | null = null
   private systemLevel: number | null = null
   private levelTimer: NodeJS.Timeout | null = null
+  private camFile: WriteStream | null = null
 
   constructor(
     private readonly preload: string,
@@ -109,6 +112,10 @@ export class AudioCapture extends EventEmitter {
     ipcMain.on('audio:pcm', (e, chunk: ArrayBufferView) => {
       if (e.sender !== this.win?.webContents) return
       this.mixPipe?.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+    })
+    ipcMain.on('camera:chunk', (e, chunk: Uint8Array) => {
+      if (e.sender !== this.win?.webContents) return
+      this.camFile?.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
     })
     ipcMain.on('audio:levels', (e, levels: AudioLevels) => {
       if (e.sender !== this.win?.webContents) return
@@ -152,6 +159,41 @@ export class AudioCapture extends EventEmitter {
           this.win!.webContents.send(channel, id, payload)
         })
     )
+  }
+
+  // ---------- the webcam (captured in the same hidden page as the sound) ----------
+
+  listCameras(): Promise<CameraInfo[]> {
+    return this.request<CameraInfo[]>('camera:devices', undefined, 20000).catch(() => [])
+  }
+
+  /** Opens the camera (so recording can begin the instant it is wanted) without recording yet. */
+  openCamera(p: CameraOpenPayload): Promise<CameraOpenResult> {
+    return this.request<CameraOpenResult>('camera:open', p, 25000).catch((e: Error) => ({ ok: false, error: e.message }))
+  }
+
+  /** Starts recording the open camera into `file`; resolves with the wall-clock time recording began. */
+  async startCamera(file: string): Promise<number> {
+    this.camFile?.end()
+    this.camFile = createWriteStream(file)
+    const res = await this.request<{ startedAt: number }>('camera:start', undefined, 15000)
+    return res.startedAt
+  }
+
+  pauseCamera(): Promise<void> {
+    return this.request<void>('camera:pause').catch(() => undefined)
+  }
+
+  resumeCamera(): Promise<void> {
+    return this.request<void>('camera:resume').catch(() => undefined)
+  }
+
+  /** Stops the camera and waits until every piece of the picture has been written to the file. */
+  async stopCamera(): Promise<void> {
+    await this.request<void>('camera:stop', undefined, 30000).catch(() => undefined)
+    const f = this.camFile
+    this.camFile = null
+    if (f) await new Promise<void>((resolve) => f.end(() => resolve()))
   }
 
   /** `prime` briefly opens the default mic so device names are available (asks permission on macOS). */

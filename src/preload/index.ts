@@ -26,6 +26,7 @@ const api: Api = {
   openLastShot: () => ipcRenderer.invoke('shell:openLastShot'),
   openReview: () => ipcRenderer.invoke('rec:review'),
   testAudio: (on) => ipcRenderer.invoke('audio:test', on),
+  listCameras: () => ipcRenderer.invoke('camera:list'),
   fitHeight: (height) => ipcRenderer.invoke('window:fit', height),
   getUpdateStatus: () => ipcRenderer.invoke('update:status'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),

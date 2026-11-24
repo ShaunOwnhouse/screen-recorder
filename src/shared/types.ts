@@ -42,6 +42,10 @@ export interface Settings {
   hotkeyRecord: string
   hotkeyShot: string
   hotkeyPause: string
+  /** Record the webcam together with the screen (its picture is placed in the editor). */
+  camera: boolean
+  /** Which camera ('default' = the system's first). */
+  cameraDevice: string
   /** The person's own colours and fonts for the editor. */
   brand: Brand
   /** Download and install new versions in the background (the app still asks before restarting). */
@@ -71,6 +75,11 @@ export interface MicInfo {
   label: string
 }
 
+export interface CameraInfo {
+  id: string
+  label: string
+}
+
 export interface Capabilities {
   platformSupported: boolean
   ffmpegVersion: string
@@ -95,6 +104,8 @@ export interface RecordingStatus {
   countdown?: number
   /** Paused, and picking up again (the capture is starting back up). */
   resuming?: boolean
+  /** The webcam is being recorded with the screen. */
+  camera?: boolean
   elapsed: number
   bytes: number
   droppedFrames: number
@@ -171,6 +182,8 @@ export interface EditorSource {
   formats: VideoFormat[]
   format: VideoFormat
   brand: Brand
+  /** The face camera recorded with this screen recording, if there was one. */
+  camera: { info: MediaInfo; offset: number } | null
 }
 
 /** A picture the editor drew (a comment, an arrow, a title card…) for FFmpeg to lay over the video. */

@@ -150,3 +150,93 @@ async function listDevices(opts: { prime?: boolean } | undefined): Promise<{ id:
 bridge.onStart((cfg) => start(cfg))
 bridge.onStop(() => stop())
 bridge.onListDevices((opts) => listDevices(opts))
+
+
+// ---------- the webcam ----------
+
+let camStream: MediaStream | null = null
+let camRecorder: MediaRecorder | null = null
+let chunkChain: Promise<void> = Promise.resolve()
+
+function cameraErrorText(err: unknown): string {
+  const e = err as DOMException
+  if (e?.name === 'NotAllowedError') return 'access was blocked — check Windows Settings › Privacy › Camera (and that “Let desktop apps access your camera” is on)'
+  if (e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError') return 'no camera found (unplugged?)'
+  if (e?.name === 'NotReadableError') return 'another app is using the camera'
+  return e?.message ?? String(err)
+}
+
+async function listCameras(): Promise<{ id: string; label: string }[]> {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: true })
+    s.getTracks().forEach((t) => t.stop())
+  } catch {
+    // labels may be generic without access
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  return devices.filter((d) => d.kind === 'videoinput').map((d, i) => ({ id: d.deviceId, label: d.label || `Camera ${i + 1}` }))
+}
+
+async function closeCamera(): Promise<void> {
+  if (camRecorder && camRecorder.state !== 'inactive') {
+    await new Promise<void>((resolve) => {
+      camRecorder!.onstop = () => resolve()
+      camRecorder!.stop()
+    })
+  }
+  await chunkChain
+  camRecorder = null
+  camStream?.getTracks().forEach((t) => t.stop())
+  camStream = null
+}
+
+async function openCamera(p: { device: string; mic: string | null }): Promise<{ ok: boolean; error?: string; width?: number; height?: number; hasAudio?: boolean }> {
+  await closeCamera()
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        deviceId: p.device && p.device !== 'default' ? { exact: p.device } : undefined,
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 }
+      },
+      audio: p.mic
+        ? { deviceId: p.mic === 'default' ? undefined : { exact: p.mic }, echoCancellation: false, autoGainControl: false, noiseSuppression: false }
+        : false
+    })
+  } catch (err) {
+    // the camera is wanted more than the microphone alongside it, so try again with the picture alone
+    if (p.mic) return openCamera({ device: p.device, mic: null })
+    return { ok: false, error: cameraErrorText(err) }
+  }
+  const v = camStream.getVideoTracks()[0]?.getSettings() ?? {}
+  return { ok: true, width: v.width, height: v.height, hasAudio: camStream.getAudioTracks().length > 0 }
+}
+
+function startCamera(): Promise<{ startedAt: number }> {
+  if (!camStream) throw new Error('the camera is not open')
+  const withAudio = camStream.getAudioTracks().length > 0
+  const mime = [`video/webm;codecs=vp9${withAudio ? ',opus' : ''}`, `video/webm;codecs=vp8${withAudio ? ',opus' : ''}`, 'video/webm'].find((m) => MediaRecorder.isTypeSupported(m))
+  camRecorder = new MediaRecorder(camStream, { mimeType: mime, videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 })
+  chunkChain = Promise.resolve()
+  camRecorder.ondataavailable = (e) => {
+    if (!e.data.size) return
+    // keep the pieces in order even though reading each one is asynchronous
+    chunkChain = chunkChain.then(async () => bridge.cameraChunk(new Uint8Array(await e.data.arrayBuffer())))
+  }
+  return new Promise((resolve) => {
+    camRecorder!.onstart = () => resolve({ startedAt: Date.now() })
+    camRecorder!.start(1000)
+  })
+}
+
+bridge.onCameraDevices(() => listCameras())
+bridge.onCameraOpen((p) => openCamera(p))
+bridge.onCameraStart(() => startCamera())
+bridge.onCameraPause(async () => {
+  if (camRecorder?.state === 'recording') camRecorder.pause()
+})
+bridge.onCameraResume(async () => {
+  if (camRecorder?.state === 'paused') camRecorder.resume()
+})
+bridge.onCameraStop(() => closeCamera())

@@ -19,6 +19,13 @@ const bridge: AudioBridgeApi = {
   onStart: (fn) => handle('audio:start', fn as Handler),
   onStop: (fn) => handle('audio:stop', fn as Handler),
   onListDevices: (fn) => handle('audio:devices', fn as Handler),
+  onCameraDevices: (fn) => handle('camera:devices', fn as Handler),
+  onCameraOpen: (fn) => handle('camera:open', fn as Handler),
+  onCameraStart: (fn) => handle('camera:start', fn as Handler),
+  onCameraPause: (fn) => handle('camera:pause', fn as Handler),
+  onCameraResume: (fn) => handle('camera:resume', fn as Handler),
+  onCameraStop: (fn) => handle('camera:stop', fn as Handler),
+  cameraChunk: (chunk) => ipcRenderer.send('camera:chunk', chunk),
   pcm: (chunk) => ipcRenderer.send('audio:pcm', chunk),
   levels: (levels) => ipcRenderer.send('audio:levels', levels)
 }
