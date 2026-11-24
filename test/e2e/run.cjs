@@ -850,10 +850,84 @@ async function save(app, editor, name) {
       }
       const src = await editor.evaluate(() => window.editor.load())
       check('Camera: the review window is told about it', !!src.source?.camera && src.source.camera.info.duration > 1, JSON.stringify(src.source?.camera ?? null))
-      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
-      await editor.click('#discard')
-      await waitGone(app, 'editor.html', 30000)
-      check('Camera: discarding the recording removes the camera files too', !fs.readdirSync(path.join(userData, 'pending')).some((f) => /camera/.test(f)))
+
+      // ---- in the editor ----
+      const T = 'Camera editor'
+      await editor.evaluate(() => window.__editor.store.seek(1))
+      await sleep(900)
+      const geom = () => editor.evaluate(() => {
+        const v = document.querySelector('#pips .facecam')
+        if (!v) return null
+        const fr = document.getElementById('frame').getBoundingClientRect()
+        const r = v.getBoundingClientRect()
+        const cs = getComputedStyle(v)
+        return { shown: cs.display !== 'none', w: r.width / fr.width, h: r.height / fr.height, x: (r.left - fr.left) / fr.width, y: (r.top - fr.top) / fr.height, radius: cs.borderTopLeftRadius, fw: fr.width, fh: fr.height }
+      })
+      let g = await geom()
+      check(`${T}: your face camera is on the video by itself`, !!g && g.shown, JSON.stringify(g))
+      check(`${T}: it is a round window, square in shape`, !!g && Math.abs(g.w * g.fw - g.h * g.fh) < 3 && parseFloat(g.radius) > 20, JSON.stringify(g))
+      check(`${T}: it has its own "Face cam" row in the timeline`, (await editor.isVisible('#label-cam')) && (await editor.locator('.blk.cam-blk').count()) >= 1)
+      // click it on the video to change it
+      const fb = await editor.locator('#frame').boundingBox()
+      await editor.mouse.click(fb.x + (g.x + g.w / 2) * fb.width, fb.y + (g.y + g.h / 2) * fb.height)
+      await editor.waitForSelector('#prop-cam-shape', { timeout: 5000 })
+      check(`${T}: clicking it opens its settings and shows its handles`, (await editor.isVisible('#prop-cam-size')) && (await editor.isVisible('#sel i.h-se')))
+      await editor.click('#prop-cam-shape [data-shape="rounded"]')
+      await editor.locator('#prop-cam-size').fill('0.3')
+      await editor.selectOption('#prop-cam-corner', 'top-left')
+      let st = await editorState(editor)
+      const cam0 = await editor.evaluate(() => window.__editor.store.project.camera)
+      check(`${T}: shape, size and corner can be changed`, cam0.shape === 'rounded' && Math.abs(cam0.w - 0.3) < 0.01 && cam0.x < 0.05 && cam0.y < 0.08, JSON.stringify({ shape: cam0.shape, w: cam0.w, x: cam0.x, y: cam0.y }))
+      // drag it somewhere else on the video
+      g = await geom()
+      await editor.mouse.move(fb.x + (g.x + g.w / 2) * fb.width, fb.y + (g.y + g.h / 2) * fb.height)
+      await editor.mouse.down()
+      await editor.mouse.move(fb.x + (g.x + g.w / 2) * fb.width + fb.width * 0.35, fb.y + (g.y + g.h / 2) * fb.height + fb.height * 0.25, { steps: 8 })
+      await editor.mouse.up()
+      const moved = await editor.evaluate(() => window.__editor.store.project.camera)
+      check(`${T}: it can be dragged to a new place`, moved.x - cam0.x > 0.25 && moved.y - cam0.y > 0.15, `x ${cam0.x.toFixed(2)}→${moved.x.toFixed(2)}`)
+      await editor.locator('#prop-cam-nudge').fill('0.2')
+      check(`${T}: the lip-sync nudge can be set`, Math.abs((await editor.evaluate(() => window.__editor.store.project.camera)).nudge - 0.2) < 0.01)
+      // it follows the cuts
+      const piecesBefore = await editor.locator('.blk.cam-blk').count()
+      const D = (await editorState(editor)).duration
+      await seekTo(editor, D * 0.4)
+      await editor.click('#split')
+      await editor.click('.blk.clip >> nth=0')
+      await editor.click('#delete-sel')
+      const after = await editorState(editor)
+      check(`${T}: cutting the recording cuts the camera with it`, after.duration < D - 0.5 && (await editor.locator('.blk.cam-blk').count()) >= 1, `${D.toFixed(1)}→${after.duration.toFixed(1)}s`)
+      await editor.click('#undo')
+      await editor.click('#undo')
+      await editor.click('#undo')
+      // put it in the bottom right, round, and save
+      await editor.click('.blk.cam-blk >> nth=0')
+      await editor.click('#prop-cam-shape [data-shape="circle"]')
+      await editor.locator('#prop-cam-size').fill('0.3')
+      await editor.selectOption('#prop-cam-corner', 'bottom-right')
+      await editor.locator('#prop-cam-nudge').fill('0')
+      st = await editorState(editor)
+      const screenCopy = path.join(userData, 'screen-copy.mp4')
+      const pendingScreen = fs.readdirSync(path.join(userData, 'pending')).find((f) => /^Recording .*\d\.mp4$/.test(f))
+      fs.copyFileSync(path.join(userData, 'pending', pendingScreen), screenCopy)
+      const finalCam = await editor.evaluate(() => window.__editor.store.project.camera)
+      const out = await save(app, editor, 'e2e-camera')
+      validate('Saved with the face camera', out, { width: st.out.width, height: st.out.height, audio: true, minSeconds: 3 })
+      const W = st.out.width, H = st.out.height
+      const side = finalCam.w * W
+      const cx = finalCam.x * W + side / 2, cy = finalCam.y * H + side / 2
+      const t = 1.2
+      const inCam = pixelAt(out, t, cx, cy, W, H)
+      const inScreen = pixelAt(screenCopy, t, cx, cy, W, H)
+      const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+      check(`${T}: the camera's picture is in the saved video, where it was placed`, !!inCam && !!inScreen && dist(inCam, inScreen) > 50, `video ${inCam} vs screen ${inScreen}`)
+      const cornerOut = pixelAt(out, t, finalCam.x * W + side * 0.03, finalCam.y * H + side * 0.03, W, H)
+      const cornerScreen = pixelAt(screenCopy, t, finalCam.x * W + side * 0.03, finalCam.y * H + side * 0.03, W, H)
+      check(`${T}: a round window leaves the square's corner showing the screen`, !!cornerOut && dist(cornerOut, cornerScreen) < 40, `video ${cornerOut} vs screen ${cornerScreen}`)
+      const elsewhere = pixelAt(out, t, W * 0.1, H * 0.5, W, H)
+      const elsewhereScreen = pixelAt(screenCopy, t, W * 0.1, H * 0.5, W, H)
+      check(`${T}: the rest of the screen is untouched`, !!elsewhere && dist(elsewhere, elsewhereScreen) < 40, `video ${elsewhere} vs screen ${elsewhereScreen}`)
+      check(`${T}: its files are cleaned up once saved`, !fs.readdirSync(path.join(userData, 'pending')).some((f) => /camera/.test(f)))
       await setSettings(main, { camera: false })
     }
 

@@ -1,4 +1,4 @@
-import { layout, overlayAlpha, isDrawn, zoomState, type BlurOverlay, type Clip, type PipOverlay } from '../../shared/project.ts'
+import { cameraBox, cameraPieces, layout, overlayAlpha, isDrawn, zoomState, type BlurOverlay, type Clip, type PipOverlay } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
 import { clampNum, type Store } from './store.ts'
 
@@ -27,6 +27,7 @@ export class Player {
   private pipNodes = new Map<string, { el: HTMLVideoElement | HTMLImageElement; used: number }>()
   private blurNodes = new Map<string, HTMLElement>()
   private music = new Audio()
+  private cam: HTMLVideoElement | null = null
   private last = 0
   private dirty = true
   private tickCount = 0
@@ -200,6 +201,7 @@ export class Player {
     if (!any) for (const n of this.nodes.values()) n.el.style.display = 'none'
     this.syncMusic(t)
     this.syncPips(t)
+    this.syncCamera(t)
   }
 
   private placeNode(el: Node['el'], c: Clip, crop: { x: number; y: number; width: number; height: number } | null): void {
@@ -269,6 +271,55 @@ export class Player {
       if (Math.abs(a.currentTime - pos) > 0.4 && !a.seeking) a.currentTime = pos
       if (a.paused) void a.play().catch(() => undefined)
     } else if (!a.paused) a.pause()
+  }
+
+  // ---------- the face camera ----------
+
+  private syncCamera(t: number): void {
+    const s = this.store
+    const cam = s.project.camera
+    const info = cam ? s.media.get(cam.media) : null
+    if (!cam || !info) {
+      this.cam?.remove()
+      this.cam = null
+      return
+    }
+    if (!this.cam) {
+      const v = document.createElement('video')
+      v.className = 'facecam'
+      v.playsInline = true
+      v.muted = true
+      v.preload = 'auto'
+      this.els.pips.append(v)
+      this.cam = v
+    }
+    const v = this.cam
+    if (v.dataset.src !== info.url) {
+      v.dataset.src = info.url
+      v.src = info.url
+    }
+    const pieces = cameraPieces(s.project)
+    const piece = pieces.find((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
+    const box = cameraBox(cam, s.aspect)
+    const first = pieces[0]
+    const last = pieces[pieces.length - 1]
+    let alpha = 1
+    if (cam.fade && piece && first && last) {
+      const d = 0.3
+      alpha = Math.max(0, Math.min(1, piece === first ? (t - first.start) / d : 1, piece === last ? (last.end - t) / d : 1))
+    }
+    Object.assign(v.style, {
+      display: piece ? '' : 'none', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: String(alpha),
+      borderRadius: cam.shape === 'circle' ? '50%' : cam.shape === 'rounded' ? '22%' : '0', border: cam.border ? '3px solid #fff' : '0'
+    })
+    if (!piece) {
+      if (!v.paused) v.pause()
+      return
+    }
+    const want = piece.from + (t - piece.start)
+    if (Math.abs(v.currentTime - want) > (s.playing ? 0.35 : 0.04) && !v.seeking) v.currentTime = Math.max(0, want)
+    if (s.playing && v.paused) void v.play().catch(() => undefined)
+    if (!s.playing && !v.paused) v.pause()
   }
 
   // ---------- picture-in-picture ----------

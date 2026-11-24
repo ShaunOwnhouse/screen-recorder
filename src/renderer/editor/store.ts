@@ -1,8 +1,8 @@
-import { layout, tidy, totalDuration, type Clip, type Overlay, type Project } from '../../shared/project.ts'
+import { layout, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project } from '../../shared/project.ts'
 import type { Brand, MediaInfo, RecordingMeta } from '../../shared/types.ts'
 
 export type Tool = 'comments' | 'shapes' | 'media' | 'music' | 'titles' | 'cut' | 'crop'
-export type Selection = { kind: 'clip' | 'overlay' | 'music'; id: string } | null
+export type Selection = { kind: 'clip' | 'overlay' | 'music' | 'camera'; id: string } | null
 export type Change = 'project' | 'selection' | 'playhead' | 'tool' | 'brand' | 'media' | 'play'
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
@@ -79,6 +79,10 @@ export class Store {
   /** Changes some fields of one overlay as one undo step (merged with the changes just before it when `merge` matches). */
   patchOverlay(id: string, patch: Record<string, unknown>, merge?: string): void {
     this.edit((p) => ({ ...p, overlays: p.overlays.map((o) => (o.id === id ? ({ ...o, ...patch } as Overlay) : o)) }), { merge })
+  }
+
+  patchCamera(patch: Partial<CameraTrack>, merge?: string): void {
+    this.edit((p) => (p.camera ? { ...p, camera: { ...p.camera, ...patch } } : null), { merge })
   }
 
   patchClip(id: string, patch: Partial<Clip>, merge?: string): void {
@@ -176,7 +180,13 @@ export class Store {
     const s = this.selection
     if (!s) return
     const exists =
-      s.kind === 'clip' ? this.project.clips.some((c) => c.id === s.id) : s.kind === 'overlay' ? this.project.overlays.some((o) => o.id === s.id) : !!this.project.music
+      s.kind === 'clip'
+        ? this.project.clips.some((c) => c.id === s.id)
+        : s.kind === 'overlay'
+          ? this.project.overlays.some((o) => o.id === s.id)
+          : s.kind === 'camera'
+            ? !!this.project.camera?.visible
+            : !!this.project.music
     if (!exists) {
       this.selection = null
       this.emit('selection')

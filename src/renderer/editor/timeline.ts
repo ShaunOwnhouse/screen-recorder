@@ -1,4 +1,4 @@
-import { layout, moveClip, trimClip, type Clip, type Overlay } from '../../shared/project.ts'
+import { cameraPieces, layout, moveClip, trimClip, type Clip, type Overlay } from '../../shared/project.ts'
 import { clampNum, fmtTime, type Store } from './store.ts'
 
 export const overlayLabel = (o: Overlay): string => {
@@ -42,6 +42,7 @@ export class Timeline {
   private readonly ruler: HTMLElement
   private readonly trackVideo: HTMLElement
   private readonly trackOver: HTMLElement
+  private readonly trackCam: HTMLElement
   private readonly trackMusic: HTMLElement
   private readonly head: HTMLElement
   private strips = new Map<string, string>()
@@ -59,6 +60,7 @@ export class Timeline {
       <div class="tl-labels">
         <div class="tl-label ruler-label"></div>
         <div class="tl-label" id="label-video">Video</div>
+        <div class="tl-label" id="label-cam" hidden>Face cam</div>
         <div class="tl-label" id="label-over">Comments</div>
         <div class="tl-label" id="label-music">Music</div>
       </div>
@@ -66,6 +68,7 @@ export class Timeline {
         <div class="tl-inner" id="tl-inner">
           <div class="tl-ruler" id="tl-ruler"></div>
           <div class="tl-track video" id="track-video"></div>
+          <div class="tl-track cam" id="track-cam" hidden></div>
           <div class="tl-track over" id="track-over"></div>
           <div class="tl-track music" id="track-music"></div>
           <div class="tl-head" id="tl-head"><span></span></div>
@@ -76,6 +79,7 @@ export class Timeline {
     this.ruler = root.querySelector('#tl-ruler')!
     this.trackVideo = root.querySelector('#track-video')!
     this.trackOver = root.querySelector('#track-over')!
+    this.trackCam = root.querySelector('#track-cam')!
     this.trackMusic = root.querySelector('#track-music')!
     this.head = root.querySelector('#tl-head')!
     this.inner.addEventListener('pointerdown', (e) => this.down(e))
@@ -177,6 +181,28 @@ export class Timeline {
       blocks.push(b)
     })
     this.trackVideo.replaceChildren(...blocks)
+
+    // the face camera: one bar for each stretch of the timeline that has it
+    const cam = s.project.camera
+    const showCam = !!cam && cam.visible
+    this.trackCam.hidden = !showCam
+    this.root.querySelector<HTMLElement>('#label-cam')!.hidden = !showCam
+    this.trackCam.replaceChildren(
+      ...(showCam
+        ? cameraPieces(s.project).map((pc) => {
+            const b = document.createElement('div')
+            b.className = `blk cam-blk${s.selection?.kind === 'camera' ? ' sel' : ''}`
+            b.dataset.camera = '1'
+            b.style.left = `${this.x(pc.start)}px`
+            b.style.width = `${Math.max(8, this.x(pc.end - pc.start))}px`
+            const t = document.createElement('span')
+            t.className = 'blk-label'
+            t.textContent = 'Face camera'
+            b.append(t)
+            return b
+          })
+        : [])
+    )
 
     // overlays in as few rows as will fit
     const lanes: number[] = []
@@ -356,6 +382,12 @@ export class Timeline {
         }
       }
       // a click (no drag) also moves the playhead there, so the thing is visible
+      e.preventDefault()
+      return
+    }
+
+    if (blk?.dataset.camera) {
+      s.select({ kind: 'camera', id: 'camera' })
       e.preventDefault()
       return
     }

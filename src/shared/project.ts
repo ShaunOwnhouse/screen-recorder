@@ -463,3 +463,28 @@ export function cameraPieces(p: Project): CameraPiece[] {
   }
   return out
 }
+
+/** The face camera's window as fractions of the frame (it is square in pixels, so its height depends on the frame's shape). */
+export function cameraBox(cam: CameraTrack, aspect: number): { x: number; y: number; w: number; h: number } {
+  return { x: cam.x, y: cam.y, w: cam.w, h: cam.w * aspect }
+}
+
+export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+/** Where the camera goes to sit in a corner of the frame, a small margin in. */
+export function cameraCorner(cam: CameraTrack, aspect: number, corner: Corner): { x: number; y: number } {
+  const m = 0.025
+  const h = cam.w * aspect
+  return {
+    x: corner.endsWith('left') ? m : 1 - cam.w - m,
+    y: corner.startsWith('top') ? m * aspect : 1 - h - m * aspect
+  }
+}
+
+/** The camera as it first appears: round, in the bottom right corner. */
+export function newCamera(file: { media: string; name: string; duration: number; width: number; height: number }, offset: number, aspect: number): CameraTrack {
+  const cam: CameraTrack = {
+    ...file, offset, nudge: 0, x: 0, y: 0, w: 0.22, shape: 'circle', border: true, fade: true, visible: true
+  }
+  return { ...cam, ...cameraCorner(cam, aspect, 'bottom-right') }
+}

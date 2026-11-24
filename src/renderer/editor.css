@@ -1335,3 +1335,73 @@ kbd {
   outline: 2px dashed var(--accent);
   outline-offset: -6px;
 }
+
+/* ---------- the face camera ---------- */
+[hidden] {
+  display: none !important;
+}
+
+.facecam {
+  position: absolute;
+  object-fit: cover;
+  background: #000;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.tl-track.cam {
+  height: 40px;
+}
+
+#label-cam {
+  height: 40px;
+}
+
+.blk.cam-blk {
+  background: #0f766e;
+  top: 5px;
+  bottom: 5px;
+}
+
+.sel-box.k-camera {
+  border-radius: 6px;
+}
+
+.tip.good {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #bbf7d0;
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+
+.shapes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.shape {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.shape.on {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.shape i {
+  display: block;
+  margin: 0 auto 4px;
+  width: 22px;
+  height: 22px;
+  background: #94a3b8;
+}

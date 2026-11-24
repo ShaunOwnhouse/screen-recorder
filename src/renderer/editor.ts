@@ -1,4 +1,4 @@
-import { isDrawn, isPlain, newProject, type Clip, type Overlay } from '../shared/project.ts'
+import { isDrawn, isPlain, newCamera, newProject, type Clip, type Overlay } from '../shared/project.ts'
 import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
 import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts'
 import { Actions } from './editor/actions.ts'
@@ -299,7 +299,13 @@ async function init(): Promise<void> {
   }
   src = loaded.source
   const m = src.meta
-  store = new Store(newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio }), m, src.brand)
+  const initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio })
+  if (src.camera) {
+    const c = src.camera.info
+    initial.camera = newCamera({ media: c.id, name: c.name, duration: c.duration, width: c.width, height: c.height }, src.camera.offset, m.width / m.height)
+  }
+  store = new Store(initial, m, src.brand)
+  if (src.camera) store.media.set(src.camera.info.id, src.camera.info)
   store.media.set('recording', { id: 'recording', name: 'Recording', kind: 'video', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, url: src.url })
   void loadBrandFonts(src.brand)
 

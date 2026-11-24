@@ -1,4 +1,4 @@
-import type { Clip, Overlay, TextOverlay, TitleCard } from '../../shared/project.ts'
+import { cameraCorner, type CameraTrack, type Clip, type Corner, type Overlay, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -105,14 +105,23 @@ export class Panels {
         )
         break
       case 'media': {
-        const added = [...s.media.values()].filter((m) => m.kind !== 'audio')
+        const added = [...s.media.values()].filter((m) => m.kind !== 'audio' && m.id !== 'recording' && m.id !== 'camera')
         kids.push(
           heading('Media'),
           button('+ Add a video or picture', () => void a.addClips(), 'primary wide', { id: 'add-media' }),
           tip('It goes into the video at the playhead, between the pieces already there.'),
           button('▣  Add as picture-in-picture', () => void a.addPip(), 'ghost wide', { id: 'add-pip' }),
-          tip('Shows it in a small window over the video instead — handy for a face camera or a logo.')
+          tip('Shows it in a small window over the video instead — handy for a logo or a second view.')
         )
+        if (s.project.camera) {
+          const cam = s.project.camera
+          kids.push(
+            h('h2', { class: 'drawer-sub', text: 'Your face camera' }),
+            cam.visible
+              ? tip('It was recorded with the screen and is on the video. Click it on the video (or its bar in the timeline) to change it.')
+              : button('Show my face camera again', () => s.patchCamera({ visible: true }), 'ghost wide', { id: 'show-camera' })
+          )
+        }
         if (added.length) {
           kids.push(
             h('h2', { class: 'drawer-sub', text: 'Added so far' }),
@@ -210,6 +219,7 @@ export class Panels {
     if (o) kids.push(...this.overlayProps(o))
     else if (c) kids.push(...this.clipProps(c))
     else if (sel?.kind === 'music' && s.project.music) kids.push(...this.musicProps())
+    else if (sel?.kind === 'camera' && s.project.camera) kids.push(...this.cameraProps(s.project.camera))
     else {
       kids.push(
         h('div', { class: 'psec empty' },
@@ -362,6 +372,31 @@ export class Panels {
       section('Words', this.swatches(card.color, (col) => patch({ color: col }), { id: 'prop-card-color' })),
       section('Font', this.fontSelect(card.font, (f) => patch({ font: f }), 'prop-card-font')),
       section('Align', select([['center', 'Centre'], ['left', 'Left']], card.align, (v) => patch({ align: v as TitleCard['align'] }))),
+    ]
+  }
+
+  private cameraProps(cam: CameraTrack): HTMLElement[] {
+    const s = this.store
+    const patch = (p: Partial<CameraTrack>, merge?: string): void => s.patchCamera(p, merge ?? `cam:${Object.keys(p)[0]}`)
+    const shapes: Array<[CameraTrack['shape'], string, string]> = [['circle', 'Circle', '50%'], ['rounded', 'Rounded', '22%'], ['square', 'Square', '0']]
+    const row = h('div', { class: 'shapes', id: 'prop-cam-shape' })
+    for (const [id, label, radius] of shapes) {
+      row.append(h('button', { type: 'button', class: `shape${cam.shape === id ? ' on' : ''}`, 'data-shape': id, onClick: () => patch({ shape: id }) }, h('i', { style: `border-radius:${radius}` }), label))
+    }
+    const corners: Array<[Corner, string]> = [['top-left', 'Top left'], ['top-right', 'Top right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']]
+    const sec = (v: number): string => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)} s`
+    return [
+      h('h2', { class: 'props-title', text: 'Face camera' }),
+      section('Shape', row),
+      section('Size', range(cam.w, 0.08, 0.6, 0.01, (v) => patch({ w: v, x: Math.min(cam.x, 1 - v), y: Math.min(cam.y, 1 - v * s.aspect) }, 'cam:size'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-size')),
+      section('Where', select([['', 'Move to a corner…'], ...corners], '', (v) => {
+        if (v) patch(cameraCorner(cam, s.aspect, v as Corner))
+      }, 'prop-cam-corner')),
+      toggleSection(toggle('White border', cam.border, (on) => patch({ border: on }), 'prop-cam-border')),
+      section('Fix lip-sync', range(cam.nudge, -1, 1, 0.01, (v) => patch({ nudge: v }, 'cam:nudge'), sec, 'prop-cam-nudge')),
+      h('p', { class: 'tip good', text: 'Webcams are often a little late. If your voice is slightly ahead of your lips, move this up; if behind, down.' }),
+      toggleSection(toggle('Fade in and out', cam.fade, (on) => patch({ fade: on }), 'prop-cam-fade')),
+      h('div', { class: 'psec actions' }, button('Hide the camera', () => { patch({ visible: false }); s.select(null) }, 'danger-ghost', { id: 'prop-cam-hide' }))
     ]
   }
 
