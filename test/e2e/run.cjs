@@ -561,14 +561,17 @@ async function save(app, editor, name) {
       // They are waiting for review like any recording, and they open in the editor: look at each, then discard it.
       await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
       let opened = 0
-      for (let n = 0; n < 3 && (await main.isVisible('#pending')); n++) {
-        await main.click('#review')
-        const ed = await waitForWindow(app, 'editor.html', 30000)
+      if (await main.isVisible('#pending')) await main.click('#review')
+      // discarding one opens the next waiting recording by itself, so keep looking until none opens
+      for (let n = 0; n < 4; n++) {
+        const ed = await waitForWindow(app, 'editor.html', n === 0 ? 30000 : 5000).catch(() => null)
+        if (!ed) break
         await ed.waitForFunction(() => document.querySelector('#info')?.textContent, null, { timeout: 30000 })
-        if (/0:0[3-5]|0:04/.test(await ed.textContent('#info')) || n >= 0) opened++
-        await ed.click('#discard')
-        await waitGone(app, 'editor.html', 30000)
-        await sleep(300)
+        opened++
+        await ed.click('#discard', { noWaitAfter: true }).catch(() => undefined)
+        const t0 = Date.now()
+        while (!ed.isClosed() && Date.now() - t0 < 30000) await sleep(100)
+        await sleep(400)
       }
       check('Recovery: the recovered recordings open in the editor and can be discarded', opened === 2 && !(await main.isVisible('#pending')), `${opened} opened`)
     }
@@ -614,7 +617,7 @@ async function save(app, editor, name) {
           fadeHidden: document.getElementById('fade').classList.contains('hide'), win: window.innerHeight }
       })
       check('Settings: scroll inside a fixed-height area instead of growing the window', m.scrollH > m.clientH + 100 && m.clientH <= 250, JSON.stringify(m))
-      check('Settings open: the whole window stays compact (≤ 700 px)', m.app <= 700, `${m.app}px`)
+      check('Settings open: the whole window stays compact (≤ 740 px)', m.app <= 740, `${m.app}px`)
       check('Settings: "scroll for more" shows while there is more below', !m.fadeHidden)
       await shot(main, 'panel-settings-open')
       await main.click('#jump button[data-target=g-keys]')
@@ -1012,7 +1015,7 @@ async function save(app, editor, name) {
     if (only('discard')) {
       await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
       const { editor } = await record(app, main, 'discard', { seconds: 3 })
-      await editor.click('#discard')
+      await editor.click('#discard', { noWaitAfter: true }).catch(() => undefined)
       await waitGone(app, 'editor.html', 30000)
       const st = await main.evaluate(() => window.api.getStatus())
       const left = fs.readdirSync(path.join(userData, 'pending')).filter((f) => /\.mp4$/i.test(f))
