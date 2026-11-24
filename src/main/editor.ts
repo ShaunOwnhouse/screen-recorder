@@ -10,7 +10,7 @@ import { cameraFileFor, cameraInfoFor, moveFile, proxyPathFor, removePending, sa
 import { buildProjectArgs, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
 import { isPlain, type Project } from '../shared/project.ts'
-import type { EditorLoad } from '../shared/api.ts'
+import type { AssetSave, EditorLoad } from '../shared/api.ts'
 import { videoFormat } from '../shared/formats.ts'
 import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, RecordingMeta, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
 
@@ -97,8 +97,9 @@ export class EditorController {
   }
 
   constructor(private readonly deps: Deps) {
-    ipcMain.handle('editor:pick-media', (e, kind: 'clip' | 'music') => (this.owns(e.sender) ? this.pickMedia(kind) : []))
-    ipcMain.handle('editor:add-media', (e, paths: string[], kind: 'clip' | 'music') => (this.owns(e.sender) ? this.addMedia(paths, kind) : []))
+    ipcMain.handle('editor:pick-media', (e, kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.pickMedia(kind) : []))
+    ipcMain.handle('editor:add-media', (e, paths: string[], kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.addMedia(paths, kind) : []))
+    ipcMain.handle('editor:save-asset', (e, spec: AssetSave) => (this.owns(e.sender) ? this.saveAsset(spec) : { error: 'Not available.' }))
     ipcMain.handle('editor:waveform', (e, id: string, buckets: number) => (this.owns(e.sender) ? this.waveform(id, buckets) : []))
     ipcMain.handle('editor:strip', (e, id: string, count: number) => (this.owns(e.sender) ? this.strip(id, count) : ''))
     ipcMain.handle('editor:save-brand', (e, brand: Brand) => (this.owns(e.sender) ? this.deps.saveBrand(brand) : brand))
@@ -208,9 +209,9 @@ export class EditorController {
     const note = cameraInfoFor(file)
     if (!existsSync(video) || !existsSync(note)) return null
     try {
-      const j = JSON.parse(readFileSync(note, 'utf8')) as { offset: number; width: number; height: number; duration: number }
+      const j = JSON.parse(readFileSync(note, 'utf8')) as { offset: number; width: number; height: number; duration: number; hasAudio?: boolean }
       if (!(j.duration > 0) || !Number.isFinite(j.offset)) return null
-      const info: MediaInfo = { id: 'camera', name: 'Face camera', kind: 'video', duration: j.duration, width: j.width, height: j.height, hasAudio: false, url: addedMediaUrl('camera') }
+      const info: MediaInfo = { id: 'camera', name: 'Face camera', kind: 'video', duration: j.duration, width: j.width, height: j.height, hasAudio: !!j.hasAudio, url: addedMediaUrl('camera') }
       this.added.set('camera', { info, path: video })
       return { info, offset: j.offset }
     } catch {
@@ -319,36 +320,49 @@ export class EditorController {
 
   // ---------- files added to the video ----------
 
-  private async pickMedia(kind: 'clip' | 'music'): Promise<MediaInfo[]> {
+  private async pickMedia(kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]> {
     if (!this.win) return []
     const res = await dialog.showOpenDialog(this.win, {
-      title: kind === 'music' ? 'Choose a music file' : 'Add videos or pictures',
-      properties: kind === 'music' ? ['openFile'] : ['openFile', 'multiSelections'],
+      title: kind === 'music' ? 'Choose audio files' : kind === 'clip' ? 'Add videos or pictures' : 'Add videos, pictures or audio',
+      properties: ['openFile', 'multiSelections'],
       filters:
         kind === 'music'
-          ? [{ name: 'Music', extensions: AUDIO_EXT }]
-          : [
-              { name: 'Videos and pictures', extensions: [...VIDEO_EXT, ...IMAGE_EXT] },
-              { name: 'Videos', extensions: VIDEO_EXT },
-              { name: 'Pictures', extensions: IMAGE_EXT }
-            ]
+          ? [{ name: 'Audio', extensions: [...AUDIO_EXT, ...VIDEO_EXT] }, { name: 'Audio only', extensions: AUDIO_EXT }]
+          : kind === 'clip'
+            ? [
+                { name: 'Videos and pictures', extensions: [...VIDEO_EXT, ...IMAGE_EXT] },
+                { name: 'Videos', extensions: VIDEO_EXT },
+                { name: 'Pictures', extensions: IMAGE_EXT }
+              ]
+            : [
+                { name: 'Videos, pictures and audio', extensions: [...VIDEO_EXT, ...IMAGE_EXT, ...AUDIO_EXT] },
+                { name: 'Videos', extensions: VIDEO_EXT },
+                { name: 'Pictures', extensions: IMAGE_EXT },
+                { name: 'Audio', extensions: AUDIO_EXT }
+              ]
     })
     return res.canceled ? [] : this.addMedia(res.filePaths, kind)
   }
 
-  private async addMedia(paths: string[], kind: 'clip' | 'music'): Promise<MediaInfo[]> {
+  private async addMedia(paths: string[], kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]> {
     const out: MediaInfo[] = []
-    for (const path of paths.slice(0, 20)) {
+    for (const path of paths.slice(0, 40)) {
       if (!existsSync(path) || !statSync(path).isFile()) continue
       const ext = extOf(path)
-      const wantAudio = kind === 'music'
-      if (wantAudio ? !AUDIO_EXT.includes(ext) : ![...VIDEO_EXT, ...IMAGE_EXT].includes(ext)) continue
+      const allowed = kind === 'music' ? [...AUDIO_EXT, ...VIDEO_EXT] : kind === 'clip' ? [...VIDEO_EXT, ...IMAGE_EXT] : [...VIDEO_EXT, ...IMAGE_EXT, ...AUDIO_EXT]
+      if (!allowed.includes(ext)) continue
       const { stderr } = await runFfmpeg(['-hide_banner', '-i', path])
       const d = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr)
       const duration = d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0
       let info: Omit<MediaInfo, 'id' | 'url' | 'name'> | null = null
-      if (wantAudio) {
-        if (/Stream #.*: Audio:/.test(stderr) && duration > 0) info = { kind: 'audio', duration, width: 0, height: 0, hasAudio: true }
+      // An audio file is a sound; a video added as "music" is used for its sound only (the sound track of a video).
+      if (AUDIO_EXT.includes(ext) || kind === 'music') {
+        if (/Stream #.*: Audio:/.test(stderr) && duration > 0) {
+          const v = parseMediaInfo(stderr)
+          info = AUDIO_EXT.includes(ext)
+            ? { kind: 'audio', duration, width: 0, height: 0, hasAudio: true }
+            : { kind: 'video', duration, width: v?.width ?? 0, height: v?.height ?? 0, hasAudio: true }
+        }
       } else {
         const v = parseMediaInfo(stderr)
         if (v) {
@@ -363,6 +377,46 @@ export class EditorController {
       out.push(full)
     }
     return out
+  }
+
+  /** Saves a stretch of one file as a file of its own: just its picture, or just its sound. */
+  private async saveAsset(spec: AssetSave): Promise<{ path?: string; error?: string }> {
+    const win = this.win
+    const src = this.pathOf(spec.media)
+    if (!win || !src || !existsSync(src)) return { error: 'That file is no longer available.' }
+    if (!(spec.to > spec.from) || spec.from < 0 || (spec.what !== 'video' && spec.what !== 'audio')) return { error: 'Nothing to save there.' }
+    const meta = await probeMedia(src)
+    const whole = !!meta && spec.from <= 0.02 && spec.to >= meta.duration - 0.05
+    const base = sanitizeFileName(spec.name.replace(/\.[a-z0-9]{2,4}$/i, ''), 'Screen Snap piece', '').replace(/\.$/, '')
+    const outputDir = this.deps.settings().outputDir
+    const filters =
+      spec.what === 'video'
+        ? [{ name: 'MP4 video (no sound)', extensions: ['mp4'] }]
+        : [{ name: 'MP3 audio', extensions: ['mp3'] }, { name: 'WAV audio (lossless)', extensions: ['wav'] }, { name: 'M4A audio (AAC)', extensions: ['m4a'] }]
+    const res = await dialog.showSaveDialog(win, {
+      title: spec.what === 'video' ? 'Save the video without sound' : 'Save the sound',
+      defaultPath: join(outputDir, `${base}${spec.what === 'video' ? ' (video only)' : ' (sound)'}`),
+      filters
+    })
+    if (res.canceled || !res.filePath) return {}
+    const ext = extOf(res.filePath)
+    const target = spec.what === 'video' ? (ext === 'mp4' ? res.filePath : `${res.filePath}.mp4`) : ['mp3', 'wav', 'm4a'].includes(ext) ? res.filePath : `${res.filePath}.mp3`
+    mkdirSync(dirname(target), { recursive: true })
+    const cut = whole ? [] : ['-ss', String(spec.from), '-t', String(Math.max(0.1, spec.to - spec.from))]
+    const args =
+      spec.what === 'video'
+        ? ['-hide_banner', '-loglevel', 'error', '-y', ...cut, '-i', src, '-map', '0:v:0', '-an', ...(whole ? ['-c:v', 'copy'] : ['-c:v', 'libx264', '-preset', 'medium', '-crf', '14', '-pix_fmt', 'yuv420p']), '-movflags', '+faststart', target]
+        : [
+            '-hide_banner', '-loglevel', 'error', '-y', ...cut, '-i', src, '-vn', '-map', '0:a:0',
+            ...(extOf(target) === 'wav' ? ['-c:a', 'pcm_s16le'] : extOf(target) === 'm4a' ? ['-c:a', 'aac', '-b:a', '256k'] : ['-c:a', 'libmp3lame', '-b:a', '320k']),
+            target
+          ]
+    const r = await runFfmpeg(args, 30 * 60 * 1000)
+    if (!r.ok || !existsSync(target)) {
+      rmSync(target, { force: true })
+      return { error: spec.what === 'audio' && /Stream map|does not contain any stream/i.test(r.stderr) ? 'That piece has no sound to save.' : 'Could not save that piece.' }
+    }
+    return { path: target }
   }
 
   private pathOf(id: string): string | null {

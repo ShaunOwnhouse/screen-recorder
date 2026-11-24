@@ -72,6 +72,7 @@ function updateTools(): void {
   ;($('redo') as HTMLButtonElement).disabled = !store.canRedo
   const sel = store.selection
   ;($('delete-sel') as HTMLButtonElement).disabled = !sel
+  ;($('duplicate-sel') as HTMLButtonElement).disabled = !sel || sel.kind === 'camera'
   ;($('split') as HTMLButtonElement).disabled = !store.project.clips.some((c, i, all) => {
     void c
     void i
@@ -209,6 +210,12 @@ function bindKeys(panels: { refresh: () => void }): void {
       panels.refresh()
       return
     }
+    if (mod && (e.key === 'd' || e.key === 'D')) {
+      if (typing(e)) return
+      e.preventDefault()
+      actions.duplicate()
+      return
+    }
     if (typing(e) || mod) return
     if (e.key === ' ') {
       e.preventDefault()
@@ -229,7 +236,6 @@ function bindKeys(panels: { refresh: () => void }): void {
 }
 
 function bindDrops(): void {
-  const AUDIO = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|wma)$/i
   window.addEventListener('dragover', (e) => {
     if (!e.dataTransfer?.types.includes('Files')) return
     e.preventDefault()
@@ -242,10 +248,7 @@ function bindDrops(): void {
     e.preventDefault()
     document.body.classList.remove('dropzone-on')
     const paths = [...(e.dataTransfer?.files ?? [])].map((f) => api.pathFor(f)).filter(Boolean)
-    const music = paths.filter((p) => AUDIO.test(p))
-    const clips = paths.filter((p) => !AUDIO.test(p))
-    if (clips.length) await actions.addClips(await api.addMedia(clips, 'clip'))
-    if (music[0]) await actions.addMusic(await api.addMedia([music[0]], 'music'))
+    if (paths.length) await actions.addAny(await api.addMedia(paths, 'any'))
   })
 }
 
@@ -287,7 +290,7 @@ function showLoadError(message: string): void {
   stageMsg.append(text, actionsEl)
   stageMsg.classList.add('interactive')
   stageMsg.hidden = false
-  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar']) ($(id) as HTMLButtonElement).disabled = true
+  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar', 'duplicate-sel']) ($(id) as HTMLButtonElement).disabled = true
   nameInput.disabled = true
 }
 
@@ -302,7 +305,7 @@ async function init(): Promise<void> {
   const initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio })
   if (src.camera) {
     const c = src.camera.info
-    initial.camera = newCamera({ media: c.id, name: c.name, duration: c.duration, width: c.width, height: c.height }, src.camera.offset, m.width / m.height)
+    initial.camera = newCamera({ media: c.id, name: c.name, duration: c.duration, width: c.width, height: c.height, hasAudio: c.hasAudio }, src.camera.offset, m.width / m.height)
   }
   store = new Store(initial, m, src.brand)
   if (src.camera) store.media.set(src.camera.info.id, src.camera.info)
@@ -361,8 +364,9 @@ async function init(): Promise<void> {
     store.redo()
     store.emit('selection')
   })
-  $('add-media-bar').addEventListener('click', () => void actions.addClips())
+  $('add-media-bar').addEventListener('click', () => void actions.addAny())
   $('add-music-bar').addEventListener('click', () => void actions.addMusic())
+  $('duplicate-sel').addEventListener('click', () => actions.duplicate())
   const zoom = $<HTMLInputElement>('tl-zoom')
   zoom.addEventListener('input', () => timeline.setZoom(6 * Math.pow(400 / 6, Number(zoom.value) / 100)))
   zoom.value = String(Math.round((Math.log(store.pxPerSec / 6) / Math.log(400 / 6)) * 100))

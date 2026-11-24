@@ -11,6 +11,8 @@ export interface CameraResult {
   width: number
   height: number
   duration: number
+  /** The camera file carries the person's voice too. */
+  hasAudio: boolean
   /** How the offset was found: by matching the voice in both, or only from when each started. */
   method: 'voice' | 'clock'
 }
@@ -27,8 +29,11 @@ async function listen(file: string, seconds: number): Promise<Float32Array | nul
 export async function convertCamera(raw: string, out: string, fps: number, note?: (t: string) => void): Promise<boolean> {
   if (!existsSync(raw)) return false
   const rate = Math.max(10, Math.min(30, Math.round(fps)))
+  const withVoice = !!(await probeMedia(raw))?.hasAudio
+  // The voice stays with the picture in the same file, so the two can never drift apart.
+  const audio = withVoice ? ['-map', '0:v:0', '-map', '0:a:0', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-af', 'aresample=async=1:first_pts=0'] : ['-an']
   const res = await runFfmpeg(
-    ['-hide_banner', '-loglevel', 'error', '-y', '-i', raw, '-an', '-vf', `fps=${rate},scale=-2:'min(720,ih)',format=yuv420p`, '-c:v', 'libx264', '-preset', 'superfast', '-crf', '21', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-movflags', '+faststart', out],
+    ['-hide_banner', '-loglevel', 'error', '-y', '-i', raw, ...audio, '-vf', `fps=${rate},scale=-2:'min(720,ih)',format=yuv420p`, '-c:v', 'libx264', '-preset', 'superfast', '-crf', '21', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-movflags', '+faststart', out],
     20 * 60 * 1000
   )
   if (!res.ok || !existsSync(out)) {
@@ -71,9 +76,9 @@ export async function alignCamera(opts: {
   }
   const meta = await probeMedia(opts.video)
   if (!meta) return null
-  return { file: opts.video, offset, width: meta.width, height: meta.height, duration: meta.duration, method }
+  return { file: opts.video, offset, width: meta.width, height: meta.height, duration: meta.duration, hasAudio: meta.hasAudio, method }
 }
 
 export function writeCameraInfo(path: string, r: CameraResult): void {
-  writeFileSync(path, JSON.stringify({ offset: r.offset, width: r.width, height: r.height, duration: r.duration, method: r.method }))
+  writeFileSync(path, JSON.stringify({ offset: r.offset, width: r.width, height: r.height, duration: r.duration, hasAudio: r.hasAudio, method: r.method }))
 }

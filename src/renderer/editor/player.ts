@@ -1,4 +1,4 @@
-import { cameraBox, cameraPieces, layout, overlayAlpha, isDrawn, zoomState, type BlurOverlay, type Clip, type PipOverlay } from '../../shared/project.ts'
+import { cameraBox, cameraPieces, layout, overlayAlpha, isDrawn, usesCameraSound, zoomState, type BlurOverlay, type Clip, type PipOverlay } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
 import { clampNum, type Store } from './store.ts'
 
@@ -26,7 +26,7 @@ export class Player {
   private nodes = new Map<string, Node>()
   private pipNodes = new Map<string, { el: HTMLVideoElement | HTMLImageElement; used: number }>()
   private blurNodes = new Map<string, HTMLElement>()
-  private music = new Audio()
+  private sounds = new Map<string, HTMLAudioElement>()
   private cam: HTMLVideoElement | null = null
   private last = 0
   private dirty = true
@@ -40,7 +40,6 @@ export class Player {
     private readonly store: Store,
     private readonly els: Els
   ) {
-    this.music.preload = 'auto'
     store.on(() => (this.dirty = true))
     requestAnimationFrame((t) => this.tick(t))
   }
@@ -193,13 +192,14 @@ export class Player {
           if (Math.abs(el.currentTime - want) > tolerance && !el.seeking) el.currentTime = want
           else if (!live && !s.playing && Math.abs(el.currentTime - c.in) > 0.05 && !el.seeking) el.currentTime = c.in
         }
-        el.volume = clampNum(c.volume, 0, 1)
+        // while the camera's own voice is used, the screen recording is silent
+        el.volume = c.kind === 'recording' && usesCameraSound(p) ? 0 : clampNum(c.volume, 0, 1)
         if (s.playing && live && el.paused && t < pl.end - 0.02) void el.play().catch(() => undefined)
         if ((!s.playing || !live) && !el.paused) el.pause()
       }
     })
     if (!any) for (const n of this.nodes.values()) n.el.style.display = 'none'
-    this.syncMusic(t)
+    this.syncSounds(t)
     this.syncPips(t)
     this.syncCamera(t)
   }
@@ -237,40 +237,54 @@ export class Player {
     drawCard(ctx, c.card!, f)
   }
 
-  // ---------- music ----------
+  // ---------- sounds ----------
 
-  private syncMusic(t: number): void {
+  private syncSounds(t: number): void {
     const s = this.store
-    const m = s.project.music
-    const info = m ? s.media.get(m.media) : null
-    const a = this.music
-    if (!m || !info) {
-      if (!a.paused) a.pause()
-      return
+    const list = s.project.sounds
+    const ids = new Set(list.map((x) => x.id))
+    for (const [id, a] of this.sounds) {
+      if (!ids.has(id)) {
+        a.pause()
+        a.removeAttribute('src')
+        this.sounds.delete(id)
+      }
     }
-    if (a.dataset.src !== info.url) {
-      a.dataset.src = info.url
-      a.src = info.url
-    }
-    const rel = t - m.start
-    const room = Math.max(0.1, s.duration - m.start)
-    const len = m.loop ? room : Math.min(room, Math.max(0.1, m.duration - m.offset))
-    const active = rel >= 0 && rel < len
-    if (!active) {
-      if (!a.paused) a.pause()
-      return
-    }
-    let pos = m.offset + rel
-    if (m.loop && m.duration > 0) pos = pos % m.duration
-    const fi = m.fadeIn > 0 ? clampNum(rel / m.fadeIn, 0, 1) : 1
-    const fo = m.fadeOut > 0 ? clampNum((len - rel) / m.fadeOut, 0, 1) : 1
     const placed = s.placedNow()
-    const voice = !!placed && placed.clip.kind !== 'image' && placed.clip.hasAudio && placed.clip.volume > 0
-    a.volume = clampNum(m.volume * fi * fo * (m.duck && voice ? 0.3 : 1), 0, 1)
-    if (s.playing) {
-      if (Math.abs(a.currentTime - pos) > 0.4 && !a.seeking) a.currentTime = pos
-      if (a.paused) void a.play().catch(() => undefined)
-    } else if (!a.paused) a.pause()
+    const camVoice = usesCameraSound(s.project) && cameraPieces(s.project, true).some((pc) => t >= pc.start && t < pc.end)
+    const voice = camVoice || (!!placed && placed.clip.kind !== 'image' && placed.clip.hasAudio && placed.clip.volume > 0 && !(placed.clip.kind === 'recording' && usesCameraSound(s.project)))
+    for (const m of list) {
+      const info = s.media.get(m.media)
+      let a = this.sounds.get(m.id)
+      if (!info) {
+        if (a && !a.paused) a.pause()
+        continue
+      }
+      if (!a) {
+        a = new Audio()
+        a.preload = 'auto'
+        this.sounds.set(m.id, a)
+      }
+      if (a.dataset.src !== info.url) {
+        a.dataset.src = info.url
+        a.src = info.url
+      }
+      const rel = t - m.start
+      const len = Math.max(0.1, m.length)
+      if (rel < 0 || rel >= len) {
+        if (!a.paused) a.pause()
+        continue
+      }
+      let pos = m.offset + rel
+      if (m.loop && m.duration > 0) pos = m.offset + (rel % Math.max(0.1, m.duration - m.offset))
+      const fi = m.fadeIn > 0 ? clampNum(rel / m.fadeIn, 0, 1) : 1
+      const fo = m.fadeOut > 0 ? clampNum((len - rel) / m.fadeOut, 0, 1) : 1
+      a.volume = clampNum(m.volume * fi * fo * (m.duck && voice ? 0.3 : 1), 0, 1)
+      if (s.playing) {
+        if (Math.abs(a.currentTime - pos) > 0.4 && !a.seeking) a.currentTime = pos
+        if (a.paused) void a.play().catch(() => undefined)
+      } else if (!a.paused) a.pause()
+    }
   }
 
   // ---------- the face camera ----------
@@ -299,7 +313,12 @@ export class Player {
       v.src = info.url
     }
     const pieces = cameraPieces(s.project)
-    const piece = pieces.find((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
+    const voicePieces = cameraPieces(s.project, true)
+    const heard = usesCameraSound(s.project)
+    const piece = (heard ? voicePieces : pieces).find((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
+    const shown = pieces.some((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
+    v.muted = !heard
+    v.volume = clampNum(cam.volume, 0, 1)
     const box = cameraBox(cam, s.aspect)
     const first = pieces[0]
     const last = pieces[pieces.length - 1]
@@ -309,7 +328,7 @@ export class Player {
       alpha = Math.max(0, Math.min(1, piece === first ? (t - first.start) / d : 1, piece === last ? (last.end - t) / d : 1))
     }
     Object.assign(v.style, {
-      display: piece ? '' : 'none', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: String(alpha),
+      display: shown ? '' : 'none', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: String(alpha),
       borderRadius: cam.shape === 'circle' ? '50%' : cam.shape === 'rounded' ? '22%' : '0', border: cam.border ? '3px solid #fff' : '0'
     })
     if (!piece) {

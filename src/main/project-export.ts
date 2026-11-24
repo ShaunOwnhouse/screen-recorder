@@ -1,6 +1,6 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  cameraPieces, clipLength, FADE_SECONDS, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
+  cameraPieces, clipLength, FADE_SECONDS, usesCameraSound, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -50,6 +50,7 @@ export interface ProjectExport {
   height: number
 }
 
+const MIN_LEN = 0.1
 const num = (n: number): string => (Math.round(n * 10000) / 10000).toString()
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
 
@@ -368,10 +369,13 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     })
   }
 
-  // ---- sound: each clip's own, then picture-in-picture sound, then music ----
-  const clipHasSound = (c: Clip): boolean => c.kind !== 'image' && c.hasAudio && mediaOf(c.media).hasAudio
-  const music = p.music && o.media[p.music.media] ? p.music : null
-  const anySound = o.format !== 'gif' && (p.clips.some(clipHasSound) || audioParts.length > 0 || !!music)
+  // ---- sound: each clip's own, the camera's voice, picture-in-picture sound, then every sound laid under the video ----
+  const cameraSound = usesCameraSound(p) && !!o.media[p.camera!.media]?.hasAudio
+  const camSoundPieces = cameraSound ? cameraPieces(p, true) : []
+  // while the camera's voice is used, the screen recording is silent
+  const clipHasSound = (c: Clip): boolean => c.kind !== 'image' && c.hasAudio && mediaOf(c.media).hasAudio && !(cameraSound && c.kind === 'recording')
+  const sounds = p.sounds.filter((x) => o.media[x.media]?.hasAudio && o.media[x.media].kind === 'video' && x.start < T - 0.05)
+  const anySound = o.format !== 'gif' && (p.clips.some(clipHasSound) || camSoundPieces.length > 0 || audioParts.length > 0 || sounds.length > 0)
   let audio: string | null = null
   if (anySound) {
     const clipAudio = p.clips.map((c, i) => {
@@ -396,26 +400,46 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       aAcc = next
     }
     let voice = aAcc
+    if (camSoundPieces.length) {
+      // the camera's own recording of the person's voice: it plays from the same file as the picture, so they stay together
+      const cam = p.camera!
+      const parts = camSoundPieces.map((pc) => {
+        const len = pc.end - pc.start
+        const idx = g.file(['-ss', num(pc.from), '-t', num(len + 0.1)], mediaOf(cam.media).path)
+        const label = g.label('ca')
+        const ms = Math.round(pc.start * 1000)
+        g.add(
+          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${num(clamp(cam.volume, 0, 2))},` +
+            `atrim=duration=${num(len)},adelay=${ms}|${ms}[${label}]`
+        )
+        return label
+      })
+      const joined = g.label('cv')
+      g.add(`[${voice}]${parts.map((x) => `[${x}]`).join('')}amix=inputs=${parts.length + 1}:duration=first:normalize=0[${joined}]`)
+      voice = joined
+    }
+    const voiceHeard = p.clips.some(clipHasSound) || camSoundPieces.length > 0
     const mixIn: string[] = []
-    if (music) {
-      const room = Math.max(0.1, T - music.start)
-      const len = music.loop ? room : Math.min(room, Math.max(0.1, music.duration - music.offset))
-      const idx = music.loop
-        ? g.file(['-stream_loop', '-1', '-t', num(len)], o.media[music.media].path)
-        : g.file(['-ss', num(music.offset), '-t', num(len)], o.media[music.media].path)
-      const fi = clamp(music.fadeIn, 0, len / 2)
-      const fo = clamp(music.fadeOut, 0, len / 2)
+    for (const m of sounds) {
+      const file = mediaOf(m.media)
+      const room = Math.max(0.1, T - m.start)
+      const len = Math.min(room, Math.max(MIN_LEN, m.length))
+      const idx = m.loop
+        ? g.file(['-stream_loop', '-1', ...(m.offset > 0.001 ? ['-ss', num(m.offset)] : []), '-t', num(len)], file.path)
+        : g.file(['-ss', num(m.offset), '-t', num(len)], file.path)
+      const fi = clamp(m.fadeIn, 0, len / 2)
+      const fo = clamp(m.fadeOut, 0, len / 2)
       const ml = g.label('m')
       g.add(
         `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,atrim=duration=${num(len)},` +
-          `volume=${num(clamp(music.volume, 0, 1))}` +
+          `volume=${num(clamp(m.volume, 0, 2))}` +
           (fi > 0.02 ? `,afade=t=in:st=0:d=${num(fi)}` : '') +
           (fo > 0.02 ? `,afade=t=out:st=${num(len - fo)}:d=${num(fo)}` : '') +
-          `,adelay=${Math.round(music.start * 1000)}|${Math.round(music.start * 1000)}[${ml}]`
+          `,adelay=${Math.round(m.start * 1000)}|${Math.round(m.start * 1000)}[${ml}]`
       )
       let bed = ml
-      if (music.duck && p.clips.some(clipHasSound)) {
-        // Whenever the video has sound (a voice), the music steps back until it stops.
+      if (m.duck && voiceHeard) {
+        // Whenever the video has sound (a voice), this sound steps back until it stops.
         const v1 = g.label('d')
         const v2 = g.label('d')
         const ducked = g.label('md')

@@ -1,8 +1,8 @@
-import { layout, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project } from '../../shared/project.ts'
+import { layout, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project, type Sound } from '../../shared/project.ts'
 import type { Brand, MediaInfo, RecordingMeta } from '../../shared/types.ts'
 
 export type Tool = 'comments' | 'shapes' | 'media' | 'music' | 'titles' | 'cut' | 'crop'
-export type Selection = { kind: 'clip' | 'overlay' | 'music' | 'camera'; id: string } | null
+export type Selection = { kind: 'clip' | 'overlay' | 'sound' | 'camera'; id: string } | null
 export type Change = 'project' | 'selection' | 'playhead' | 'tool' | 'brand' | 'media' | 'play'
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
@@ -83,6 +83,14 @@ export class Store {
 
   patchCamera(patch: Partial<CameraTrack>, merge?: string): void {
     this.edit((p) => (p.camera ? { ...p, camera: { ...p.camera, ...patch } } : null), { merge })
+  }
+
+  patchSound(id: string, patch: Partial<Sound>, merge?: string): void {
+    this.edit((p) => ({ ...p, sounds: p.sounds.map((x) => (x.id === id ? { ...x, ...patch } : x)) }), { merge })
+  }
+
+  get selectedSound(): Sound | null {
+    return this.selection?.kind === 'sound' ? (this.project.sounds.find((x) => x.id === this.selection!.id) ?? null) : null
   }
 
   patchClip(id: string, patch: Partial<Clip>, merge?: string): void {
@@ -186,7 +194,7 @@ export class Store {
           ? this.project.overlays.some((o) => o.id === s.id)
           : s.kind === 'camera'
             ? !!this.project.camera?.visible
-            : !!this.project.music
+            : this.project.sounds.some((x) => x.id === s.id)
     if (!exists) {
       this.selection = null
       this.emit('selection')

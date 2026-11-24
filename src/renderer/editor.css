@@ -1185,7 +1185,12 @@ kbd {
 .blk.music-blk {
   background: #14532d;
   top: 5px;
-  bottom: 5px;
+  bottom: auto;
+  height: 38px;
+}
+
+.blk.music-blk.split-blk {
+  background: #1e3a8a;
 }
 
 .blk.music-blk .wave {

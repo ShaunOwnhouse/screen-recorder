@@ -1,4 +1,4 @@
-import { cameraCorner, type CameraTrack, type Clip, type Corner, type Overlay, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { cameraCorner, type CameraTrack, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -13,7 +13,7 @@ const TOOLS: Array<{ id: Tool; label: string; icon: string }> = [
   { id: 'comments', label: 'Comments', icon: 'M4 5h16v11H9l-5 4z' },
   { id: 'shapes', label: 'Shapes', icon: 'M4 4h9v9H4zM11 11h9v9h-9z' },
   { id: 'media', label: 'Media', icon: 'M3 6h18v12H3zM10 9v6l5-3z' },
-  { id: 'music', label: 'Music', icon: 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z' },
+  { id: 'music', label: 'Audio', icon: 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3z' },
   { id: 'titles', label: 'Titles', icon: 'M5 6h14M12 6v13M9 19h6' },
   { id: 'cut', label: 'Cut', icon: 'M6 6l12 12M6 18L18 6M6 6a2.5 2.5 0 1 0 0 .01M6 18a2.5 2.5 0 1 0 0 .01' },
   { id: 'crop', label: 'Crop', icon: 'M7 3v14h14M3 7h14v14' }
@@ -108,8 +108,8 @@ export class Panels {
         const added = [...s.media.values()].filter((m) => m.kind !== 'audio' && m.id !== 'recording' && m.id !== 'camera')
         kids.push(
           heading('Media'),
-          button('+ Add a video or picture', () => void a.addClips(), 'primary wide', { id: 'add-media' }),
-          tip('It goes into the video at the playhead, between the pieces already there.'),
+          button('+ Add videos, pictures or audio', () => void a.addAny(), 'primary wide', { id: 'add-media' }),
+          tip('Choose as many files as you like. Videos and pictures go into the video at the playhead, one after another; audio files go under it as sounds.'),
           button('▣  Add as picture-in-picture', () => void a.addPip(), 'ghost wide', { id: 'add-pip' }),
           tip('Shows it in a small window over the video instead — handy for a logo or a second view.')
         )
@@ -132,10 +132,18 @@ export class Panels {
       }
       case 'music':
         kids.push(
-          heading('Music'),
-          button(s.project.music ? 'Change the music file' : '+ Add music from a file', () => void a.addMusic(), 'primary wide', { id: 'add-music' }),
-          tip('Choose a song or sound you have the right to use. It plays under the video: you can set how loud it is, fade it in and out, repeat it, and have it step back whenever someone is talking.'),
-          ...(s.project.music ? [h('p', { class: 'now-playing', text: `Now: ${s.project.music.name}` })] : [])
+          heading('Audio'),
+          button('+ Add audio files', () => void a.addMusic(), 'primary wide', { id: 'add-music' }),
+          tip('Choose one or many songs, voice-overs or sounds you have the right to use. Each one sits on its own bar under the video: drag it to move it, drag its ends to trim it, and use Split and Duplicate like on any other piece.'),
+          ...(s.project.sounds.length
+            ? [
+                h('h2', { class: 'drawer-sub', text: 'In this video' }),
+                h('div', { class: 'wide-list' },
+                  ...s.project.sounds.map((m) =>
+                    button(m.name, () => { s.select({ kind: 'sound', id: m.id }); s.seek(m.start) }, `ghost wide small${s.selection?.kind === 'sound' && s.selection.id === m.id ? ' on' : ''}`, { title: 'Select it' })))
+              ]
+            : []),
+          tip('To work with the sound of a video or of your recording on its own, click that piece on the timeline and choose “Separate the sound”.')
         )
         break
       case 'titles':
@@ -218,7 +226,7 @@ export class Panels {
     const c = s.selectedClip
     if (o) kids.push(...this.overlayProps(o))
     else if (c) kids.push(...this.clipProps(c))
-    else if (sel?.kind === 'music' && s.project.music) kids.push(...this.musicProps())
+    else if (s.selectedSound) kids.push(...this.soundProps(s.selectedSound))
     else if (sel?.kind === 'camera' && s.project.camera) kids.push(...this.cameraProps(s.project.camera))
     else {
       kids.push(
@@ -350,11 +358,25 @@ export class Panels {
         c.transition === 'fade' ? section('Fade length', range(c.transitionDur, 0.2, 2, 0.1, (v) => patch({ transitionDur: s.snap(v) }, `td:${c.id}`), (v) => `${v.toFixed(1)} s`)) : h('span')
       )
     }
+    if (c.kind !== 'image' && c.hasAudio) {
+      out.push(
+        h('div', { class: 'psec actions' },
+          button('Separate the sound', () => this.actions.detach(c.id), 'ghost', { id: 'prop-detach', title: 'Take the sound off this piece so you can move, cut, turn down or save it on its own' }))
+      )
+    }
     out.push(
       h('div', { class: 'psec actions' },
         button('Split at playhead', () => this.actions.split(), 'ghost', { id: 'prop-split' }),
+        button('Duplicate', () => this.actions.duplicate(), 'ghost', { id: 'prop-clip-duplicate' }),
         button('Delete', () => this.actions.deleteSelected(), 'danger-ghost', { id: 'prop-delete' }))
     )
+    if (c.kind !== 'image' && !c.card) {
+      out.push(
+        h('div', { class: 'psec actions' },
+          button('Save video only…', () => void this.actions.saveAsset('video', c.id), 'ghost', { id: 'prop-save-video', title: 'Save this piece as a picture-only file, with no sound' }),
+          ...(c.hasAudio || c.kind === 'recording' ? [button('Save sound only…', () => void this.actions.saveAsset('audio', c.id), 'ghost', { id: 'prop-save-audio', title: 'Save just the sound of this piece as an audio file' })] : []))
+      )
+    }
     return out
   }
 
@@ -396,30 +418,41 @@ export class Panels {
       section('Fix lip-sync', range(cam.nudge, -1, 1, 0.01, (v) => patch({ nudge: v }, 'cam:nudge'), sec, 'prop-cam-nudge')),
       h('p', { class: 'tip good', text: 'Webcams are often a little late. If your voice is slightly ahead of your lips, move this up; if behind, down.' }),
       toggleSection(toggle('Fade in and out', cam.fade, (on) => patch({ fade: on }), 'prop-cam-fade')),
+      ...(cam.hasAudio
+        ? [
+            section('Whose sound to use', select([['camera', 'My webcam microphone (voice and lips together)'], ['screen', 'The screen recording’s sound']], cam.audio ? 'camera' : 'screen', (v) => patch({ audio: v === 'camera' }), 'prop-cam-audio')),
+            h('p', { class: 'tip good', text: cam.audio ? 'The voice is taken from the webcam’s own recording, so it always matches your lips. The screen recording’s sound is switched off (computer sounds included).' : 'The sound is the screen recording’s. If it doesn’t match your lips, switch to the webcam microphone.' }),
+            ...(cam.audio ? [section('Webcam sound volume', range(cam.volume, 0, 2, 0.05, (v) => patch({ volume: v }, 'cam:vol'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-volume'))] : [])
+          ]
+        : [h('p', { class: 'tip', text: 'This camera recording has no sound of its own.' })]),
+      h('div', { class: 'psec actions' },
+        button('Save camera video…', () => void this.actions.saveAsset('camera-video', 'camera'), 'ghost', { id: 'prop-cam-save-video' }),
+        ...(cam.hasAudio ? [button('Save camera sound…', () => void this.actions.saveAsset('camera-audio', 'camera'), 'ghost', { id: 'prop-cam-save-audio' })] : [])),
       h('div', { class: 'psec actions' }, button('Hide the camera', () => { patch({ visible: false }); s.select(null) }, 'danger-ghost', { id: 'prop-cam-hide' }))
     ]
   }
 
-  private musicProps(): HTMLElement[] {
+  private soundProps(m: Sound): HTMLElement[] {
     const s = this.store
-    const m = s.project.music!
-    const patch = (p: Record<string, unknown>, merge?: string): void =>
-      s.edit((pr) => (pr.music ? { ...pr, music: { ...pr.music, ...p } } : null), { merge: merge ?? `m:${Object.keys(p)[0]}` })
+    const patch = (p: Partial<Sound>, merge?: string): void => s.patchSound(m.id, p, merge ?? `m:${m.id}:${Object.keys(p)[0]}`)
     const pct = (v: number): string => `${Math.round(v * 100)}%`
     const sec = (v: number): string => `${v.toFixed(1)} s`
     return [
-      h('h2', { class: 'props-title', text: 'Music' }),
+      h('h2', { class: 'props-title', text: m.origin === 'split' ? 'Sound from a video' : 'Music / audio' }),
       h('p', { class: 'muted file-name', text: m.name }),
-      section('Volume', range(m.volume, 0, 1, 0.05, (v) => patch({ volume: v }), pct, 'prop-music-volume')),
+      section('Volume', range(m.volume, 0, 2, 0.05, (v) => patch({ volume: v }), pct, 'prop-music-volume')),
       section('Fade in', range(m.fadeIn, 0, 8, 0.5, (v) => patch({ fadeIn: v }), sec, 'prop-music-fadein')),
       section('Fade out', range(m.fadeOut, 0, 8, 0.5, (v) => patch({ fadeOut: v }), sec, 'prop-music-fadeout')),
-      toggleSection(toggle('Repeat to fill the video', m.loop, (on) => patch({ loop: on }), 'prop-music-loop')),
+      toggleSection(toggle('Repeat to fill its length', m.loop, (on) => patch({ loop: on }), 'prop-music-loop')),
       toggleSection(toggle('Quieter while someone speaks', m.duck, (on) => patch({ duck: on }), 'prop-music-duck')),
       section('Starts at', number(m.start, 0, s.duration, 0.1, (v) => patch({ start: s.snap(v) }), 'prop-music-start')),
-      section('Start inside the song at', number(m.offset, 0, Math.max(0, m.duration - 1), 0.5, (v) => patch({ offset: v }), 'prop-music-offset')),
+      section('Plays for', number(m.length, 0.1, 36000, 0.1, (v) => patch({ length: Math.max(0.1, s.snap(v)) }), 'prop-music-length')),
+      section('Start inside the file at', number(m.offset, 0, Math.max(0, m.duration - 0.2), 0.5, (v) => patch({ offset: v }), 'prop-music-offset')),
       h('div', { class: 'psec actions' },
-        button('Change file', () => void this.actions.addMusic(), 'ghost', { id: 'prop-music-change' }),
-        button('Remove', () => this.actions.removeMusic(), 'danger-ghost', { id: 'prop-music-remove' }))
+        button('Split at playhead', () => this.actions.split(), 'ghost', { id: 'prop-sound-split' }),
+        button('Duplicate', () => this.actions.duplicate(), 'ghost', { id: 'prop-sound-duplicate' }),
+        button('Remove', () => this.actions.removeSound(m.id), 'danger-ghost', { id: 'prop-music-remove' })),
+      h('div', { class: 'psec actions' }, button('Save this sound…', () => void this.actions.saveAsset('audio', m.id), 'ghost', { id: 'prop-sound-save' }))
     ]
   }
 }

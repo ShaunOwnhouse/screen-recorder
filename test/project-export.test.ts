@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { newId, newProject, type Clip, type Overlay, type Project } from '../src/shared/project.ts'
+import { detachSound, duplicateClip, duplicateSound, newId, newProject, splitSound, trimSound, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -94,6 +94,10 @@ function recordingSetup(dir: string, secondsLong: number, opts: Parameters<typeo
   const project = newProject({ duration: secondsLong, width: W, height: H, hasAudio: opts.tone !== null })
   return { project, media: { recording: { path, kind: 'video', hasAudio: opts.tone !== null, duration: secondsLong, width: W, height: H } } }
 }
+
+const snd = (o: Partial<Sound> & Pick<Sound, 'media' | 'duration' | 'length'>): Sound => ({
+  id: newId('s'), origin: 'music', name: 'sound', offset: 0, start: 0, volume: 1, fadeIn: 0, fadeOut: 0, loop: false, duck: false, ...o
+})
 
 const overlay = <T extends Overlay>(o: Omit<T, 'id' | 'fade'> & { fade?: boolean }): T => ({ id: newId('o'), fade: false, ...o }) as T
 
@@ -231,7 +235,7 @@ test('music is mixed in at the chosen level with fades, even over a silent video
   const s = recordingSetup(dir, 4, { tone: null })
   s.media.song = { path: makeTone(dir, 'song.wav', 2), kind: 'video', hasAudio: true, duration: 2, width: 0, height: 0 }
   const make = (volume: number): string => {
-    s.project.music = { media: 'song', name: 'song.wav', duration: 2, offset: 0, start: 1, volume, fadeIn: 0.3, fadeOut: 0.3, loop: true, duck: false }
+    s.project.sounds = [snd({ media: 'song', name: 'song.wav', duration: 2, start: 1, length: 3, volume, fadeIn: 0.3, fadeOut: 0.3, loop: true })]
     return exportIt(dir, s).file
   }
   const peak = (file: string, from: number, len: number): number => {
@@ -253,9 +257,9 @@ test('music is mixed in at the chosen level with fades, even over a silent video
 test('music steps back under a voice when asked to', { timeout: 120000 }, inTemp((dir) => {
   const s = recordingSetup(dir, 3, { tone: 300 })
   s.media.song = { path: makeTone(dir, 'song.wav', 3), kind: 'video', hasAudio: true, duration: 3, width: 0, height: 0 }
-  const base = { media: 'song', name: 'song.wav', duration: 3, offset: 0, start: 0, volume: 1, fadeIn: 0, fadeOut: 0, loop: false }
+  const base = { media: 'song', name: 'song.wav', duration: 3, start: 0, length: 3, volume: 1 }
   const level = (duck: boolean): number => {
-    s.project.music = { ...base, duck }
+    s.project.sounds = [snd({ ...base, duck })]
     const out = exportIt(dir, s)
     const r = spawnSync(ffmpeg, ['-hide_banner', '-ss', '1', '-i', out.file, '-vn', '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' })
     return Number(/mean_volume: (-?[\d.]+) dB/.exec(r.stderr)?.[1] ?? -99)
@@ -319,7 +323,7 @@ function withCamera(dir: string, shape: 'circle' | 'rounded' | 'square', over: P
   s.media.camera = { path: makeCamera(dir), kind: 'video', hasAudio: false, duration: 4, width: 640, height: 480 }
   s.project.camera = {
     media: 'camera', name: 'camera.mp4', duration: 4, width: 640, height: 480, offset: 0, nudge: 0, x: 0.6, y: 0.5, w: 0.3, shape, border: false, fade: false,
-    visible: true, ...over
+    visible: true, hasAudio: false, audio: false, volume: 1, ...over
   }
   return s
 }
@@ -379,3 +383,85 @@ test('a rounded camera has soft corners and a square one fills its box', { timeo
   const sq = exportIt(dir, withCamera(dir, 'square'))
   assert.ok(near(frame(sq.file, 0.5).at(387, 183), [0xe0, 0x10, 0x10], 30), 'a square one fills right to the corner')
 }))
+
+/** Loudness of a stretch of a file, in dB (the max). */
+function loud(file: string, from: number, len: number): number {
+  const r = spawnSync(ffmpeg, ['-hide_banner', '-ss', String(from), '-t', String(len), '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' })
+  const m = /max_volume: (-?[\d.]+) dB/.exec(r.stderr)
+  return m ? Number(m[1]) : -Infinity
+}
+
+test('the camera\'s own voice replaces the screen recording\'s sound and stays with its picture', { timeout: 120000 }, inTemp((dir) => {
+  // the screen recording has a loud tone; the camera has a different, shorter-lived one
+  const s = withCamera(dir, 'circle', { hasAudio: true, audio: false })
+  s.media.camera = { ...s.media.camera, path: makeVideo(dir, 'cam2.mp4', 4, { tone: 880 }), hasAudio: true }
+  const screenOnly = exportIt(dir, s)
+  assert.ok(loud(screenOnly.file, 0.5, 2) > -30, 'the screen sound is heard')
+  const freq = (file: string): number => {
+    // zero crossings per second of the first two seconds, a cheap pitch check
+    const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-t', '2', '-i', file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 })
+    const b = r.stdout
+    let crossings = 0
+    let prev = 0
+    for (let i = 0; i + 1 < b.length; i += 2) {
+      const v = b.readInt16LE(i)
+      if (prev < 0 && v >= 0) crossings++
+      prev = v
+    }
+    return crossings / 2
+  }
+  assert.ok(Math.abs(freq(screenOnly.file) - 440) < 60, `screen pitch ${freq(screenOnly.file)}`)
+  s.project.camera!.audio = true
+  const camVoice = exportIt(dir, s)
+  assert.ok(Math.abs(freq(camVoice.file) - 880) < 90, `camera pitch ${freq(camVoice.file)}`)
+  assert.ok(Math.abs(seconds(camVoice.file) - 4) < 0.2)
+}))
+
+test('several sounds play together, and the sound split off a clip is its own, silent in the clip', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4, { tone: null })
+  s.media.a = { path: makeTone(dir, 'a.wav', 1), kind: 'video', hasAudio: true, duration: 1, width: 0, height: 0 }
+  s.media.b = { path: makeTone(dir, 'b.wav', 1), kind: 'video', hasAudio: true, duration: 1, width: 0, height: 0 }
+  s.project.sounds = [snd({ media: 'a', duration: 1, length: 1, start: 0 }), snd({ media: 'b', duration: 1, length: 1, start: 3 })]
+  const out = exportIt(dir, s)
+  assert.ok(loud(out.file, 0.1, 0.8) > -6, 'the first sound plays at the start')
+  assert.ok(loud(out.file, 1.5, 1) < -60, 'silence between them')
+  assert.ok(loud(out.file, 3.1, 0.8) > -6, 'the second sound plays at 3 s')
+}))
+
+test('separating a clip\'s sound mutes the clip and the sound plays from the same place', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4, { tone: 440 })
+  const clipId = s.project.clips[0].id
+  const r = detachSound(s.project, clipId)!
+  assert.equal(r.sound.media, 'recording')
+  assert.equal(r.project.clips[0].hasAudio, false)
+  s.project = r.project
+  const out = exportIt(dir, s)
+  assert.ok(loud(out.file, 0.5, 2) > -30, 'the separated sound is still heard once')
+  // turn it down: gone from the result, though the clip itself has no sound
+  s.project = { ...s.project, sounds: [{ ...s.project.sounds[0], volume: 0 }] }
+  assert.ok(loud(exportIt(dir, s).file, 0.5, 2) < -60, 'turning the separate sound down silences the video')
+}))
+
+test('sounds and clips can be split, trimmed and duplicated', () => {
+  const p = newProject({ duration: 10, width: W, height: H, hasAudio: true })
+  const song = snd({ media: 'x', duration: 20, length: 10, start: 2 })
+  const withSong: Project = { ...p, sounds: [song] }
+  const split = splitSound(withSong, song.id, 6)!
+  assert.equal(split.project.sounds.length, 2)
+  assert.equal(split.project.sounds[0].length, 4)
+  assert.equal(split.project.sounds[1].start, 6)
+  assert.equal(split.project.sounds[1].offset, 4, 'the second half carries on where the first stopped')
+  assert.equal(splitSound(withSong, song.id, 2.05), null, 'not right at an edge')
+  const trimmedEnd = trimSound(withSong, song.id, 'end', 5)!.sounds[0]
+  assert.equal(trimmedEnd.length, 3)
+  const trimmedStart = trimSound(withSong, song.id, 'start', 4)!.sounds[0]
+  assert.equal(trimmedStart.start, 4)
+  assert.equal(trimmedStart.offset, 2)
+  assert.equal(trimmedStart.length, 8)
+  const dup = duplicateSound(withSong, song.id)!
+  assert.equal(dup.project.sounds.length, 2)
+  assert.equal(dup.project.sounds[1].start, 12)
+  const clipCopy = duplicateClip(p, p.clips[0].id)!
+  assert.equal(clipCopy.project.clips.length, 2)
+  assert.notEqual(clipCopy.project.clips[1].id, p.clips[0].id)
+})

@@ -464,7 +464,7 @@ async function seekTo(editor, t) {
 const editorState = (editor) => editor.evaluate(() => {
   const s = window.__editor.store
   return { duration: s.duration, playhead: s.playhead, clips: s.project.clips.map((c) => ({ id: c.id, name: c.name, kind: c.kind, in: c.in, out: c.out, transition: c.transition })),
-    overlays: s.project.overlays.map((o) => ({ ...o })), music: s.project.music, crop: s.project.crop, out: s.outputSize, brand: s.brand, selection: s.selection }
+    overlays: s.project.overlays.map((o) => ({ ...o })), sounds: s.project.sounds, crop: s.project.crop, out: s.outputSize, brand: s.brand, selection: s.selection }
 })
 
 /** Splits at 30 % and deletes the first piece, like cutting the start off. */
@@ -876,7 +876,7 @@ async function save(app, editor, name) {
       if (cam && note) {
         const camPath = path.join(userData, 'pending', cam)
         const i = info(camPath)
-        check('Camera: it is a normal H.264 video', /Video: h264/.test(i) && !/Audio:/.test(i), (/Video: .*/.exec(i) || [''])[0].slice(0, 80))
+        check('Camera: it is a normal H.264 video, with the voice kept in the same file', /Video: h264/.test(i) && /Audio: aac/.test(i), (/Video: .*/.exec(i) || [''])[0].slice(0, 80))
         const dur = (f) => { const m = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(info(f)); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : 0 }
         const screen = path.join(userData, 'pending', cam.replace('.camera.mp4', '.mp4'))
         check('Camera: it is as long as the screen recording (the pause is left out of both)', Math.abs(dur(camPath) - dur(screen)) < 1.2, `camera ${dur(camPath).toFixed(2)}s, screen ${dur(screen).toFixed(2)}s`)
@@ -924,6 +924,15 @@ async function save(app, editor, name) {
       check(`${T}: it can be dragged to a new place`, moved.x - cam0.x > 0.25 && moved.y - cam0.y > 0.15, `x ${cam0.x.toFixed(2)}→${moved.x.toFixed(2)}`)
       await editor.locator('#prop-cam-nudge').fill('0.2')
       check(`${T}: the lip-sync nudge can be set`, Math.abs((await editor.evaluate(() => window.__editor.store.project.camera)).nudge - 0.2) < 0.01)
+      const camNow = await editor.evaluate(() => window.__editor.store.project.camera)
+      log(`camera: file has sound ${camNow.hasAudio}, sound source ${camNow.audio ? 'webcam' : 'screen'}`)
+      if (camNow.hasAudio) {
+        check(`${T}: the webcam's own sound is used by default, so voice and lips are one recording`, camNow.audio === true)
+        await editor.selectOption('#prop-cam-audio', 'screen')
+        check(`${T}: the sound can be switched back to the screen recording's`, (await editor.evaluate(() => window.__editor.store.project.camera)).audio === false)
+        await editor.selectOption('#prop-cam-audio', 'camera')
+        check(`${T}: and to the webcam again`, (await editor.evaluate(() => window.__editor.store.project.camera)).audio === true)
+      }
       // it follows the cuts
       const piecesBefore = await editor.locator('.blk.cam-blk').count()
       const D = (await editorState(editor)).duration

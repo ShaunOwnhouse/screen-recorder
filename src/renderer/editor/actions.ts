@@ -1,4 +1,4 @@
-import { deleteClip, insertClip, newId, splitAt, type Clip, type Music, type Overlay } from '../../shared/project.ts'
+import { deleteClip, detachSound, duplicateClip, duplicateSound, insertClip, newId, splitAt, splitSound, type Clip, type Overlay, type Sound } from '../../shared/project.ts'
 import type { MediaInfo } from '../../shared/types.ts'
 import { CARD_STYLES, newCardClip, newClipFrom, newOverlay, newPip, type NewKind } from './defaults.ts'
 import type { Store } from './store.ts'
@@ -54,19 +54,66 @@ export class Actions {
     this.onReveal(o.start)
   }
 
+  /** Puts audio files under the video, each as a sound of its own (as many as are chosen). */
   async addMusic(list?: MediaInfo[]): Promise<void> {
-    const [m] = list ?? (await api.pickMedia('music'))
-    if (!m) return
-    this.register([m])
-    const hasVoice = this.store.project.clips.some((c) => c.kind !== 'image' && c.hasAudio)
-    const music: Music = {
-      media: m.id, name: m.name, duration: m.duration, offset: 0, start: 0, volume: 0.4, fadeIn: 1, fadeOut: 2, loop: true, duck: hasVoice
+    const picked = (list ?? (await api.pickMedia('music'))).filter((m) => m.kind === 'audio' || m.kind === 'video')
+    if (!picked.length) return
+    this.register(picked)
+    const s = this.store
+    const total = s.duration
+    const hasVoice = s.project.clips.some((c) => c.kind !== 'image' && c.hasAudio) || !!s.project.camera?.hasAudio
+    let last: Sound | null = null
+    for (const m of picked) {
+      const short = m.duration > 0 && m.duration < total
+      const sound: Sound = {
+        id: newId('s'), origin: 'music', media: m.id, name: m.name, duration: m.duration, offset: 0, start: 0,
+        length: Math.max(0.5, short ? total : Math.min(total, m.duration)), volume: 0.4, fadeIn: 1, fadeOut: 2, loop: short, duck: hasVoice
+      }
+      s.edit((p) => ({ ...p, sounds: [...p.sounds, sound] }), { select: { kind: 'sound', id: sound.id } })
+      last = sound
     }
-    this.store.edit((p) => ({ ...p, music }), { select: { kind: 'music', id: 'music' } })
+    if (last) this.onReveal(last.start)
   }
 
-  removeMusic(): void {
-    this.store.edit((p) => ({ ...p, music: null }), { select: null })
+  /** One picker for everything: videos and pictures go into the video, audio files go under it. */
+  async addAny(list?: MediaInfo[]): Promise<void> {
+    const picked = list ?? (await api.pickMedia('any'))
+    if (!picked.length) return
+    const audio = picked.filter((m) => m.kind === 'audio')
+    const visual = picked.filter((m) => m.kind !== 'audio')
+    if (visual.length) await this.addClips(visual)
+    if (audio.length) await this.addMusic(audio)
+  }
+
+  removeSound(id: string): void {
+    this.store.edit((p) => ({ ...p, sounds: p.sounds.filter((x) => x.id !== id) }), { select: null })
+  }
+
+  /** Takes the sound off the selected piece of video so it can be moved, cut, turned down or saved on its own. */
+  detach(id: string): void {
+    const s = this.store
+    const r = detachSound(s.project, id)
+    if (!r) return this.onNote('That piece has no sound to separate.')
+    s.edit(() => r.project, { select: { kind: 'sound', id: r.sound.id } })
+  }
+
+  /** Saves one piece (the video without sound, just the sound, or the camera) as its own file. */
+  async saveAsset(what: 'video' | 'audio' | 'camera-video' | 'camera-audio', id: string): Promise<void> {
+    const s = this.store
+    let spec: { media: string; from: number; to: number; what: 'video' | 'audio'; name: string } | null = null
+    if (what === 'video' || what === 'audio') {
+      const c = s.project.clips.find((x) => x.id === id)
+      if (c && c.kind !== 'image') spec = { media: c.media, from: c.in, to: c.out, what, name: c.name }
+      const snd = s.project.sounds.find((x) => x.id === id)
+      if (snd) spec = { media: snd.media, from: snd.offset, to: snd.offset + Math.min(snd.length, Math.max(0.1, snd.duration - snd.offset)), what: 'audio', name: snd.name }
+    } else if (s.project.camera) {
+      const cam = s.project.camera
+      spec = { media: cam.media, from: 0, to: cam.duration, what: what === 'camera-audio' ? 'audio' : 'video', name: 'Face camera' }
+    }
+    if (!spec) return this.onNote('Choose something with sound or video first.')
+    const r = await api.saveAsset(spec)
+    if (r.error) this.onNote(r.error)
+    else if (r.path) this.onNote(`Saved: ${r.path}`)
   }
 
   addTitle(styleId: string): void {
@@ -79,26 +126,42 @@ export class Actions {
   split(): void {
     const s = this.store
     const t = s.snap(s.playhead)
+    if (s.selection?.kind === 'sound') {
+      const r = splitSound(s.project, s.selection.id, t)
+      if (!r) return this.onNote('Move the playhead into the sound first — you can’t cut right at an edge.')
+      s.edit(() => r.project, { select: { kind: 'sound', id: r.select } })
+      return
+    }
     const e = splitAt(s.project, t)
     if (!e) return this.onNote('Move the playhead into a clip first — you can’t cut right at an edge.')
     s.edit(() => e.project, { select: e.select ? { kind: 'clip', id: e.select } : null })
   }
 
-  /** Deletes whatever is selected (a clip closes the gap; an overlay or the music just goes). */
+  /** Deletes whatever is selected (a clip closes the gap; an overlay or a sound just goes). */
   deleteSelected(): void {
     const s = this.store
     const sel = s.selection
-    if (!sel) return this.onNote('Click a piece of the video, a comment or the music first, then delete it.')
+    if (!sel) return this.onNote('Click a piece of the video, a comment or a sound first, then delete it.')
     if (sel.kind === 'clip') {
       const e = deleteClip(s.project, sel.id)
       if (!e) return this.onNote('That is the only piece of video, so it can’t be removed.')
       s.edit(() => e.project, { select: e.select ? { kind: 'clip', id: e.select } : null })
     } else if (sel.kind === 'overlay') s.edit((p) => ({ ...p, overlays: p.overlays.filter((o) => o.id !== sel.id) }), { select: null })
-    else this.removeMusic()
+    else if (sel.kind === 'sound') this.removeSound(sel.id)
   }
 
   duplicate(): void {
     const s = this.store
+    if (s.selection?.kind === 'clip') {
+      const e = duplicateClip(s.project, s.selection.id)
+      if (e) s.edit(() => e.project, { select: e.select ? { kind: 'clip', id: e.select } : null })
+      return
+    }
+    if (s.selection?.kind === 'sound') {
+      const r = duplicateSound(s.project, s.selection.id)
+      if (r) s.edit(() => r.project, { select: { kind: 'sound', id: r.select } })
+      return
+    }
     const o = s.selectedOverlay
     if (!o) return
     const len = o.end - o.start

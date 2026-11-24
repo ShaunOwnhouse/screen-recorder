@@ -41,16 +41,27 @@ export interface Api {
   onCapsChanged(cb: () => void): () => void
 }
 
+export interface AssetSave {
+  /** 'recording', 'camera' or the id of an added file. */
+  media: string
+  from: number
+  to: number
+  what: 'video' | 'audio'
+  name: string
+}
+
 export type EditorLoad = { source: EditorSource } | { error: string }
 
 export interface EditorApi {
   load(): Promise<EditorLoad>
   reveal(): Promise<void>
   makeProxy(): Promise<string>
-  /** Opens the file picker for videos and pictures (kind 'clip') or one music file (kind 'music'). */
-  pickMedia(kind: 'clip' | 'music'): Promise<MediaInfo[]>
+  /** Opens the file picker: videos and pictures ('clip'), audio files ('music'), or everything at once ('any'). Many files can be chosen. */
+  pickMedia(kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]>
   /** Adds files that were dropped onto the window. */
-  addMedia(paths: string[], kind: 'clip' | 'music'): Promise<MediaInfo[]>
+  addMedia(paths: string[], kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]>
+  /** Saves one piece (a stretch of a file: its picture alone or its sound alone) as a file of its own. */
+  saveAsset(spec: AssetSave): Promise<{ path?: string; error?: string }>
   /** The real location of a dropped file. */
   pathFor(file: File): string
   /** Loudness along an audio (or video) file, 0–1 per bucket, for drawing a waveform. */

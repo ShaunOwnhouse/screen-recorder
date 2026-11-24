@@ -23,7 +23,7 @@ async function editorSuite(c) {
 
   // ---- the screen ----
   check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
-  check(`${tag}: the timeline has Video, Comments and Music rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Music/.test(await editor.textContent('#label-music')))
+  check(`${tag}: the timeline has Video, Comments and Sounds rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Sounds/.test(await editor.textContent('#label-music')))
   check(`${tag}: the preview shows the picture`, (await editor.locator('#layers video').count()) >= 1 && (await editor.locator('#frame').boundingBox()).width > 100)
   const start = await state()
 
@@ -177,20 +177,64 @@ async function editorSuite(c) {
     st.edit((p) => ({ ...p, overlays: p.overlays.map((o) => (o.kind === 'pip' ? { ...o, start: Math.round(0.7 * D * 30) / 30, end: Math.round(0.95 * D * 30) / 30 } : o)) }))
   })
 
-  // ---- music ----
+  // ---- sounds: several at once, each on its own ----
   await editor.click('#tool-music')
-  await answerPicker(app, [song])
+  await answerPicker(app, [song, song])
   await editor.click('#add-music')
-  await editor.waitForFunction(() => !!window.__editor.store.project.music, null, { timeout: 15000 })
+  await editor.waitForFunction(() => window.__editor.store.project.sounds.length === 2, null, { timeout: 15000 })
   s = await state()
-  check(`${tag}: music can be added from a file`, s.music?.name === 'song.wav' && s.music.loop === true)
-  check(`${tag}: the music shows in the timeline with its waveform`, (await editor.locator('.blk.music-blk canvas.wave').count()) === 1)
+  check(`${tag}: several audio files can be added at once`, s.sounds.length === 2 && s.sounds[0].name === 'song.wav' && s.sounds[0].loop === true)
+  check(`${tag}: each sound shows in the timeline with its waveform`, (await editor.locator('.blk.music-blk canvas.wave').count()) === 2)
   await editor.locator('#prop-music-volume').fill('0.3')
   await editor.uncheck('#prop-music-duck')
   await editor.locator('#prop-music-fadeout').fill('3')
   s = await state()
-  check(`${tag}: its volume, fades and "quieter while someone speaks" can be set`, approx(s.music.volume, 0.3, 0.01) && s.music.duck === false && s.music.fadeOut === 3, JSON.stringify(s.music))
+  const sel = s.sounds.find((m) => m.id === s.selection.id)
+  check(`${tag}: a sound's volume, fades and "quieter while someone speaks" can be set`, approx(sel.volume, 0.3, 0.01) && sel.duck === false && sel.fadeOut === 3, JSON.stringify(sel))
   await editor.check('#prop-music-duck')
+  // split and duplicate a sound, then drop the extras again
+  await editor.click(`.blk.music-blk[data-sound="${sel.id}"]`, { position: { x: 12, y: 10 } })
+  await editor.evaluate((t) => window.__editor.store.seek(t), sel.start + 3)
+  await editor.click('#split')
+  s = await state()
+  check(`${tag}: a sound can be split`, s.sounds.length === 3 && s.sounds.some((m) => m.length < sel.length), `${s.sounds.length}`)
+  await editor.click('#duplicate-sel')
+  s = await state()
+  check(`${tag}: a sound can be duplicated`, s.sounds.length === 4)
+  for (let i = 0; i < 3; i++) {
+    await editor.click('.blk.music-blk >> nth=0')
+    await editor.click('#delete-sel')
+  }
+  s = await state()
+  check(`${tag}: a sound can be removed`, s.sounds.length === 1, `${s.sounds.length}`)
+
+  // ---- separate a clip's sound, and save pieces on their own ----
+  const blueIdx = (await state()).clips.findIndex((x) => x.name === 'blue clip.mp4')
+  if (blueIdx >= 0) {
+    const before = (await state()).sounds.length
+    await editor.click(`.blk.clip >> nth=${blueIdx}`)
+    await editor.click('#prop-detach')
+    s = await state()
+    const blue = await editor.evaluate((i) => window.__editor.store.project.clips[i], blueIdx)
+    check(`${tag}: a video's sound can be separated into a sound of its own`, s.sounds.length === before + 1 && blue.hasAudio === false && s.sounds.some((m) => m.origin === 'split' && m.length > 0.5), JSON.stringify({ n: s.sounds.length, audio: blue.hasAudio }))
+    check(`${tag}: the separated sound is a bar of its own in the timeline`, (await editor.locator('.blk.music-blk.split-blk').count()) === 1)
+    await editor.click('#undo')
+    s = await state()
+    check(`${tag}: separating can be undone`, s.sounds.length === before)
+  }
+  const assetDir = path.join(userData, 'assets')
+  fs.mkdirSync(assetDir, { recursive: true })
+  const answerSave = (file) => app.evaluate(({ dialog }, f) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: f }) }, file)
+  const wavOut = path.join(assetDir, 'voice.wav')
+  await answerSave(wavOut)
+  const savedAudio = await editor.evaluate(() => window.editor.saveAsset({ media: 'recording', from: 0, to: 3, what: 'audio', name: 'Recording' }))
+  const wavInfo = fs.existsSync(wavOut) ? ff(['-hide_banner', '-i', wavOut]).stderr : ''
+  check(`${tag}: the sound of the recording can be saved on its own`, !!savedAudio.path && /Audio: pcm/.test(wavInfo) && !/Video:/.test(wavInfo), JSON.stringify(savedAudio))
+  const mp4Out = path.join(assetDir, 'picture.mp4')
+  await answerSave(mp4Out)
+  const savedVideo = await editor.evaluate(() => window.editor.saveAsset({ media: 'recording', from: 1, to: 3, what: 'video', name: 'Recording' }))
+  const mp4Info = fs.existsSync(mp4Out) ? ff(['-hide_banner', '-i', mp4Out]).stderr : ''
+  check(`${tag}: the video of a piece can be saved without its sound`, !!savedVideo.path && /Video: h264/.test(mp4Info) && !/Audio:/.test(mp4Info), JSON.stringify(savedVideo))
 
   // ---- title card ----
   await editor.click('#tool-titles')
@@ -241,7 +285,7 @@ async function editorSuite(c) {
   await editor.click('#tool-comments')
   s = await state()
   const [cw, ch] = [s.out.width, s.out.height]
-  log(`editor: ${s.duration.toFixed(1)} s, ${cw}×${ch}, ${s.overlays.length} overlays, ${s.clips.length} pieces, music ${s.music?.name}`)
+  log(`editor: ${s.duration.toFixed(1)} s, ${cw}×${ch}, ${s.overlays.length} overlays, ${s.clips.length} pieces, sounds ${s.sounds?.map((m) => m.name).join(', ')}`)
 
   // ---- save ----
   const saveDuration = s.duration

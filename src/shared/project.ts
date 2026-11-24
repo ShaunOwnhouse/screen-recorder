@@ -186,26 +186,39 @@ export type OverlayKind = Overlay['kind']
 export const isDrawn = (o: Overlay): o is TextOverlay | ArrowOverlay | BoxOverlay | StepOverlay | SpotlightOverlay =>
   o.kind === 'bubble' || o.kind === 'note' || o.kind === 'text' || o.kind === 'arrow' || o.kind === 'box' || o.kind === 'step' || o.kind === 'spotlight'
 
-// ---------- music ----------
+// ---------- sounds ----------
 
-export interface Music {
+/**
+ * A sound laid under the video: a song or other audio file, or the sound taken off a video or the recording. There can be
+ * as many as the person likes, each placed, trimmed, split and mixed on its own.
+ */
+export interface Sound {
+  id: string
+  /** Where it came from: an audio file the person added, or the sound split off a video / the recording. */
+  origin: 'music' | 'split'
+  /** 'recording', or the id of an added file (audio or video). */
   media: string
   name: string
-  /** Length of the file, seconds. */
+  /** Length of the source file, seconds. */
   duration: number
-  /** Where in the file to start playing. */
+  /** Where in the file it starts playing. */
   offset: number
   /** Where on the timeline it starts. */
   start: number
-  /** 0–1 */
+  /** How long it plays on the timeline (it repeats inside this when `loop` is on and the file is shorter). */
+  length: number
+  /** 0–2 */
   volume: number
   fadeIn: number
   fadeOut: number
-  /** Repeat the file to fill the video. */
+  /** Repeat the file to fill its length. */
   loop: boolean
-  /** Turn the music down whenever the video has sound (a voice). */
+  /** Turn it down whenever the video has sound (a voice). */
   duck: boolean
 }
+
+export const MIN_SOUND = 0.1
+export const soundEnd = (s: Sound): number => s.start + s.length
 
 /**
  * The person's own face on camera, recorded together with the screen. It is tied to the recording itself, not to the
@@ -233,12 +246,18 @@ export interface CameraTrack {
   border: boolean
   fade: boolean
   visible: boolean
+  /** Does the camera file have the person's voice recorded with it? */
+  hasAudio: boolean
+  /** Use the camera's own sound (instead of the screen recording's), so voice and lips are one recording. */
+  audio: boolean
+  /** 0–2: how loud the camera's sound is. */
+  volume: number
 }
 
 export interface Project {
   clips: Clip[]
   overlays: Overlay[]
-  music: Music | null
+  sounds: Sound[]
   camera: CameraTrack | null
   /** Normalised crop of the recording (and so of the finished video), or null. */
   crop: Rect | null
@@ -401,7 +420,76 @@ export function insertClip(p: Project, clip: Clip, t: number): Edit {
   return { project: { ...p, clips, overlays }, select: clip.id }
 }
 
-/** Keeps every overlay inside the video, and music inside its file. */
+
+// ---------- more editing: duplicate, detach sound, split / trim sounds ----------
+
+/** Puts a copy of a clip right after it. */
+export function duplicateClip(p: Project, id: string): Edit | null {
+  const placed = layout(p.clips)
+  const hit = placed.find((x) => x.clip.id === id)
+  if (!hit) return null
+  const copy: Clip = { ...JSON.parse(JSON.stringify(hit.clip)), id: newId('c'), transition: 'cut' }
+  const idx = p.clips.findIndex((c) => c.id === id)
+  const clips = [...p.clips.slice(0, idx + 1), copy, ...p.clips.slice(idx + 1)]
+  const at = layout(clips).find((x) => x.clip.id === copy.id)!
+  return { project: { ...p, clips, overlays: openGap(p.overlays, at.start, at.end - at.start) }, select: copy.id }
+}
+
+/**
+ * Takes the sound off a clip and makes it a sound of its own, on the timeline right under where it was. The clip goes
+ * silent. Pictures and clips with no sound can't be split.
+ */
+export function detachSound(p: Project, id: string): { project: Project; sound: Sound } | null {
+  const hit = layout(p.clips).find((x) => x.clip.id === id)
+  if (!hit) return null
+  const c = hit.clip
+  if (c.kind === 'image' || !c.hasAudio) return null
+  const sound: Sound = {
+    id: newId('s'), origin: 'split', media: c.media, name: `Sound of ${c.name}`, duration: c.out, offset: c.in, start: hit.start,
+    length: hit.end - hit.start, volume: c.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
+  }
+  const clips = p.clips.map((x) => (x.id === id ? { ...x, hasAudio: false } : x))
+  return { project: { ...p, clips, sounds: [...p.sounds, sound] }, sound }
+}
+
+/** Cuts the sound in two at time t on the timeline. */
+export function splitSound(p: Project, id: string, t: number): { project: Project; select: string } | null {
+  const s = p.sounds.find((x) => x.id === id)
+  if (!s || t <= s.start + MIN_SOUND || t >= soundEnd(s) - MIN_SOUND) return null
+  const rel = t - s.start
+  const first: Sound = { ...s, length: rel, fadeOut: 0 }
+  const second: Sound = { ...s, id: newId('s'), start: t, length: s.length - rel, offset: s.loop && s.duration > 0 ? (s.offset + rel) % s.duration : s.offset + rel, fadeIn: 0 }
+  return { project: { ...p, sounds: p.sounds.flatMap((x) => (x.id === id ? [first, second] : [x])) }, select: second.id }
+}
+
+export function duplicateSound(p: Project, id: string): { project: Project; select: string } | null {
+  const s = p.sounds.find((x) => x.id === id)
+  if (!s) return null
+  const copy: Sound = { ...s, id: newId('s'), start: soundEnd(s) }
+  return { project: { ...p, sounds: [...p.sounds, copy] }, select: copy.id }
+}
+
+/** Drags an edge of a sound: the left edge moves where it starts (and what part of the file plays), the right edge its length. */
+export function trimSound(p: Project, id: string, edge: 'start' | 'end', to: number): Project | null {
+  const s = p.sounds.find((x) => x.id === id)
+  if (!s) return null
+  let next: Sound
+  if (edge === 'end') {
+    const length = clamp(to - s.start, MIN_SOUND, s.loop ? 36000 : Math.max(MIN_SOUND, s.duration - s.offset))
+    next = { ...s, length }
+  } else {
+    const end = soundEnd(s)
+    const start = clamp(to, 0, end - MIN_SOUND)
+    const delta = start - s.start
+    const offset = clamp(s.offset + delta, 0, Math.max(0, s.duration - MIN_SOUND))
+    // the file can only be pulled back as far as its beginning
+    const moved = offset - s.offset
+    next = { ...s, start: s.start + moved, offset, length: end - (s.start + moved) }
+  }
+  return { ...p, sounds: p.sounds.map((x) => (x.id === id ? next : x)) }
+}
+
+/** Keeps every overlay inside the video. */
 export function tidy(p: Project): Project {
   const total = totalDuration(p.clips)
   const overlays = p.overlays
@@ -412,7 +500,7 @@ export function tidy(p: Project): Project {
 
 /** Is there anything beyond the untouched recording? Decides between moving the file as-is and re-encoding. */
 export function isPlain(p: Project, recordingDuration: number): boolean {
-  if (p.overlays.length || p.music || p.crop || (p.camera && p.camera.visible)) return false
+  if (p.overlays.length || p.sounds.length || p.crop || (p.camera && (p.camera.visible || (p.camera.audio && p.camera.hasAudio)))) return false
   if (p.clips.length !== 1) return false
   const c = p.clips[0]
   return c.kind === 'recording' && c.volume === 1 && c.in <= 0.01 && c.out >= recordingDuration - 0.01
@@ -427,7 +515,7 @@ export function newProject(recording: { duration: number; width: number; height:
       }
     ],
     overlays: [],
-    music: null,
+    sounds: [],
     camera: null,
     crop: null
   }
@@ -445,9 +533,9 @@ export interface CameraPiece {
  * Every stretch of the timeline that has the camera with it: one per piece of the recording that is showing, trimmed to
  * what the camera file really covers. The camera is hidden over added videos, pictures and title cards.
  */
-export function cameraPieces(p: Project): CameraPiece[] {
+export function cameraPieces(p: Project, forSound = false): CameraPiece[] {
   const cam = p.camera
-  if (!cam || !cam.visible) return []
+  if (!cam || (!cam.visible && !forSound)) return []
   const out: CameraPiece[] = []
   for (const pl of layout(p.clips)) {
     if (pl.clip.kind !== 'recording') continue
@@ -463,6 +551,9 @@ export function cameraPieces(p: Project): CameraPiece[] {
   }
   return out
 }
+
+/** Does the project take its voice from the camera's own recording rather than from the screen recording? */
+export const usesCameraSound = (p: Project): boolean => !!p.camera && p.camera.hasAudio && p.camera.audio
 
 /** The face camera's window as fractions of the frame (it is square in pixels, so its height depends on the frame's shape). */
 export function cameraBox(cam: CameraTrack, aspect: number): { x: number; y: number; w: number; h: number } {
@@ -482,9 +573,11 @@ export function cameraCorner(cam: CameraTrack, aspect: number, corner: Corner): 
 }
 
 /** The camera as it first appears: round, in the bottom right corner. */
-export function newCamera(file: { media: string; name: string; duration: number; width: number; height: number }, offset: number, aspect: number): CameraTrack {
+export function newCamera(file: { media: string; name: string; duration: number; width: number; height: number; hasAudio?: boolean }, offset: number, aspect: number): CameraTrack {
+  const hasAudio = !!file.hasAudio
   const cam: CameraTrack = {
-    ...file, offset, nudge: 0, x: 0, y: 0, w: 0.22, shape: 'circle', border: true, fade: true, visible: true
+    media: file.media, name: file.name, duration: file.duration, width: file.width, height: file.height,
+    offset, nudge: 0, x: 0, y: 0, w: 0.22, shape: 'circle', border: true, fade: true, visible: true, hasAudio, audio: hasAudio, volume: 1
   }
   return { ...cam, ...cameraCorner(cam, aspect, 'bottom-right') }
 }

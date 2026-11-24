@@ -1,4 +1,4 @@
-import { cameraPieces, layout, moveClip, trimClip, type Clip, type Overlay } from '../../shared/project.ts'
+import { cameraPieces, layout, moveClip, soundEnd, trimClip, trimSound, type Clip, type Overlay, type Sound } from '../../shared/project.ts'
 import { clampNum, fmtTime, type Store } from './store.ts'
 
 export const overlayLabel = (o: Overlay): string => {
@@ -62,7 +62,7 @@ export class Timeline {
         <div class="tl-label" id="label-video">Video</div>
         <div class="tl-label" id="label-cam" hidden>Face cam</div>
         <div class="tl-label" id="label-over">Comments</div>
-        <div class="tl-label" id="label-music">Music</div>
+        <div class="tl-label" id="label-music">Sounds</div>
       </div>
       <div class="tl-scroll" id="tl-scroll">
         <div class="tl-inner" id="tl-inner">
@@ -233,30 +233,45 @@ export class Timeline {
       })
     )
 
-    // music
-    const m = s.project.music
-    if (m) {
-      const room = Math.max(0.1, total - m.start)
-      const len = m.loop ? room : Math.min(room, Math.max(0.1, m.duration - m.offset))
-      const b = document.createElement('div')
-      b.className = `blk music-blk${s.selection?.kind === 'music' ? ' sel' : ''}`
-      b.dataset.music = '1'
-      b.style.left = `${this.x(m.start)}px`
-      b.style.width = `${Math.max(10, this.x(len))}px`
-      const cv = document.createElement('canvas')
-      cv.className = 'wave'
-      cv.width = Math.max(10, Math.round(this.x(len)))
-      cv.height = 36
-      this.drawWave(cv, m.media, m.offset, m.duration, len, m.loop)
-      const t = document.createElement('span')
-      t.className = 'blk-label'
-      t.textContent = `${m.name} · ${Math.round(m.volume * 100)}%${m.duck ? ' · quieter under voice' : ''}`
-      b.append(cv, t)
-      this.trackMusic.replaceChildren(b)
+    // sounds: as few rows as will fit
+    const sounds = s.project.sounds
+    const sLanes: number[] = []
+    const sLane = new Map<string, number>()
+    for (const m of [...sounds].sort((x, y) => x.start - y.start)) {
+      let lane = sLanes.findIndex((end) => end <= m.start + 1e-6)
+      if (lane < 0) lane = sLanes.length
+      sLanes[lane] = soundEnd(m)
+      sLane.set(m.id, lane)
+    }
+    const sRows = Math.max(1, sLanes.length)
+    const rowH = 44
+    this.trackMusic.style.height = `${sRows * rowH + 6}px`
+    this.root.querySelector<HTMLElement>('#label-music')!.style.height = `${sRows * rowH + 6}px`
+    if (sounds.length) {
+      this.trackMusic.replaceChildren(
+        ...sounds.map((m) => {
+          const b = document.createElement('div')
+          b.className = `blk music-blk${m.origin === 'split' ? ' split-blk' : ''}${s.selection?.kind === 'sound' && s.selection.id === m.id ? ' sel' : ''}`
+          b.dataset.sound = m.id
+          b.style.left = `${this.x(m.start)}px`
+          b.style.width = `${Math.max(10, this.x(m.length))}px`
+          b.style.top = `${(sLane.get(m.id) ?? 0) * rowH + 3}px`
+          const cv = document.createElement('canvas')
+          cv.className = 'wave'
+          cv.width = Math.max(10, Math.round(this.x(m.length)))
+          cv.height = 36
+          this.drawWave(cv, m.media, m.offset, m.duration, m.length, m.loop)
+          const t = document.createElement('span')
+          t.className = 'blk-label'
+          t.textContent = `${m.name} · ${Math.round(m.volume * 100)}%${m.duck ? ' · quieter under voice' : ''}`
+          b.append(cv, t, handle('l', 'start'), handle('r', 'end'))
+          return b
+        })
+      )
     } else {
       const hint = document.createElement('div')
       hint.className = 'track-hint'
-      hint.textContent = 'No music yet — choose “Add music” to put a song under the video'
+      hint.textContent = 'No sounds yet — choose “Add audio” to put songs or voices under the video'
       this.trackMusic.replaceChildren(hint)
     }
     this.movePlayhead()
@@ -392,12 +407,22 @@ export class Timeline {
       return
     }
 
-    if (blk?.dataset.music) {
-      s.select({ kind: 'music', id: 'music' })
-      const m = base.music!
-      this.drag = (ev) => {
-        const start = clampNum(this.snapTime(m.start + (ev.clientX - startX) / s.pxPerSec), 0, Math.max(0, s.duration - 0.5))
-        s.edit((p) => (p.music ? { ...p, music: { ...p.music, start } } : null), { merge: 'music-start' })
+    if (blk?.dataset.sound) {
+      const id = blk.dataset.sound
+      s.select({ kind: 'sound', id })
+      const m = base.sounds.find((x) => x.id === id) as Sound
+      if (edgeEl) {
+        const edge = edgeEl.dataset.edge as 'start' | 'end'
+        const origin = edge === 'start' ? m.start : soundEnd(m)
+        this.drag = (ev) => {
+          const to = this.snapTime(origin + (ev.clientX - startX) / s.pxPerSec, true)
+          s.edit(() => trimSound(base, id, edge, to), { merge: `strim:${id}:${edge}` })
+        }
+      } else {
+        this.drag = (ev) => {
+          const start = clampNum(this.snapTime(m.start + (ev.clientX - startX) / s.pxPerSec), 0, Math.max(0, s.duration - 0.5))
+          s.edit((p) => ({ ...p, sounds: p.sounds.map((x) => (x.id === id ? { ...x, start } : x)) }), { merge: `sound-start:${id}` })
+        }
       }
       e.preventDefault()
       return

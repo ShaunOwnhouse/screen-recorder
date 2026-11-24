@@ -7,6 +7,7 @@ const editor: EditorApi = {
   makeProxy: () => ipcRenderer.invoke('editor:proxy'),
   pickMedia: (kind) => ipcRenderer.invoke('editor:pick-media', kind),
   addMedia: (paths, kind) => ipcRenderer.invoke('editor:add-media', paths, kind),
+  saveAsset: (spec) => ipcRenderer.invoke('editor:save-asset', spec),
   pathFor: (file) => webUtils.getPathForFile(file),
   waveform: (id, buckets) => ipcRenderer.invoke('editor:waveform', id, buckets),
   strip: (id, count) => ipcRenderer.invoke('editor:strip', id, count),
