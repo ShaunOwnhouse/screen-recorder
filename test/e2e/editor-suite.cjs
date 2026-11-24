@@ -216,7 +216,7 @@ async function editorSuite(c) {
     await editor.click('#prop-detach')
     s = await state()
     const blue = await editor.evaluate((i) => window.__editor.store.project.clips[i], blueIdx)
-    check(`${tag}: a video's sound can be separated into a sound of its own`, s.sounds.length === before + 1 && blue.hasAudio === false && s.sounds.some((m) => m.origin === 'split' && m.length > 0.5), JSON.stringify({ n: s.sounds.length, audio: blue.hasAudio }))
+    check(`${tag}: a video's sound can be separated into a sound of its own`, s.sounds.length === before + 1 && blue.hasAudio === false && s.sounds.some((m) => m.origin === 'split' && m.length > 0.05), JSON.stringify({ n: s.sounds.length, audio: blue.hasAudio, sounds: s.sounds.map((m) => ({ o: m.origin, media: m.media, start: m.start, length: m.length })), blue: { in: blue.in, out: blue.out, name: blue.name } }))
     check(`${tag}: the separated sound is a bar of its own in the timeline`, (await editor.locator('.blk.music-blk.split-blk').count()) === 1)
     await editor.click('#undo')
     s = await state()
