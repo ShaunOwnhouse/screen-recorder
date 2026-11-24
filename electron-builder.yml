@@ -49,6 +49,7 @@ mac:
       to: bin/mac-helper
   extendInfo:
     NSMicrophoneUsageDescription: Screen Snap uses your microphone when you choose to record your voice.
+    NSCameraUsageDescription: Screen Snap records your camera so you can put your face on a video of your screen.
     NSAudioCaptureUsageDescription: Screen Snap records your computer's sound when you turn on Computer sound.
   minimumSystemVersion: '11.0'
 dmg:

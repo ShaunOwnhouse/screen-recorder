@@ -33,6 +33,13 @@ const el = {
   countdown: $<HTMLSelectElement>('countdown'),
   pillSystem: $<HTMLButtonElement>('pill-system'),
   pillMic: $<HTMLButtonElement>('pill-mic'),
+  pillCamera: $<HTMLButtonElement>('pill-camera'),
+  cameraRow: $('camera-row'),
+  camPreview: $<HTMLVideoElement>('cam-preview'),
+  camLive: $('cam-live'),
+  camNone: $('cam-none'),
+  cameraSelect: $<HTMLSelectElement>('camera-select'),
+  cameraHint: $('camera-hint'),
   resolution: $<HTMLSelectElement>('resolution'),
   resHint: $('res-hint'),
   quality: $<HTMLSelectElement>('quality'),
@@ -202,6 +209,63 @@ function setupSettingsScroll(): void {
   )
 }
 
+// ---------- camera ----------
+
+let previewStream: MediaStream | null = null
+let previewKey = ''
+let cameras: { id: string; label: string }[] | null = null
+
+function stopCameraPreview(): void {
+  previewStream?.getTracks().forEach((t) => t.stop())
+  previewStream = null
+  previewKey = ''
+  el.camPreview.srcObject = null
+  el.camLive.hidden = true
+}
+
+/** Shows the camera in the small preview while the camera is switched on and nothing is being recorded; lists the cameras once. */
+async function syncCameraPreview(): Promise<void> {
+  const idle = !status || status.state === 'idle'
+  if (!settings?.camera || !idle) {
+    stopCameraPreview()
+    return
+  }
+  if (!cameras) {
+    cameras = []
+    el.camNone.hidden = false
+    el.camNone.textContent = 'Starting the camera…'
+    cameras = await api.listCameras()
+    el.cameraSelect.replaceChildren(option('default', 'Default camera'), ...cameras.map((c) => option(c.id, c.label)))
+    el.cameraSelect.value = cameras.some((c) => c.id === settings.cameraDevice) ? settings.cameraDevice : 'default'
+    if (!cameras.length) {
+      el.camNone.textContent = 'No camera found'
+      el.cameraHint.textContent = 'Plug in a camera, or check Windows Settings › Privacy › Camera.'
+    }
+  }
+  const key = settings.cameraDevice
+  if (previewStream && previewKey === key) return
+  stopCameraPreview()
+  previewKey = key
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: key && key !== 'default' ? { exact: key } : undefined, width: { ideal: 640 }, height: { ideal: 360 } },
+      audio: false
+    })
+    if (!settings.camera || (status && status.state !== 'idle') || previewKey !== key) {
+      stream.getTracks().forEach((t) => t.stop())
+      return
+    }
+    previewStream = stream
+    el.camPreview.srcObject = stream
+    void el.camPreview.play().catch(() => undefined)
+    el.camNone.hidden = true
+    el.camLive.hidden = false
+  } catch (err) {
+    el.camNone.hidden = false
+    el.camNone.textContent = (err as DOMException)?.name === 'NotAllowedError' ? 'Camera access is blocked' : 'Camera unavailable'
+  }
+}
+
 // ---------- shortcuts ----------
 
 type KeyAction = 'record' | 'shot' | 'pause'
@@ -338,6 +402,9 @@ function renderSettings(): void {
 
   el.pillSystem.setAttribute('aria-pressed', String(settings.systemAudio))
   el.pillMic.setAttribute('aria-pressed', String(settings.micEnabled))
+  el.pillCamera.setAttribute('aria-pressed', String(settings.camera))
+  el.cameraRow.hidden = !settings.camera
+  syncCameraPreview()
   el.systemSource.classList.toggle('off', !settings.systemAudio)
   el.micSource.classList.toggle('off', !settings.micEnabled)
   el.systemState.textContent = settings.systemAudio ? '' : '(off)'
@@ -452,6 +519,7 @@ function renderLevels(levels: AudioLevels): void {
 
 function renderStatus(s: RecordingStatus): void {
   status = s
+  void syncCameraPreview()
   const recording = s.state === 'recording' || s.state === 'paused'
   const paused = s.state === 'paused'
   el.idleView.hidden = recording
@@ -478,7 +546,7 @@ function renderStatus(s: RecordingStatus): void {
   el.pauseIcon.className = `ico ${paused ? 'play' : 'bars'}`
   if (recording) {
     el.timer.textContent = formatTime(s.elapsed)
-    el.recMeta.textContent = [s.resolution, s.encoder, s.audio ?? 'No audio', formatBytes(s.bytes)].filter(Boolean).join(' · ')
+    el.recMeta.textContent = [s.resolution, s.encoder, s.audio ?? 'No audio', s.camera ? 'Camera on' : null, formatBytes(s.bytes)].filter(Boolean).join(' · ')
     const slow = s.speed !== null && s.elapsed > 5 && s.speed < 0.95
     el.recWarn.hidden = !(slow || s.droppedFrames > 0)
     el.recWarn.textContent = slow
@@ -556,7 +624,11 @@ function bind(): void {
   el.tabRecord.addEventListener('click', () => setTab('record'))
   el.tabShot.addEventListener('click', () => setTab('shot'))
   el.pillSystem.addEventListener('click', () => void save({ systemAudio: !settings.systemAudio }))
+  el.pillCamera.addEventListener('click', () => void save({ camera: !settings.camera }))
+  el.cameraSelect.addEventListener('change', () => void save({ cameraDevice: el.cameraSelect.value }))
   el.pillMic.addEventListener('click', () => void save({ micEnabled: !settings.micEnabled }))
+  el.pillCamera.addEventListener('click', () => void save({ camera: !settings.camera }))
+  el.cameraSelect.addEventListener('change', () => void save({ cameraDevice: el.cameraSelect.value }))
   el.resolution.addEventListener('change', () =>
     void save({ outputHeight: el.resolution.value === 'native' ? null : Number(el.resolution.value) })
   )

@@ -101,6 +101,25 @@
               </svg>
               Microphone
             </button>
+            <button id="pill-camera" type="button" class="pill camera" aria-pressed="false" title="Record your face with the screen">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="6" width="13" height="12" rx="3" />
+                <path class="wave" d="M16 10l5-3v10l-5-3" />
+              </svg>
+              Camera
+            </button>
+          </div>
+          <div id="camera-row" class="camera-row" hidden>
+            <div class="cam-thumb">
+              <video id="cam-preview" muted playsinline></video>
+              <span class="cam-live" id="cam-live" hidden><i></i>LIVE</span>
+              <span class="cam-none" id="cam-none">Starting the camera…</span>
+            </div>
+            <div class="cam-info">
+              <span class="label">Camera</span>
+              <select id="camera-select" aria-label="Which camera"></select>
+              <span id="camera-hint" class="muted small">Recorded with the screen; you place it in the editor.</span>
+            </div>
           </div>
         </div>
       </section>

@@ -4,6 +4,7 @@ const api = window.api
 const bar = document.getElementById('bar')!
 const text = document.getElementById('text')!
 const stop = document.getElementById('stop')!
+const camDot = document.getElementById('cam')!
 const pause = document.getElementById('pause') as HTMLButtonElement
 const pauseText = document.getElementById('pause-text')!
 const pauseIcon = pause.querySelector('.ico')!
@@ -21,6 +22,7 @@ function render(s: RecordingStatus): void {
   const live = s.state === 'recording' || s.state === 'paused'
   stop.hidden = !live
   pause.hidden = !live
+  camDot.hidden = !(live && s.camera)
   pause.disabled = Boolean(s.resuming)
   pause.title = s.state === 'paused' ? 'Carry on recording' : 'Pause recording'
   pauseText.textContent = s.state === 'paused' ? 'Resume' : 'Pause'

@@ -831,6 +831,16 @@ async function save(app, editor, name) {
 
     // 1d) Recording the webcam together with the screen (the test camera stands in for a real one)
     if (only('camera')) {
+      await main.click('#tab-record')
+      await setSettings(main, { camera: false })
+      check('Camera: the main section has a Camera button, off to begin with', (await main.getAttribute('#pill-camera', 'aria-pressed')) === 'false' && (await main.isHidden('#camera-row')))
+      await main.click('#pill-camera')
+      await main.waitForSelector('#camera-row:not([hidden])', { timeout: 10000 })
+      await main.waitForSelector('#cam-live:not([hidden])', { timeout: 20000 }).catch(() => undefined)
+      const choices = await main.locator('#camera-select option').count()
+      check('Camera: turning it on shows a picker and a live preview', (await main.isVisible('#cam-live')) && choices >= 2, `${choices} choices`)
+      check('Camera: the choice is remembered', (await main.evaluate(() => window.api.getSettings())).camera === true)
+      await shot(main, 'panel-camera')
       await setSettings(main, { camera: true })
       const { editor, pauseLog } = await record(app, main, 'camera', { seconds: 2.5, pauses: [{ via: 'api', hold: 1.5, then: 2 }] })
       const pend = fs.readdirSync(path.join(userData, 'pending'))

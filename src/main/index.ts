@@ -736,6 +736,7 @@ async function startRecording(): Promise<void> {
   // The camera is opened now (so it is ready the instant recording starts) but only starts recording with the screen.
   let cameraReady = false
   if (s.camera) {
+    await new Promise((r) => setTimeout(r, 400)) // the panel's own preview lets go of the camera first (many cameras can only be opened by one thing)
     const res = await audio.openCamera({ device: s.cameraDevice, mic: s.micEnabled ? s.micDevice : null })
     if (res.ok) cameraReady = true
     else warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${res.error ?? 'it could not be opened'}`
