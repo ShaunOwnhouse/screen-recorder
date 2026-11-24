@@ -23,6 +23,7 @@ jobs:
   # GitHub only gives a repository a fixed amount of artifact storage, and every build is ~450 MB. Without this the quota fills
   # up ("Artifact storage quota has been hit") and new builds can no longer be uploaded. Only the newest build is kept.
   tidy:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -59,7 +60,8 @@ jobs:
 
   windows:
     needs: tidy
-    if: ${{ !cancelled() }}
+    # Only main is built: branch pushes used to build everything twice, which used up the free build minutes.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -232,7 +234,7 @@ jobs:
 
   mac:
     needs: tidy
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: macos-latest
     permissions:
       contents: write
