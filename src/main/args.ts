@@ -153,7 +153,7 @@ export function outputSize(rect: Rect, outputHeight: number | null): { width: nu
   return { width: even((width * outputHeight) / height), height: outputHeight }
 }
 
-const COLOR_TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv']
+export const COLOR_TAGS = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv']
 /**
  * Playable tiers use AAC-LC at 320 kb/s (transparent; plays everywhere). Studio/Lossless are already
  * VLC/editor-only, so their audio is truly lossless ALAC.
@@ -163,7 +163,7 @@ export function audioEncodeArgs(quality: Quality): string[] {
 }
 // Accurate rounding and full-resolution chroma interpolation keep coloured text edges clean when
 // converting the screen's RGB to video YUV (the default fast path smears them).
-const SWS_FLAGS = 'flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp'
+export const SWS_FLAGS = 'flags=lanczos+accurate_rnd+full_chroma_int+full_chroma_inp'
 
 function audioInputArgs(source: string): string[] {
   return ['-f', 'f32le', '-ar', String(AUDIO_RATE), '-ac', '2', '-thread_queue_size', '4096', '-i', source]
