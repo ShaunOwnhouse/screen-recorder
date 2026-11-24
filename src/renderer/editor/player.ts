@@ -1,4 +1,4 @@
-import { cameraBox, cameraPieces, layout, overlayAlpha, isDrawn, usesCameraSound, zoomState, type BlurOverlay, type Clip, type PipOverlay } from '../../shared/project.ts'
+import { cameraBox, cameraPieces, clipPlaysOwnSound, clipTrack, clipVoiceParts, layout, overlayAlpha, isDrawn, usesCameraSound, zoomState, type BlurOverlay, type Clip, type PipOverlay, type Sound } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
 import { clampNum, type Store } from './store.ts'
 
@@ -192,8 +192,8 @@ export class Player {
           if (Math.abs(el.currentTime - want) > tolerance && !el.seeking) el.currentTime = want
           else if (!live && !s.playing && Math.abs(el.currentTime - c.in) > 0.05 && !el.seeking) el.currentTime = c.in
         }
-        // while the camera's own voice is used, the screen recording is silent
-        el.volume = c.kind === 'recording' && usesCameraSound(p) ? 0 : clampNum(c.volume, 0, 1)
+        // some of the recording's sound comes from a track taken out of it, or from the camera: its own sound is then off
+        el.volume = clipTrack(p, c).mode === 'own' ? clampNum(c.volume, 0, 1) : 0
         if (s.playing && live && el.paused && t < pl.end - 0.02) void el.play().catch(() => undefined)
         if ((!s.playing || !live) && !el.paused) el.pause()
       }
@@ -241,7 +241,18 @@ export class Player {
 
   private syncSounds(t: number): void {
     const s = this.store
-    const list = s.project.sounds
+    let list: Sound[] = s.project.sounds
+    const placed = s.placedNow()
+    const camVoice = usesCameraSound(s.project) && cameraPieces(s.project, true).some((pc) => t >= pc.start && t < pc.end)
+    const parts = clipVoiceParts(s.project)
+    const trackVoice = parts.some((v) => t >= v.start && t < v.start + v.length)
+    const voice = camVoice || trackVoice || (!!placed && clipPlaysOwnSound(s.project, placed.clip) && placed.clip.volume > 0)
+    // the computer sound / microphone of the recording, played from their own files like any other sound
+    const virtual = parts.map((v, i) => ({
+      id: `track:${i}:${v.media}`, origin: 'split' as const, media: v.media, name: '', duration: 1e9, offset: v.from, start: v.start, length: v.length,
+      volume: v.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
+    }))
+    list = [...list, ...virtual]
     const ids = new Set(list.map((x) => x.id))
     for (const [id, a] of this.sounds) {
       if (!ids.has(id)) {
@@ -250,9 +261,6 @@ export class Player {
         this.sounds.delete(id)
       }
     }
-    const placed = s.placedNow()
-    const camVoice = usesCameraSound(s.project) && cameraPieces(s.project, true).some((pc) => t >= pc.start && t < pc.end)
-    const voice = camVoice || (!!placed && placed.clip.kind !== 'image' && placed.clip.hasAudio && placed.clip.volume > 0 && !(placed.clip.kind === 'recording' && usesCameraSound(s.project)))
     for (const m of list) {
       const info = s.media.get(m.media)
       let a = this.sounds.get(m.id)

@@ -36,29 +36,26 @@ async function start(cfg: AudioConfigPayload): Promise<{ started: string[]; erro
 
   ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' })
   await ctx.audioWorklet.addModule('./pcm-worklet.js')
-  const capture = new AudioWorkletNode(ctx, 'pcm-capture', {
-    numberOfInputs: 1,
-    numberOfOutputs: 1,
-    outputChannelCount: [2],
-    channelCount: 2,
-    channelCountMode: 'explicit'
-  })
-  capture.port.onmessage = (e: MessageEvent<Float32Array>) => bridge.pcm(e.data)
-
-  // Limiter on the mix bus so loud system audio + voice never clips.
-  const limiter = new DynamicsCompressorNode(ctx, { threshold: -1, knee: 0, ratio: 20, attack: 0.002, release: 0.1 })
-  limiter.connect(capture)
-  // The worklet only runs while something pulls on it, so route it to a silent output.
-  const silent = new GainNode(ctx, { gain: 0 })
-  capture.connect(silent).connect(ctx.destination)
-
+  // Each source is captured on its own (computer sound and microphone are never merged here), so the recording keeps
+  // them apart and the editor can treat them separately. FFmpeg makes the mix.
   const meters: Record<'system' | 'mic', AnalyserNode | null> = { system: null, mic: null }
   const attach = (stream: MediaStream, volume: number, name: 'system' | 'mic'): void => {
+    const capture = new AudioWorkletNode(ctx!, 'pcm-capture', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: 'explicit'
+    })
+    capture.port.onmessage = (e: MessageEvent<Float32Array>) => bridge.pcm(name, e.data)
+    // The worklet only runs while something pulls on it, so route it to a silent output.
+    const silent = new GainNode(ctx!, { gain: 0 })
+    capture.connect(silent).connect(ctx!.destination)
     const source = ctx!.createMediaStreamSource(stream)
     const gain = new GainNode(ctx!, { gain: volume })
     const analyser = new AnalyserNode(ctx!, { fftSize: 1024 })
     source.connect(gain)
-    gain.connect(limiter)
+    gain.connect(capture)
     gain.connect(analyser)
     streams.push(stream)
     meters[name] = analyser

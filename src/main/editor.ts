@@ -2,11 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
-import { buildCopyArgs, buildProxyArgs } from './args.ts'
+import { buildCopyArgs, buildProxyArgs, TRACK_NAMES } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
 import { ProgressParser, parseMediaInfo } from './parse.ts'
-import { cameraFileFor, cameraInfoFor, moveFile, proxyPathFor, removePending, sanitizeFileName, uniquePath } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, moveFile, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
 import { buildProjectArgs, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
 import { isPlain, type Project } from '../shared/project.ts'
@@ -185,6 +185,8 @@ export class EditorController {
     }
     const name = basename(file)
     const camera = this.loadCamera(file)
+    const tracks = await this.loadTracks(file)
+    const trackFiles = ['recording-pc', 'recording-mic'].map((id) => this.added.get(id)?.info).filter((x): x is MediaInfo => !!x)
     const formats = await this.deps.formats()
     const wanted = this.deps.settings().videoFormat
     return {
@@ -198,9 +200,58 @@ export class EditorController {
         formats,
         format: formats.includes(wanted) ? wanted : 'mp4',
         brand: this.deps.settings().brand,
-        camera
+        camera,
+        tracks,
+        trackFiles
       }
     }
+  }
+
+  /**
+   * Finds out which sounds the recording holds. Recorded with both the computer's sound and the microphone, it has a mix
+   * and a track for each; those two are taken out as files of their own so the editor can use them separately.
+   */
+  private async loadTracks(file: string): Promise<{ pc: boolean; mic: boolean }> {
+    const { stderr } = await runFfmpeg(['-hide_banner', '-i', file])
+    const names: string[] = []
+    const lines = stderr.split(/\r?\n/)
+    lines.forEach((line, i) => {
+      if (!/Stream #\d+:\d+.*: Audio:/.test(line)) return
+      let name = ''
+      for (let j = i + 1; j < lines.length && !/Stream #/.test(lines[j]); j++) {
+        const m = /handler_name\s*:\s*(.+)$/.exec(lines[j])
+        if (m) name = m[1].trim()
+      }
+      names.push(name)
+    })
+    const has = (n: string): boolean => names.includes(n)
+    if (names.length >= 3 && has(TRACK_NAMES.pc) && has(TRACK_NAMES.mic)) {
+      // extract both (a plain copy, quick); the editor plays and mixes them like any added sound
+      for (const kind of ['pc', 'mic'] as const) {
+        const out = trackFileFor(file, kind)
+        const stream = names.indexOf(TRACK_NAMES[kind])
+        if (!existsSync(out)) {
+          const r = await runFfmpeg(['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-map', `0:a:${stream}`, '-vn', '-c:a', 'copy', out], 10 * 60 * 1000)
+          if (!r.ok) {
+            rmSync(out, { force: true })
+            return { pc: false, mic: false }
+          }
+        }
+        const d = await this.durationOf(out)
+        const id = kind === 'pc' ? 'recording-pc' : 'recording-mic'
+        const info: MediaInfo = { id, name: kind === 'pc' ? 'Computer sound' : 'Microphone', kind: 'audio', duration: d, width: 0, height: 0, hasAudio: true, url: addedMediaUrl(id) }
+        this.added.set(id, { info, path: out })
+      }
+      return { pc: true, mic: true }
+    }
+    if (names.length === 1) return { pc: has(TRACK_NAMES.pc), mic: has(TRACK_NAMES.mic) }
+    return { pc: false, mic: false }
+  }
+
+  private async durationOf(path: string): Promise<number> {
+    const { stderr } = await runFfmpeg(['-hide_banner', '-i', path])
+    const d = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr)
+    return d ? Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3]) : 0
   }
 
   /** The face camera recorded with this recording, made available to the editor like any added file. */

@@ -184,6 +184,10 @@ export interface EditorSource {
   brand: Brand
   /** The face camera recorded with this screen recording, if there was one. */
   camera: { info: MediaInfo; offset: number } | null
+  /** Which sounds the recording holds (computer sound, microphone). */
+  tracks: { pc: boolean; mic: boolean }
+  /** The computer sound and microphone taken out of the recording as files of their own (only when it holds both). */
+  trackFiles: MediaInfo[]
 }
 
 /** A picture the editor drew (a comment, an arrow, a title card…) for FFmpeg to lay over the video. */

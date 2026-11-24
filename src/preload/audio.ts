@@ -26,7 +26,7 @@ const bridge: AudioBridgeApi = {
   onCameraResume: (fn) => handle('camera:resume', fn as Handler),
   onCameraStop: (fn) => handle('camera:stop', fn as Handler),
   cameraChunk: (chunk) => ipcRenderer.send('camera:chunk', chunk),
-  pcm: (chunk) => ipcRenderer.send('audio:pcm', chunk),
+  pcm: (source, chunk) => ipcRenderer.send('audio:pcm', source, chunk),
   levels: (levels) => ipcRenderer.send('audio:levels', levels)
 }
 

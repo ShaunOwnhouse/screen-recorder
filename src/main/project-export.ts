@@ -1,6 +1,6 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  cameraPieces, clipLength, FADE_SECONDS, usesCameraSound, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
+  cameraPieces, clipLength, clipPlaysOwnSound, clipVoiceParts, FADE_SECONDS, usesCameraSound, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -373,9 +373,11 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
   const cameraSound = usesCameraSound(p) && !!o.media[p.camera!.media]?.hasAudio
   const camSoundPieces = cameraSound ? cameraPieces(p, true) : []
   // while the camera's voice is used, the screen recording is silent
-  const clipHasSound = (c: Clip): boolean => c.kind !== 'image' && c.hasAudio && mediaOf(c.media).hasAudio && !(cameraSound && c.kind === 'recording')
+  const clipHasSound = (c: Clip): boolean => clipPlaysOwnSound(p, c) && mediaOf(c.media).hasAudio
+  // the computer sound or the microphone alone, taken out of the recording
+  const trackParts = clipVoiceParts(p).filter((v) => o.media[v.media]?.hasAudio)
   const sounds = p.sounds.filter((x) => o.media[x.media]?.hasAudio && o.media[x.media].kind === 'video' && x.start < T - 0.05)
-  const anySound = o.format !== 'gif' && (p.clips.some(clipHasSound) || camSoundPieces.length > 0 || audioParts.length > 0 || sounds.length > 0)
+  const anySound = o.format !== 'gif' && (p.clips.some(clipHasSound) || camSoundPieces.length > 0 || trackParts.length > 0 || audioParts.length > 0 || sounds.length > 0)
   let audio: string | null = null
   if (anySound) {
     const clipAudio = p.clips.map((c, i) => {
@@ -418,7 +420,23 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       g.add(`[${voice}]${parts.map((x) => `[${x}]`).join('')}amix=inputs=${parts.length + 1}:duration=first:normalize=0[${joined}]`)
       voice = joined
     }
-    const voiceHeard = p.clips.some(clipHasSound) || camSoundPieces.length > 0
+    if (trackParts.length) {
+      const parts = trackParts.map((v) => {
+        const len = Math.min(v.length, Math.max(0.1, T - v.start))
+        const idx = g.file(['-ss', num(v.from), '-t', num(len + 0.1)], mediaOf(v.media).path)
+        const label = g.label('tp')
+        const ms = Math.round(v.start * 1000)
+        g.add(
+          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${num(clamp(v.volume, 0, 2))},` +
+            `atrim=duration=${num(len)},adelay=${ms}|${ms}[${label}]`
+        )
+        return label
+      })
+      const joined = g.label('tv')
+      g.add(`[${voice}]${parts.map((x) => `[${x}]`).join('')}amix=inputs=${parts.length + 1}:duration=first:normalize=0[${joined}]`)
+      voice = joined
+    }
+    const voiceHeard = p.clips.some(clipHasSound) || camSoundPieces.length > 0 || trackParts.length > 0
     const mixIn: string[] = []
     for (const m of sounds) {
       const file = mediaOf(m.media)
@@ -456,6 +474,32 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       g.add(`[${voice}]${mixIn.map((x) => `[${x}]`).join('')}amix=inputs=${mixIn.length + 1}:duration=first:normalize=0,alimiter=limit=0.95,apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${audio}]`)
     } else {
       g.add(`[${voice}]apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${audio}]`)
+    }
+  }
+
+  // ---- speed of the whole finished video ----
+  const speed = clamp(p.speed || 1, 0.25, 4)
+  const outSeconds = T / speed
+  if (speed !== 1) {
+    const sv = g.label('sp')
+    g.add(`[${video}]setpts=PTS/${num(speed)},fps=${fps},settb=AVTB[${sv}]`)
+    video = sv
+    if (audio) {
+      // atempo only does 0.5–2 at a time, so bigger changes are chained
+      const steps: number[] = []
+      let rest = speed
+      while (rest > 2 + 1e-9) {
+        steps.push(2)
+        rest /= 2
+      }
+      while (rest < 0.5 - 1e-9) {
+        steps.push(0.5)
+        rest /= 0.5
+      }
+      steps.push(rest)
+      const sa = g.label('sa')
+      g.add(`[${audio}]${steps.map((x) => `atempo=${num(x)}`).join(',')},atrim=duration=${num(outSeconds)},asetpts=PTS-STARTPTS[${sa}]`)
+      audio = sa
     }
   }
 
@@ -500,6 +544,6 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     if (audio) args.push(...audioEncodeArgs(o.quality))
     if (o.format !== 'mkv') args.push('-movflags', '+faststart')
   }
-  args.push('-t', num(T), '-progress', 'pipe:1', o.output)
-  return { args, seconds: T, width: W, height: H }
+  args.push('-t', num(outSeconds), '-progress', 'pipe:1', o.output)
+  return { args, seconds: outSeconds, width: W, height: H }
 }

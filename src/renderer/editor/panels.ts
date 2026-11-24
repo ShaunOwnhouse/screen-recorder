@@ -1,4 +1,4 @@
-import { cameraCorner, type CameraTrack, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { cameraCorner, usesCameraSound, type CameraTrack, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -352,6 +352,15 @@ export class Panels {
     if (c.kind !== 'image' && c.hasAudio) {
       out.push(section('Volume', range(c.volume, 0, 2, 0.05, (v) => patch({ volume: v }, `vol:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-volume')))
     }
+    if (c.kind === 'recording' && c.hasAudio) {
+      const t = s.project.tracks
+      if (usesCameraSound(s.project)) {
+        out.push(h('p', { class: 'tip good', text: t.pc ? 'Your voice comes from the webcam’s microphone, so the microphone recorded with the screen is off. The computer’s sound is kept.' : 'Your voice comes from the webcam’s microphone, so the sound recorded with the screen is off.' }))
+      } else if (t.pc && t.mic) {
+        out.push(section('Sound from the recording', select([['mix', 'Everything, as recorded'], ['pc', 'Computer sound only'], ['mic', 'My microphone only']], c.audioSource ?? 'mix', (v) => patch({ audioSource: v as Clip['audioSource'] }), 'prop-audio-source')))
+        out.push(h('p', { class: 'tip', text: 'The computer’s sound (a video you played) and your microphone were recorded as two tracks, so you can keep just one — or use “Separate the sound” to work with it on its own.' }))
+      }
+    }
     if (index > 0) {
       out.push(
         toggleSection(toggle('Fade in from the piece before', c.transition === 'fade', (on) => patch({ transition: on ? 'fade' : 'cut' }), 'prop-transition')),
@@ -420,8 +429,8 @@ export class Panels {
       toggleSection(toggle('Fade in and out', cam.fade, (on) => patch({ fade: on }), 'prop-cam-fade')),
       ...(cam.hasAudio
         ? [
-            section('Whose sound to use', select([['camera', 'My webcam microphone (voice and lips together)'], ['screen', 'The screen recording’s sound']], cam.audio ? 'camera' : 'screen', (v) => patch({ audio: v === 'camera' }), 'prop-cam-audio')),
-            h('p', { class: 'tip good', text: cam.audio ? 'The voice is taken from the webcam’s own recording, so it always matches your lips. The screen recording’s sound is switched off (computer sounds included).' : 'The sound is the screen recording’s. If it doesn’t match your lips, switch to the webcam microphone.' }),
+            section('Your voice comes from', select([['camera', 'The webcam’s microphone (voice and lips together)'], ['screen', 'The microphone recorded with the screen']], cam.audio ? 'camera' : 'screen', (v) => patch({ audio: v === 'camera' }), 'prop-cam-audio')),
+            h('p', { class: 'tip good', text: cam.audio ? 'Your voice is taken from the webcam’s own recording, so it always matches your lips. Sound the computer played while recording is kept.' : 'Your voice is the microphone recorded with the screen. If it doesn’t match your lips, switch to the webcam’s microphone.' }),
             ...(cam.audio ? [section('Webcam sound volume', range(cam.volume, 0, 2, 0.05, (v) => patch({ volume: v }, 'cam:vol'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-volume'))] : [])
           ]
         : [h('p', { class: 'tip', text: 'This camera recording has no sound of its own.' })]),

@@ -18,6 +18,8 @@ export const joinListFor = (file: string): string => file.replace(/\.mp4$/i, '.p
 export const cameraRawFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.webm')
 export const cameraFileFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.mp4')
 export const cameraInfoFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.json')
+/** The computer sound / microphone of a recording taken out as files of their own, for the editor. */
+export const trackFileFor = (file: string, kind: 'pc' | 'mic'): string => file.replace(/\.mp4$/i, `.${kind}.m4a`)
 
 const isRecording = (name: string): boolean => /\.mp4$/i.test(name) && !/\.(recording\d*|proxy|camera)\.mp4$/i.test(name)
 
@@ -52,7 +54,7 @@ export function retryBusy<T>(run: () => T, tries = 12, pauseMs = 250): T {
 }
 
 export function removePending(file: string): void {
-  for (const p of [file, proxyPathFor(file), joinListFor(file), cameraRawFor(file), cameraFileFor(file), cameraInfoFor(file), ...segmentsOf(file)]) {
+  for (const p of [file, proxyPathFor(file), joinListFor(file), cameraRawFor(file), cameraFileFor(file), cameraInfoFor(file), trackFileFor(file, 'pc'), trackFileFor(file, 'mic'), ...segmentsOf(file)]) {
     retryBusy(() => rmSync(p, { force: true }))
   }
 }

@@ -59,7 +59,7 @@ test('ddagrab binds to the monitor’s own GPU adapter and output', () => {
 })
 
 test('one pre-mixed audio pipe maps straight through (index depends on capture input)', () => {
-  const pipe = [{ url: '\\\\.\\pipe\\a', volume: 1 }]
+  const pipe = [{ url: '\\\\.\\pipe\\a', volume: 1, kind: 'mic' as const }]
   const gdi = buildRecordArgs({ ...base, audio: pipe })
   assert.equal(after(gdi, '-f'), 'gdigrab')
   assert.ok(gdi.includes('f32le'))
@@ -70,19 +70,21 @@ test('one pre-mixed audio pipe maps straight through (index depends on capture i
   assert.ok(dda.includes('0:a'))
 })
 
-test('two audio sources (macOS mic + computer sound) are gain-adjusted and mixed', () => {
+test('two audio sources are gain-adjusted, mixed, and also kept as tracks of their own', () => {
   const args = buildRecordArgs({
     ...base,
     audio: [
-      { url: 'unix:/tmp/mic.sock', volume: 1 },
-      { url: 'unix:/tmp/sys.sock', volume: 0.5 }
+      { url: 'unix:/tmp/sys.sock', volume: 0.5, kind: 'pc' as const },
+      { url: 'unix:/tmp/mic.sock', volume: 1, kind: 'mic' as const }
     ]
   })
   assert.match(
     after(args, '-filter_complex')!,
-    /;\[1:a\]volume=1\.00\[a0\];\[2:a\]volume=0\.50\[a1\];\[a0\]\[a1\]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0\.95\[aout\]$/
+    /;\[1:a\]volume=0\.50,asplit=2\[m0\]\[t0\];\[2:a\]volume=1\.00,asplit=2\[m1\]\[t1\];\[m0\]\[m1\]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0\.95\[aout\]$/
   )
-  assert.equal(args[args.lastIndexOf('-map') + 1], '[aout]')
+  const maps = args.flatMap((a, i) => (a === '-map' ? [args[i + 1]] : []))
+  assert.deepEqual(maps, ['[v]', '[aout]', '[t0]', '[t1]'], 'the mix first, then each source')
+  assert.ok(args.includes('handler_name=Computer sound') && args.includes('handler_name=Microphone') && args.includes('handler_name=Mix'))
 })
 
 test('macOS capture uses avfoundation and crops regions out of the full screen', () => {
@@ -125,7 +127,7 @@ test('studio is 4:4:4 and falls back to x264 for encoders without it', () => {
 })
 
 test('audio: 320k AAC for playable tiers, lossless ALAC for studio/lossless', () => {
-  const pipe = [{ url: 'p', volume: 1 }]
+  const pipe = [{ url: 'p', volume: 1, kind: 'mic' as const }]
   const max = buildRecordArgs({ ...base, quality: 'maximum', audio: pipe })
   assert.equal(after(max, '-c:a'), 'aac')
   assert.equal(after(max, '-b:a'), '320k')

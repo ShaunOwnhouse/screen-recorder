@@ -130,6 +130,6 @@ export interface AudioBridgeApi {
   onStart(fn: (cfg: AudioConfigPayload) => Promise<{ started: string[]; errors: string[] }>): void
   onStop(fn: () => Promise<void>): void
   onListDevices(fn: (opts?: { prime?: boolean }) => Promise<MicInfo[]>): void
-  pcm(chunk: Float32Array): void
+  pcm(source: 'system' | 'mic', chunk: Float32Array): void
   levels(levels: AudioLevels): void
 }

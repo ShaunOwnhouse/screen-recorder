@@ -40,6 +40,19 @@ export interface Clip {
   width: number
   height: number
   card?: TitleCard
+  /**
+   * For the recording: which of its sounds to use. The recording holds the computer's sound and the microphone as tracks
+   * of their own (as well as a mix of both); 'mix' (the default) plays everything as recorded.
+   */
+  audioSource?: 'mix' | 'pc' | 'mic'
+}
+
+/** Which sounds the screen recording itself holds. */
+export interface RecordingTracks {
+  /** It has the computer's sound. */
+  pc: boolean
+  /** It has the microphone. */
+  mic: boolean
 }
 
 export interface Placed {
@@ -259,6 +272,10 @@ export interface Project {
   overlays: Overlay[]
   sounds: Sound[]
   camera: CameraTrack | null
+  /** What the recording holds (not something the person edits). */
+  tracks: RecordingTracks
+  /** Speed of the finished video: 1 = as recorded, 2 = twice as fast, 0.5 = half speed. */
+  speed: number
   /** Normalised crop of the recording (and so of the finished video), or null. */
   crop: Rect | null
 }
@@ -421,6 +438,51 @@ export function insertClip(p: Project, clip: Clip, t: number): Edit {
 }
 
 
+
+// ---------- the recording's own sounds ----------
+
+export const RECORDING_PC = 'recording-pc'
+export const RECORDING_MIC = 'recording-mic'
+export const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+
+/**
+ * Where a clip's sound comes from. 'own' = from the clip's own file; 'media' = from a track of its own taken out of the
+ * recording; 'none' = silent. When the camera's voice is used, a recording keeps only its computer sound.
+ */
+export function clipTrack(p: Project, c: Clip): { mode: 'own' | 'media' | 'none'; media?: string } {
+  if (c.kind !== 'recording') return { mode: 'own' }
+  const want = usesCameraSound(p) ? 'pc' : (c.audioSource ?? 'mix')
+  if (want === 'mix') return { mode: 'own' }
+  const t = p.tracks
+  if (t.pc && t.mic) return { mode: 'media', media: want === 'pc' ? RECORDING_PC : RECORDING_MIC }
+  // only one kind of sound was recorded: the recording's own sound is that one
+  if (want === 'pc') return t.pc ? { mode: 'own' } : { mode: 'none' }
+  return t.mic ? { mode: 'own' } : { mode: 'none' }
+}
+
+export interface VoicePart {
+  media: string
+  /** Where in the file it starts. */
+  from: number
+  /** Where on the timeline. */
+  start: number
+  length: number
+  volume: number
+}
+
+/** The stretches of sound that come from a track taken out of the recording (computer sound or microphone alone). */
+export function clipVoiceParts(p: Project): VoicePart[] {
+  const out: VoicePart[] = []
+  for (const pl of layout(p.clips)) {
+    const t = clipTrack(p, pl.clip)
+    if (t.mode === 'media' && t.media && pl.clip.hasAudio) out.push({ media: t.media, from: pl.clip.in, start: pl.start, length: pl.end - pl.start, volume: pl.clip.volume })
+  }
+  return out
+}
+
+/** Does the clip play the sound of its own file? */
+export const clipPlaysOwnSound = (p: Project, c: Clip): boolean => c.kind !== 'image' && c.hasAudio && clipTrack(p, c).mode === 'own'
+
 // ---------- more editing: duplicate, detach sound, split / trim sounds ----------
 
 /** Puts a copy of a clip right after it. */
@@ -444,8 +506,10 @@ export function detachSound(p: Project, id: string): { project: Project; sound: 
   if (!hit) return null
   const c = hit.clip
   if (c.kind === 'image' || !c.hasAudio) return null
+  const track = clipTrack(p, c)
+  if (track.mode === 'none') return null
   const sound: Sound = {
-    id: newId('s'), origin: 'split', media: c.media, name: `Sound of ${c.name}`, duration: c.out, offset: c.in, start: hit.start,
+    id: newId('s'), origin: 'split', media: track.media ?? c.media, name: `Sound of ${c.name}`, duration: c.out, offset: c.in, start: hit.start,
     length: hit.end - hit.start, volume: c.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
   }
   const clips = p.clips.map((x) => (x.id === id ? { ...x, hasAudio: false } : x))
@@ -503,10 +567,10 @@ export function isPlain(p: Project, recordingDuration: number): boolean {
   if (p.overlays.length || p.sounds.length || p.crop || (p.camera && (p.camera.visible || (p.camera.audio && p.camera.hasAudio)))) return false
   if (p.clips.length !== 1) return false
   const c = p.clips[0]
-  return c.kind === 'recording' && c.volume === 1 && c.in <= 0.01 && c.out >= recordingDuration - 0.01
+  return c.kind === 'recording' && (c.audioSource ?? 'mix') === 'mix' && p.speed === 1 && c.volume === 1 && c.in <= 0.01 && c.out >= recordingDuration - 0.01
 }
 
-export function newProject(recording: { duration: number; width: number; height: number; hasAudio: boolean }): Project {
+export function newProject(recording: { duration: number; width: number; height: number; hasAudio: boolean; tracks?: RecordingTracks }): Project {
   return {
     clips: [
       {
@@ -517,6 +581,8 @@ export function newProject(recording: { duration: number; width: number; height:
     overlays: [],
     sounds: [],
     camera: null,
+    tracks: recording.tracks ?? { pc: false, mic: false },
+    speed: 1,
     crop: null
   }
 }

@@ -86,15 +86,18 @@ function peakOf(frames: Buffer): number {
 
 /**
  * Captures audio for recordings:
- * - Windows: computer sound (WASAPI loopback via Chromium) and the mic are captured and mixed in a
- *   hidden window, then served as one 48 kHz stereo f32le stream.
+ * - Windows: computer sound (WASAPI loopback via Chromium) and the mic are captured in a hidden window, each on its
+ *   own 48 kHz stereo f32le pipe.
  * - macOS: the mic comes from the hidden window; computer sound comes from the native
- *   ScreenCaptureKit helper on a second pipe, and FFmpeg mixes the two.
+ *   ScreenCaptureKit helper on a second pipe.
+ * FFmpeg then writes a mix (plays everywhere) and, when both are on, each source as a track of its own.
  */
 export class AudioCapture extends EventEmitter {
   private win: BrowserWindow | null = null
   private ready: Promise<void> | null = null
-  private mixPipe: PcmPipe | null = null
+  /** One pipe per source the hidden window captures. */
+  private pipes: { system: PcmPipe | null; mic: PcmPipe | null } = { system: null, mic: null }
+  /** The computer-sound pipe fed by the macOS helper. */
   private systemPipe: PcmPipe | null = null
   private helper: ChildProcess | null = null
   private rendererRunning = false
@@ -109,9 +112,9 @@ export class AudioCapture extends EventEmitter {
     private readonly load: Loader
   ) {
     super()
-    ipcMain.on('audio:pcm', (e, chunk: ArrayBufferView) => {
+    ipcMain.on('audio:pcm', (e, source: 'system' | 'mic', chunk: ArrayBufferView) => {
       if (e.sender !== this.win?.webContents) return
-      this.mixPipe?.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+      this.pipes[source === 'system' ? 'system' : 'mic']?.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
     })
     ipcMain.on('camera:chunk', (e, chunk: Uint8Array) => {
       if (e.sender !== this.win?.webContents) return
@@ -211,12 +214,17 @@ export class AudioCapture extends EventEmitter {
 
     const rendererCfg = { ...cfg, system: cfg.system && !mac }
     if (rendererCfg.system || rendererCfg.mic) {
-      if (pipe) this.mixPipe = await PcmPipe.create()
+      if (pipe) {
+        if (rendererCfg.system) this.pipes.system = await PcmPipe.create()
+        if (rendererCfg.mic) this.pipes.mic = await PcmPipe.create()
+      }
       this.rendererRunning = true
       const res = await this.request<{ started: string[]; errors: string[] }>('audio:start', rendererCfg)
       started.push(...res.started)
       errors.push(...res.errors)
-      if (res.started.length && this.mixPipe) inputs.push({ url: this.mixPipe.url, volume: 1 })
+      // the volume is already applied where each source is captured
+      if (res.started.includes('system') && this.pipes.system) inputs.push({ url: this.pipes.system.url, volume: 1, kind: 'pc' })
+      if (res.started.includes('mic') && this.pipes.mic) inputs.push({ url: this.pipes.mic.url, volume: 1, kind: 'mic' })
     }
 
     if (mac && cfg.system) {
@@ -224,7 +232,7 @@ export class AudioCapture extends EventEmitter {
       if (err) errors.push(`Computer sound: ${err}`)
       else {
         started.push('system')
-        if (this.systemPipe) inputs.push({ url: this.systemPipe.url, volume: cfg.systemVolume })
+        if (this.systemPipe) inputs.unshift({ url: this.systemPipe.url, volume: cfg.systemVolume, kind: 'pc' })
       }
     }
 
@@ -297,8 +305,8 @@ export class AudioCapture extends EventEmitter {
     }
     this.stopHelper()
     this.micLevel = null
-    const pipes = [this.mixPipe, this.systemPipe]
-    this.mixPipe = null
+    const pipes = [this.pipes.system, this.pipes.mic, this.systemPipe]
+    this.pipes = { system: null, mic: null }
     this.systemPipe = null
     await Promise.all(pipes.map((p) => p?.close()))
   }

@@ -16,7 +16,12 @@ export interface AvfTarget {
 export interface AudioInput {
   url: string
   volume: number
+  /** Computer sound ('pc') or the microphone ('mic'): kept as a track of its own in the recording. */
+  kind: 'pc' | 'mic'
 }
+
+/** Names of the audio tracks in a recording (the editor reads them back to know which is which). */
+export const TRACK_NAMES = { mix: 'Mix', pc: 'Computer sound', mic: 'Microphone' } as const
 
 export interface RecordArgsInput {
   backend: 'ddagrab' | 'gdigrab' | 'avfoundation' | 'x11grab'
@@ -169,16 +174,25 @@ function audioInputArgs(source: string): string[] {
   return ['-f', 'f32le', '-ar', String(AUDIO_RATE), '-ac', '2', '-thread_queue_size', '4096', '-i', source]
 }
 
-/** Audio graph: one untouched source maps straight through; otherwise apply gains and mix. */
-function audioGraph(inputs: AudioInput[], firstIndex: number): { graph: string | null; map: string | null } {
-  if (!inputs.length) return { graph: null, map: null }
-  if (inputs.length === 1 && inputs[0].volume === 1) return { graph: null, map: `${firstIndex}:a` }
-  const legs = inputs.map((a, i) => `[${firstIndex + i}:a]volume=${a.volume.toFixed(2)}[a${i}]`)
-  const mix =
-    inputs.length === 1
-      ? '[a0]alimiter=limit=0.95[aout]'
-      : `${inputs.map((_, i) => `[a${i}]`).join('')}amix=inputs=${inputs.length}:duration=longest:normalize=0,alimiter=limit=0.95[aout]`
-  return { graph: [...legs, mix].join(';'), map: '[aout]' }
+/**
+ * Audio tracks of a recording. One source: just that track. Both: the mix first (so every player plays everything),
+ * then the computer sound and the microphone as tracks of their own, which the editor can use separately.
+ */
+function audioGraph(inputs: AudioInput[], firstIndex: number): { graph: string | null; maps: string[]; names: string[] } {
+  if (!inputs.length) return { graph: null, maps: [], names: [] }
+  if (inputs.length === 1) {
+    const only = inputs[0]
+    const name = TRACK_NAMES[only.kind]
+    if (only.volume === 1) return { graph: null, maps: [`${firstIndex}:a`], names: [name] }
+    return { graph: `[${firstIndex}:a]volume=${only.volume.toFixed(2)},alimiter=limit=0.95[aout]`, maps: ['[aout]'], names: [name] }
+  }
+  const legs = inputs.map((a, i) => `[${firstIndex + i}:a]volume=${a.volume.toFixed(2)},asplit=2[m${i}][t${i}]`)
+  const mix = `${inputs.map((_, i) => `[m${i}]`).join('')}amix=inputs=${inputs.length}:duration=longest:normalize=0,alimiter=limit=0.95[aout]`
+  return {
+    graph: [...legs, mix].join(';'),
+    maps: ['[aout]', ...inputs.map((_, i) => `[t${i}]`)],
+    names: [TRACK_NAMES.mix, ...inputs.map((a) => TRACK_NAMES[a.kind])]
+  }
 }
 
 export function buildRecordArgs(o: RecordArgsInput): string[] {
@@ -234,11 +248,12 @@ export function buildRecordArgs(o: RecordArgsInput): string[] {
   const graph = [`${videoLabel}${filters.join(',')}[v]`, audio.graph].filter(Boolean).join(';')
 
   args.push('-filter_complex', graph, '-map', '[v]')
-  if (audio.map) args.push('-map', audio.map)
+  for (const m of audio.maps) args.push('-map', m)
+  audio.names.forEach((n, i) => args.push(`-metadata:s:a:${i}`, `handler_name=${n}`))
   args.push('-fps_mode', 'cfr', '-r', String(o.fps))
   args.push(...encoderArgs(encoder, o.quality, out.width * out.height * o.fps, o.basicTuning), '-g', String(o.fps * 2))
   args.push(...COLOR_TAGS)
-  if (audio.map) args.push(...audioEncodeArgs(o.quality))
+  if (audio.maps.length) args.push(...audioEncodeArgs(o.quality))
   // Fragmented MP4 stays playable up to the last keyframe if the app or PC crashes mid-recording.
   // A deep muxing queue lets audio wait for a slow-starting video encoder instead of aborting.
   args.push('-max_muxing_queue_size', '8192', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof')

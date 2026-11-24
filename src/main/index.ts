@@ -668,7 +668,7 @@ async function ensureMacPermissions(s: Settings): Promise<void> {
       )
     }
   }
-  if (s.micEnabled) await systemPreferences.askForMediaAccess('microphone')
+  if (s.micEnabled || s.camera) await systemPreferences.askForMediaAccess('microphone')
   if (s.camera) await systemPreferences.askForMediaAccess('camera')
 }
 
@@ -775,9 +775,14 @@ async function startRecording(): Promise<void> {
   let cameraReady = false
   if (s.camera) {
     await new Promise((r) => setTimeout(r, 400)) // the panel's own preview lets go of the camera first (many cameras can only be opened by one thing)
-    const res = await audio.openCamera({ device: s.cameraDevice, mic: s.micEnabled ? s.micDevice : null })
-    if (res.ok) cameraReady = true
-    else warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${res.error ?? 'it could not be opened'}`
+    // The camera always records your voice with its picture (the microphone chosen for recording, or the computer's
+    // default one), so picture and sound are one recording and can never drift apart.
+    const camMic = (await audioConfig(s)).mic ?? 'default'
+    const res = await audio.openCamera({ device: s.cameraDevice, mic: camMic })
+    if (res.ok) {
+      cameraReady = true
+      if (res.hasAudio === false) warning = `${warning ? `${warning}\n` : ''}The camera is recording without its sound — the microphone could not be opened. Your voice will come from the screen recording instead.`
+    } else warning = `${warning ? `${warning}\n` : ''}Recording without the camera — ${res.error ?? 'it could not be opened'}`
   }
 
   const base = {

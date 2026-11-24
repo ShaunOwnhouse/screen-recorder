@@ -1,4 +1,4 @@
-import { isDrawn, isPlain, newCamera, newProject, type Clip, type Overlay } from '../shared/project.ts'
+import { isDrawn, isPlain, newCamera, newProject, SPEEDS, type Clip, type Overlay } from '../shared/project.ts'
 import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
 import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts'
 import { Actions } from './editor/actions.ts'
@@ -19,6 +19,7 @@ const stageMsg = $('stage-msg')
 const nameInput = $<HTMLInputElement>('name')
 const compat = $<HTMLInputElement>('compat')
 const formatSel = $<HTMLSelectElement>('format')
+const speedSel = $<HTMLSelectElement>('speed')
 const noticeEl = $('format-notice')
 const busy = $('busy')
 const busyTitle = $('busy-title')
@@ -302,13 +303,14 @@ async function init(): Promise<void> {
   }
   src = loaded.source
   const m = src.meta
-  const initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio })
+  const initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, tracks: src.tracks })
   if (src.camera) {
     const c = src.camera.info
     initial.camera = newCamera({ media: c.id, name: c.name, duration: c.duration, width: c.width, height: c.height, hasAudio: c.hasAudio }, src.camera.offset, m.width / m.height)
   }
   store = new Store(initial, m, src.brand)
   if (src.camera) store.media.set(src.camera.info.id, src.camera.info)
+  for (const t of src.trackFiles) store.media.set(t.id, t)
   store.media.set('recording', { id: 'recording', name: 'Recording', kind: 'video', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, url: src.url })
   void loadBrandFonts(src.brand)
 
@@ -385,6 +387,18 @@ async function init(): Promise<void> {
     })
   )
   formatSel.value = src.format
+  speedSel.replaceChildren(
+    ...SPEEDS.map((v) => new Option(v === 1 ? '1× (as recorded)' : v < 1 ? `${v}× (slower)` : `${v}× (faster)`, String(v)))
+  )
+  speedSel.value = '1'
+  speedSel.addEventListener('change', () => {
+    const v = Number(speedSel.value)
+    store.edit((p) => (p.speed === v ? null : { ...p, speed: v }))
+    note(v === 1 ? 'The saved video plays at the normal speed.' : `The saved video will play at ${v}× speed (this preview stays at normal speed). It will be ${fmtTime(store.duration / v)} long.`)
+  })
+  store.on((what) => {
+    if (what === 'project') speedSel.value = String(store.project.speed)
+  })
   formatSel.addEventListener('change', renderFormat)
   $('use-default').addEventListener('click', () => {
     formatSel.value = 'mp4'

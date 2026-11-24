@@ -95,20 +95,23 @@ test('audio from the PCM pipe is muxed as AAC alongside video', { timeout: 12000
   inTemp((dir) => {
     const pcm = join(dir, 'audio.f32')
     run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-ac', '2', '-f', 'f32le', pcm])
-    const info = probe(record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, audio: [{ url: pcm, volume: 1 }] }, 2))
+    const info = probe(record(dir, { rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, audio: [{ url: pcm, volume: 1, kind: 'mic' as const }] }, 2))
     assert.match(info, /Audio: aac \(LC\).*48000 Hz, stereo/)
   }))
 
-test('two audio sources are mixed into one track', { timeout: 120000 }, () =>
+test('two audio sources are recorded as a mix plus a track for each, named', { timeout: 120000 }, () =>
   inTemp((dir) => {
     const a = join(dir, 'a.f32')
     const b = join(dir, 'b.f32')
     run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-ac', '2', '-f', 'f32le', a])
     run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=2', '-ac', '2', '-f', 'f32le', b])
-    const out = record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, audio: [{ url: a, volume: 1 }, { url: b, volume: 0.5 }] }, 2)
+    const out = record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, audio: [{ url: a, volume: 1, kind: 'pc' as const }, { url: b, volume: 0.5, kind: 'mic' as const }] }, 2)
     const info = probe(out)
-    assert.equal((info.match(/Stream #0:\d.*Audio:/g) ?? []).length, 1)
+    assert.equal((info.match(/Stream #0:\d.*Audio:/g) ?? []).length, 3, 'mix + computer sound + microphone')
     assert.match(info, /Audio: aac/)
+    assert.match(info, /handler_name\s*:\s*Mix/)
+    assert.match(info, /handler_name\s*:\s*Computer sound/)
+    assert.match(info, /handler_name\s*:\s*Microphone/)
   }))
 
 test('audio streamed over a unix socket (the macOS path) is recorded', { skip: process.platform === 'win32', timeout: 120000 }, async () => {
@@ -125,7 +128,7 @@ test('audio streamed over a unix socket (the macOS path) is recorded', { skip: p
     const args = withSyntheticInput(
       buildRecordArgs({
         backend: 'gdigrab', rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, outputHeight: null, quality: 'veryhigh',
-        encoder: 'libx264', audio: [{ url: `unix:${sock}`, volume: 1 }], showCursor: true, outputPath: temp
+        encoder: 'libx264', audio: [{ url: `unix:${sock}`, volume: 1, kind: 'mic' as const }], showCursor: true, outputPath: temp
       }),
       30,
       2
@@ -168,9 +171,9 @@ test('studio recordings keep lossless ALAC audio; maximum uses 320k AAC', { time
   inTemp((dir) => {
     const pcm = join(dir, 'a.f32')
     run(['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-ac', '2', '-f', 'f32le', pcm])
-    const studio = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'studio', audio: [{ url: pcm, volume: 1 }] }, 2))
+    const studio = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'studio', audio: [{ url: pcm, volume: 1, kind: 'mic' as const }] }, 2))
     assert.match(studio, /Audio: alac/)
-    const max = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'maximum', audio: [{ url: pcm, volume: 1 }] }, 2))
+    const max = probe(record(dir, { rect: { x: 0, y: 0, width: 640, height: 360 }, fps: 30, quality: 'maximum', audio: [{ url: pcm, volume: 1, kind: 'mic' as const }] }, 2))
     assert.match(max, /Audio: aac \(LC\).*48000 Hz, stereo/)
   }))
 
@@ -183,7 +186,7 @@ function recordPiece(dir: string, n: number, seconds: number, o: Partial<RecordA
   const out = join(dir, `piece${n}.recording.mp4`)
   const args = buildRecordArgs({
     backend: 'gdigrab', rect: { x: 0, y: 0, width: 1280, height: 720 }, fps: 30, outputHeight: null, quality: 'veryhigh', encoder: 'libx264',
-    audio: [{ url: pcm, volume: 1 }], showCursor: true, ...o, outputPath: out
+    audio: [{ url: pcm, volume: 1, kind: 'mic' as const }], showCursor: true, ...o, outputPath: out
   })
   run(withSyntheticInput(args, o.fps ?? 30, seconds))
   return out

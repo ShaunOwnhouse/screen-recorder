@@ -465,3 +465,80 @@ test('sounds and clips can be split, trimmed and duplicated', () => {
   assert.equal(clipCopy.project.clips.length, 2)
   assert.notEqual(clipCopy.project.clips[1].id, p.clips[0].id)
 })
+
+/** The dominant pitch of the first seconds of a file (zero crossings), a cheap way to tell sounds apart. */
+function pitch(file: string, from = 0, len = 2): number {
+  const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-ss', String(from), '-t', String(len), '-i', file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 })
+  const b = r.stdout
+  let crossings = 0
+  let prev = 0
+  for (let i = 0; i + 1 < b.length; i += 2) {
+    const v = b.readInt16LE(i)
+    if (prev < 0 && v >= 0) crossings++
+    prev = v
+  }
+  return crossings / len
+}
+
+function toneFile(dir: string, name: string, hz: number, secs: number): string {
+  const path = join(dir, name)
+  run(['-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=48000`, '-t', String(secs), '-c:a', 'aac', path])
+  return path
+}
+
+/** A recording that holds the computer's sound (440 Hz) and the microphone (880 Hz) as tracks of their own, plus the mix. */
+function twoTrackSetup(dir: string): Setup {
+  const s = recordingSetup(dir, 4, { tone: 660 })
+  s.project.tracks = { pc: true, mic: true }
+  s.media['recording-pc'] = { path: toneFile(dir, 'pc.m4a', 440, 4), kind: 'video', hasAudio: true, duration: 4, width: 0, height: 0 }
+  s.media['recording-mic'] = { path: toneFile(dir, 'mic.m4a', 880, 4), kind: 'video', hasAudio: true, duration: 4, width: 0, height: 0 }
+  return s
+}
+
+test('a recording can use its computer sound alone, its microphone alone, or the mix', { timeout: 120000 }, inTemp((dir) => {
+  const s = twoTrackSetup(dir)
+  const hz = (src: 'mix' | 'pc' | 'mic'): number => {
+    s.project.clips[0].audioSource = src
+    return pitch(exportIt(dir, s).file)
+  }
+  assert.ok(Math.abs(hz('mix') - 660) < 70, 'the mix as recorded')
+  assert.ok(Math.abs(hz('pc') - 440) < 50, 'computer sound only')
+  assert.ok(Math.abs(hz('mic') - 880) < 90, 'microphone only')
+}))
+
+test('using the webcam\'s voice keeps the computer sound and drops only the recorded microphone', { timeout: 120000 }, inTemp((dir) => {
+  const s = withCamera(dir, 'circle', { hasAudio: true, audio: true })
+  const two = twoTrackSetup(dir)
+  s.media = { ...two.media, camera: { path: makeVideo(dir, 'cam3.mp4', 4, { tone: 1320 }), kind: 'video', hasAudio: true, duration: 4, width: 640, height: 480 } }
+  s.project.tracks = { pc: true, mic: true }
+  const out = exportIt(dir, s)
+  // both the computer's 440 Hz and the webcam's 1320 Hz are heard; the microphone's 880 Hz is not
+  const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-t', '3', '-i', out.file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 })
+  const b = r.stdout
+  const n = 8000
+  const power = (hz: number): number => {
+    let re = 0
+    let im = 0
+    for (let i = 0; i < n * 2; i++) {
+      const v = b.readInt16LE(i * 2) / 32768
+      re += v * Math.cos((2 * Math.PI * hz * i) / n)
+      im += v * Math.sin((2 * Math.PI * hz * i) / n)
+    }
+    return Math.hypot(re, im) / n
+  }
+  assert.ok(power(440) > 0.02, `computer sound present: ${power(440)}`)
+  assert.ok(power(1320) > 0.02, `webcam voice present: ${power(1320)}`)
+  assert.ok(power(880) < 0.005, `the recorded microphone is gone: ${power(880)}`)
+}))
+
+test('the finished video can be sped up or slowed down, sound and picture together', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4, { tone: 440 })
+  for (const [speed, want] of [[2, 2], [0.5, 8], [4, 1]] as const) {
+    s.project.speed = speed
+    const out = exportIt(dir, s)
+    assert.ok(Math.abs(seconds(out.file) - want) < 0.35, `${speed}× → ${seconds(out.file)} s, wanted ${want}`)
+    assert.ok(Math.abs(out.seconds - want) < 0.01)
+    // atempo keeps the pitch the same
+    assert.ok(Math.abs(pitch(out.file, 0.1, 0.5) - 440) < 60, `${speed}× pitch ${pitch(out.file, 0.1, 0.5)}`)
+  }
+}))

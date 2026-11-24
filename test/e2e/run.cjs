@@ -885,6 +885,7 @@ async function save(app, editor, name) {
         check('Camera: its picture is not blank', (() => { const r = ff(['-hide_banner', '-i', camPath, '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YDIF', '-f', 'null', '-']); return /YDIF/.test(r.stderr) || fullDecode(camPath).ok })())
       }
       const src = await editor.evaluate(() => window.editor.load())
+      check('Camera: the review window knows which sounds the recording holds', !!src.source?.tracks && (src.source.tracks.pc || src.source.tracks.mic), JSON.stringify(src.source?.tracks ?? null))
       check('Camera: the review window is told about it', !!src.source?.camera && src.source.camera.info.duration > 1, JSON.stringify(src.source?.camera ?? null))
 
       // ---- in the editor ----
@@ -914,10 +915,14 @@ async function save(app, editor, name) {
       let st = await editorState(editor)
       const cam0 = await editor.evaluate(() => window.__editor.store.project.camera)
       check(`${T}: shape, size and corner can be changed`, cam0.shape === 'rounded' && Math.abs(cam0.w - 0.3) < 0.01 && cam0.x < 0.05 && cam0.y < 0.08, JSON.stringify({ shape: cam0.shape, w: cam0.w, x: cam0.x, y: cam0.y }))
-      // drag it somewhere else on the video
+      // drag it somewhere else on the video (let the preview settle after the changes above first)
+      await sleep(400)
       g = await geom()
+      { const fb2 = await editor.locator('#frame').boundingBox(); log(`frame before ${JSON.stringify(fb)} now ${JSON.stringify(fb2)}`); fb.x = fb2.x; fb.y = fb2.y; fb.width = fb2.width; fb.height = fb2.height }
       await editor.mouse.move(fb.x + (g.x + g.w / 2) * fb.width, fb.y + (g.y + g.h / 2) * fb.height)
+      log('under the mouse: ' + (await editor.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); return e ? `${e.tagName}.${e.className}#${e.id} ${JSON.stringify(window.__editor.store.selection)}` : 'none' }, [fb.x + (g.x + g.w / 2) * fb.width, fb.y + (g.y + g.h / 2) * fb.height])) + ' ' + JSON.stringify(g))
       await editor.mouse.down()
+      await sleep(120)
       await editor.mouse.move(fb.x + (g.x + g.w / 2) * fb.width + fb.width * 0.35, fb.y + (g.y + g.h / 2) * fb.height + fb.height * 0.25, { steps: 8 })
       await editor.mouse.up()
       const moved = await editor.evaluate(() => window.__editor.store.project.camera)
@@ -1053,6 +1058,20 @@ async function save(app, editor, name) {
       const left = fs.readdirSync(path.join(userData, 'pending')).filter((f) => /\.mp4$/i.test(f))
       check('Discard: recording deleted and nothing left to review', !st.pending && left.length === 0, `pending=${st.pending}, files=${left.join(',')}`)
       check('Discard: nothing was saved to the output folder', !fs.existsSync(path.join(outDir, 'Recording discard.mp4')))
+    }
+
+    // 8b) Speed: the finished video can be sped up or slowed down as a whole
+    if (only('speed')) {
+      const { editor } = await record(app, main, 'speed', { seconds: 6 })
+      const opts = await editor.$$eval('#speed option', (o) => o.map((x) => x.value))
+      check('Speed: the save bar offers speeds, with 1× chosen', opts.includes('0.5') && opts.includes('2') && (await editor.inputValue('#speed')) === '1', opts.join(','))
+      const before = (await editorState(editor)).duration
+      await editor.selectOption('#speed', '2')
+      check('Speed: choosing 2× is remembered by the project', (await editor.evaluate(() => window.__editor.store.project.speed)) === 2)
+      const out = await save(app, editor, 'e2e-speed')
+      const secs = (() => { const m = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(info(out)); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : 0 })()
+      check('Speed: the saved video is half as long at 2×', Math.abs(secs - before / 2) < 0.8, `${secs.toFixed(2)} s vs ${(before / 2).toFixed(2)} s`)
+      validate('Saved at double speed', out, { audio: true, minSeconds: before / 2 - 0.8, maxSeconds: before / 2 + 0.8 })
     }
 
     // 9) Other save formats: the default stays MP4 · H.264; everything else warns, and really converts
