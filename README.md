@@ -30,11 +30,16 @@ Windows' built-in Snipping Tool recorder encodes at a low bitrate, which blurs t
 - **Nothing is saved without your approval.** When you stop, the recording opens in a review window where you can:
   - preview it, and **cut** it (Split at the playhead, delete a piece and the gap closes, drag the ends of a piece to trim; Undo / Redo for everything)
   - add **comments and callouts** that appear for as long as you choose: speech bubbles, sticky notes, plain text, arrows, highlight boxes, numbered steps, a **spotlight** that darkens everything except one spot, **blur / pixels** to hide private details, and **zoom in on an area** that glides in and back out. Drag them on the video, change colour / size / font / timing in the side panel, and they can fade in and out
-  - add **other videos and pictures** (into the video at the playhead, with an optional cross-fade, or in a small **picture-in-picture** window), and **title cards** (dark, gradient or your brand colour)
+  - a **multi-track timeline** like Canva and Clipchamp: every kind of file has rows of its own. Videos and pictures go on **video tracks** (the top row is in front), sounds on **audio tracks**, and the **+ Video track** / **+ Audio track** buttons add more rows. Slide any piece along its row or up and down to another row (it snaps to the playhead and to other pieces), drag its ends to trim it. Each row has **hide**, **mute** and **lock** buttons. **Duplicate** puts the copy on its own row above, so it can be slid before the original. A small window on the video (**picture-in-picture**) is just a piece shown small: drag it on the video, resize it by its corner
+  - **speed of each piece**: every video, picture-in-picture and sound has its own *Speed* (¼× to 4×), with its sound following; the saved video also has an overall *Speed* box
+  - **fade in / out** of any piece, from or to black, white, one of your brand colours, or see-through (so the row behind shows)
+  - **drag the bars** between the picture, the timeline and the side panels to give any of them more room (double-click a bar to reset it)
+  - **Preview final video** makes a small, quick copy with every edit, the speeds and the sound, to watch before saving
+  - after saving the editor **stays open** (*Keep editing* / *Finish*), so a mistake can be put right and saved again
   - add **as many audio files as you like** (music, voice-overs, sounds) — each is its own bar under the video: drag to move, drag its ends to trim, **Split**, **Duplicate**, volume, fade in / out, repeat, and *quieter while someone speaks*
   - **Separate the sound** of any video or of your recording into a sound of its own, then move, cut, turn down or save it
   - **Save pieces on their own**: a video without its sound, just its sound (MP3 / WAV / M4A), or the camera's picture or voice
-  - **Duplicate** any piece of video, comment or sound (Ctrl+D)
+  - **Duplicate** any piece of video, comment or sound (Ctrl+D); **Delete** closes the gap on every row, **Shift+Delete** leaves a gap
   - **Speed** of the whole finished video, from a quarter speed to four times faster (sound follows without changing pitch)
   - set your own **brand colours and fonts** (Your brand… in the side panel) that are offered everywhere you can colour or write something
   - crop it (free-form or 16:9 / 9:16 / 1:1 / 4:3)

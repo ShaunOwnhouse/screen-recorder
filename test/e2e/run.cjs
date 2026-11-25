@@ -463,7 +463,7 @@ async function seekTo(editor, t) {
 
 const editorState = (editor) => editor.evaluate(() => {
   const s = window.__editor.store
-  return { duration: s.duration, playhead: s.playhead, clips: s.project.clips.map((c) => ({ id: c.id, name: c.name, kind: c.kind, in: c.in, out: c.out, transition: c.transition })),
+  return { duration: s.duration, playhead: s.playhead, clips: s.project.clips.map((c) => ({ id: c.id, name: c.name, kind: c.kind, in: c.in, out: c.out, track: c.track, start: c.start, speed: c.speed, fadeIn: c.fadeIn, fadeOut: c.fadeOut, box: c.box })),
     overlays: s.project.overlays.map((o) => ({ ...o })), sounds: s.project.sounds, crop: s.project.crop, out: s.outputSize, brand: s.brand, selection: s.selection }
 })
 

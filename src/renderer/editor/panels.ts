@@ -339,13 +339,14 @@ export class Panels {
   }
 
   /** Fade in or out: how long, and into what: black, white, a brand colour, or see-through (the track behind shows). */
-  private fadeRow(label: string, f: Fade, pick: (f: Fade) => void, id: string): HTMLElement {
+  private fadeRow(label: string, current: () => Fade, pick: (f: Fade) => void, id: string): HTMLElement {
+    const f = current()
     const colours: Array<[string, string]> = [['#000000', 'Black'], ['#ffffff', 'White'], [DISSOLVE, 'See-through (dissolve)'], ...this.store.brand.colors.map((c): [string, string] => [c, `Brand ${c}`])]
-    const sel = select(colours, f.color, (v) => pick({ ...f, color: v }), `${id}-colour`)
+    const sel = select(colours, f.color, (v) => pick({ ...current(), color: v }), `${id}-colour`)
     if (![...sel.options].some((o) => o.value === f.color)) sel.add(new Option(f.color, f.color), 0), (sel.value = f.color)
     return section(label,
-      range(f.dur, 0, 5, 0.1, (v) => pick({ ...f, dur: Math.round(v * 10) / 10 }), (v) => (v < 0.05 ? 'None' : `${v.toFixed(1)} s`), `${id}-dur`),
-      f.dur > 0.02 ? sel : h('span'))
+      range(f.dur, 0, 5, 0.1, (v) => pick({ ...current(), dur: Math.round(v * 10) / 10 }), (v) => (v < 0.05 ? 'None' : `${v.toFixed(1)} s`), `${id}-dur`),
+      sel)
   }
 
   private clipProps(c: Clip): HTMLElement[] {
@@ -379,8 +380,8 @@ export class Panels {
     }
     // fade from / to a colour at the start and end of the piece
     out.push(
-      this.fadeRow('Fade in from', c.fadeIn, (f) => patch({ fadeIn: f }, `fi:${c.id}`), 'prop-fade-in'),
-      this.fadeRow('Fade out to', c.fadeOut, (f) => patch({ fadeOut: f }, `fo:${c.id}`), 'prop-fade-out')
+      this.fadeRow('Fade in from', () => s.project.clips.find((x) => x.id === c.id)!.fadeIn, (f) => patch({ fadeIn: f }, `fi:${c.id}`), 'prop-fade-in'),
+      this.fadeRow('Fade out to', () => s.project.clips.find((x) => x.id === c.id)!.fadeOut, (f) => patch({ fadeOut: f }, `fo:${c.id}`), 'prop-fade-out')
     )
     // where it sits in the picture
     if (!c.card) {

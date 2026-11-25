@@ -23,7 +23,7 @@ async function editorSuite(c) {
 
   // ---- the screen ----
   check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
-  check(`${tag}: the timeline has Video, Comments and Sounds rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Sounds/.test(await editor.textContent('#label-music')))
+  check(`${tag}: the timeline has Video, Comments and Audio rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Audio/.test(await editor.textContent('#label-music')))
   check(`${tag}: the preview shows the picture`, (await editor.locator('#layers video').count()) >= 1 && (await editor.locator('#frame').boundingBox()).width > 100)
   const start = await state()
 
@@ -156,10 +156,29 @@ async function editorSuite(c) {
   await editor.waitForFunction(() => window.__editor.store.project.clips.some((c) => c.media !== 'recording'), null, { timeout: 15000 })
   s = await state()
   const added = s.clips.find((k) => k.name === 'blue clip.mp4')
-  check(`${tag}: a video can be added into the middle`, !!added && approx(s.duration, durBefore + 3, 0.2) && s.clips.length >= 3, `${durBefore.toFixed(2)}→${s.duration.toFixed(2)}s, ${s.clips.length} pieces`)
-  await editor.check('#prop-transition')
+  const recTrack = s.clips.find((k) => k.name === 'Recording')?.track
+  check(`${tag}: a video added in the middle goes on a new row in front, at the playhead`, !!added && added.track !== recTrack && approx(added.start, D * 0.5, 0.2) && (await editor.locator('.tl-track.video').count()) === 2, `${added?.start}s, ${(await editor.locator('.tl-track.video').count())} video rows`)
+  check(`${tag}: and the recording under it is untouched`, approx(s.clips.filter((k) => k.name === 'Recording').reduce((m, k) => m + (k.out - k.in), 0), durBefore, 0.2))
+  // fade in from a colour, and out to another
+  await editor.locator('#prop-fade-in-dur').fill('1')
+  await editor.selectOption('#prop-fade-in-colour', 'dissolve')
+  await editor.locator('#prop-fade-out-dur').fill('0.8')
+  await editor.selectOption('#prop-fade-out-colour', '#ffffff')
   s = await state()
-  check(`${tag}: it can fade in from the piece before (the two overlap)`, s.clips.find((k) => k.name === 'blue clip.mp4').transition === 'fade' && approx(s.duration, durBefore + 3 - 0.5, 0.2), `${s.duration.toFixed(2)}s`)
+  const faded = s.clips.find((k) => k.name === 'blue clip.mp4')
+  check(`${tag}: a piece can fade in (see-through) and out (to white)`, approx(faded.fadeIn.dur, 1, 0.01) && faded.fadeIn.color === 'dissolve' && approx(faded.fadeOut.dur, 0.8, 0.01) && faded.fadeOut.color === '#ffffff', JSON.stringify([faded.fadeIn, faded.fadeOut]))
+  // speed of one piece
+  await editor.locator('#prop-speed').fill('2')
+  s = await state()
+  const fastClip = s.clips.find((k) => k.name === 'blue clip.mp4')
+  check(`${tag}: a single piece can be sped up (it gets shorter on the timeline)`, approx(fastClip.speed, 2, 0.01) && approx((fastClip.out - fastClip.in) / fastClip.speed, 1.5, 0.05), `${fastClip.speed}×`)
+  // duplicating puts the copy on its own row, so it can be slid before the original
+  await editor.click('#prop-clip-duplicate')
+  s = await state()
+  const copies = s.clips.filter((k) => k.name === 'blue clip.mp4')
+  check(`${tag}: a copy goes on a row of its own, above`, copies.length === 2 && copies[0].track !== copies[1].track, copies.map((k) => k.track).join(' / '))
+  await editor.click('#undo')
+  await editor.click('.blk.clip >> nth=0')
   await answerPicker(app, [pic])
   await editor.click('#add-media')
   await editor.waitForFunction(() => window.__editor.store.project.clips.some((c) => c.kind === 'image'), null, { timeout: 15000 })
@@ -168,14 +187,19 @@ async function editorSuite(c) {
   check(`${tag}: a picture can be added and is shown for 5 seconds`, !!still && approx(still.out - still.in, 5, 0.05))
   await answerPicker(app, [clip])
   await editor.click('#add-pip')
-  await editor.waitForFunction(() => window.__editor.store.project.overlays.some((o) => o.kind === 'pip'), null, { timeout: 15000 })
-  await sleep(800)
-  check(`${tag}: a video can be shown in a small window (picture-in-picture)`, (await editor.locator('#pips .pip:visible').count()) === 1)
-  await store(() => {
-    const st = window.__editor.store
-    const D = st.duration
-    st.edit((p) => ({ ...p, overlays: p.overlays.map((o) => (o.kind === 'pip' ? { ...o, start: Math.round(0.7 * D * 30) / 30, end: Math.round(0.95 * D * 30) / 30 } : o)) }))
-  })
+  await editor.waitForFunction(() => window.__editor.store.project.clips.some((c) => c.box.w < 0.99), null, { timeout: 15000 })
+  await sleep(500)
+  check(`${tag}: a video can be shown in a small window (picture-in-picture)`, (await editor.locator('#layers video:visible').count()) >= 1 && (await editor.isVisible('#sel')))
+  // the "+" buttons add rows
+  const vRows = await editor.locator('.tl-track.video').count()
+  await editor.click('#add-video-track')
+  const aRows = await editor.locator('.tl-track.audio').count()
+  await editor.click('#add-audio-track')
+  check(`${tag}: the "+" buttons add a video row and an audio row`, (await editor.locator('.tl-track.video').count()) === vRows + 1 && (await editor.locator('.tl-track.audio').count()) === aRows + 1)
+  // mute / hide / lock buttons on a row
+  await editor.click('#label-video [data-act="lock"]')
+  check(`${tag}: a row can be locked`, (await editor.locator('#label-video [data-act="lock"].on').count()) === 1)
+  await editor.click('#label-video [data-act="lock"]')
 
   // ---- sounds: several at once, each on its own ----
   await editor.click('#tool-music')
@@ -209,13 +233,13 @@ async function editorSuite(c) {
   check(`${tag}: a sound can be removed`, s.sounds.length === 1, `${s.sounds.length}`)
 
   // ---- separate a clip's sound, and save pieces on their own ----
-  const blueIdx = (await state()).clips.findIndex((x) => x.name === 'blue clip.mp4')
-  if (blueIdx >= 0) {
+  const blueId = (await state()).clips.find((x) => x.name === 'blue clip.mp4')?.id
+  if (blueId) {
     const before = (await state()).sounds.length
-    await editor.click(`.blk.clip >> nth=${blueIdx}`)
+    await editor.click(`.blk.clip[data-clip="${blueId}"]`)
     await editor.click('#prop-detach')
     s = await state()
-    const blue = await editor.evaluate((i) => window.__editor.store.project.clips[i], blueIdx)
+    const blue = await editor.evaluate((id) => window.__editor.store.project.clips.find((c) => c.id === id), blueId)
     check(`${tag}: a video's sound can be separated into a sound of its own`, s.sounds.length === before + 1 && blue.hasAudio === false && s.sounds.some((m) => m.origin === 'split' && m.length > 0.05), JSON.stringify({ n: s.sounds.length, audio: blue.hasAudio, sounds: s.sounds.map((m) => ({ o: m.origin, media: m.media, start: m.start, length: m.length })), blue: { in: blue.in, out: blue.out, name: blue.name } }))
     check(`${tag}: the separated sound is a bar of its own in the timeline`, (await editor.locator('.blk.music-blk.split-blk').count()) === 1)
     await editor.click('#undo')
