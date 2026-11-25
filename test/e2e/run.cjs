@@ -993,7 +993,7 @@ async function save(app, editor, name) {
       const { editor } = await record(app, main, 'edit', { seconds: 6 })
       await editorSuite({
         app, editor, main, check, warn, log, sleep, userData, ff, FFMPEG, save, validate, seekTo, editorState, answerPicker, pixelAt, nearColour,
-        cutFirstThird, isWin
+        cutFirstThird, isWin, shot
       })
     }
 

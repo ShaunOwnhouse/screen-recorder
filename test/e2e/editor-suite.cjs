@@ -5,7 +5,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 async function editorSuite(c) {
-  const { app, editor, main, check, warn, log, sleep, userData, ff, FFMPEG, save, validate, seekTo, editorState, answerPicker, pixelAt, nearColour, cutFirstThird, isWin } = c
+  const { app, editor, main, check, warn, log, sleep, userData, ff, FFMPEG, save, validate, seekTo, editorState, answerPicker, pixelAt, nearColour, cutFirstThird, isWin, shot } = c
   const state = () => editorState(editor)
   const store = (fn, arg) => editor.evaluate(fn, arg)
   const tag = 'Editor'
@@ -311,6 +311,7 @@ async function editorSuite(c) {
   const [cw, ch] = [s.out.width, s.out.height]
   log(`editor: ${s.duration.toFixed(1)} s, ${cw}×${ch}, ${s.overlays.length} overlays, ${s.clips.length} pieces, sounds ${s.sounds?.map((m) => m.name).join(', ')}`)
 
+  await shot(editor, 'editor-tracks')
   // ---- save ----
   const saveDuration = s.duration
   const file = await save(app, editor, 'e2e-edited')
