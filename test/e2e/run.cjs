@@ -491,7 +491,8 @@ const nearColour = (a, b, tol = 40) => !!a && a.every((v, i) => Math.abs(v - b[i
 /** After a save the editor stays open (to keep editing); click Finish, then wait for it to go. */
 async function finishSaved(app, editor, ms) {
   await editor.waitForSelector('#saved:not([hidden])', { timeout: ms })
-  await editor.click('#saved-finish', { noWaitAfter: true })
+  // the window can close before the click has finished being reported: that is the click working
+  await editor.click('#saved-finish', { noWaitAfter: true }).catch((e) => { if (!/closed/i.test(String(e))) throw e })
   await waitGone(app, 'editor.html', ms)
 }
 
