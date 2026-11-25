@@ -106,8 +106,6 @@ export function boundsOf(o: Overlay, f: Frame): Box {
     }
     case 'step':
       return { x: o.x * f.W - o.size * 0.8, y: o.y * f.H - o.size * 0.8, w: o.size * 1.6, h: o.size * 1.6 }
-    case 'pip':
-      return { x: o.x * f.W, y: o.y * f.H, w: o.w * f.W, h: (o.w * f.W * (o.height || 9)) / (o.width || 16) }
     default:
       return { x: o.x * f.W, y: o.y * f.H, w: o.w * f.W, h: o.h * f.H }
   }

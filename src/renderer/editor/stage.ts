@@ -1,4 +1,4 @@
-import { cameraBox, cameraPieces, type Overlay, type TextOverlay } from '../../shared/project.ts'
+import { activeClips, cameraBox, cameraPieces, isFullBox, trackById, type Clip, type Overlay, type TextOverlay } from '../../shared/project.ts'
 import type { Rect } from '../../shared/types.ts'
 import { boundsOf, frameFor } from './draw.ts'
 import type { Player } from './player.ts'
@@ -70,6 +70,32 @@ export class Stage {
     return null
   }
 
+  /** Pieces shown as small windows over the picture at the playhead, front first (the others fill the whole picture, so a click on them just plays). */
+  private hitClip(fx: number, fy: number): Clip | null {
+    const s = this.store
+    const list = activeClips(s.project, s.playhead).filter((c) => !isFullBox(c.box) && !c.card && !trackById(s.project, c.track)?.hidden && !trackById(s.project, c.track)?.locked)
+    for (const c of list.reverse()) {
+      const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+      if (fx >= c.box.x && fx <= c.box.x + c.box.w && fy >= c.box.y && fy <= c.box.y + h) return c
+    }
+    return null
+  }
+
+  private startMoveClip(c: Clip, e: PointerEvent): void {
+    const s = this.store
+    const r = this.rect()
+    const x0 = e.clientX
+    const y0 = e.clientY
+    const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+    this.drag = (ev) => {
+      s.patchClip(
+        c.id,
+        { box: { ...c.box, x: clampNum(c.box.x + (ev.clientX - x0) / r.width, 0, 1 - c.box.w), y: clampNum(c.box.y + (ev.clientY - y0) / r.height, 0, Math.max(0, 1 - h)) } },
+        `clipbox:${c.id}`
+      )
+    }
+  }
+
   private down(e: PointerEvent): void {
     if (e.button !== 0 || this.store.cropMode) return
     const target = e.target as HTMLElement
@@ -87,6 +113,13 @@ export class Stage {
     if (o) {
       this.store.select({ kind: 'overlay', id: o.id })
       this.startMove(o, e)
+      e.preventDefault()
+      return
+    }
+    const win = this.hitClip(fx, fy)
+    if (win) {
+      this.store.select({ kind: 'clip', id: win.id })
+      this.startMoveClip(win, e)
       e.preventDefault()
       return
     }
@@ -188,12 +221,42 @@ export class Stage {
     return true
   }
 
+  /** The selection box for a piece shown as a small window: drag it to move it, the corner to resize it. */
+  private renderClipSelection(): boolean {
+    const s = this.store
+    const c = s.selectedClip
+    const host = this.els.sel
+    if (!c || isFullBox(c.box) || c.card || s.cropMode) return false
+    const t = s.playhead
+    if (!activeClips(s.project, t).some((x) => x.id === c.id)) return false
+    const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+    host.hidden = false
+    host.replaceChildren()
+    host.className = 'sel-box k-camera'
+    Object.assign(host.style, { left: `${c.box.x * 100}%`, top: `${c.box.y * 100}%`, width: `${c.box.w * 100}%`, height: `${h * 100}%` })
+    const g = document.createElement('i')
+    g.className = 'h h-se'
+    g.dataset.grab = '1'
+    g.style.cursor = 'nwse-resize'
+    g.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const r = this.rect()
+      const x0 = e.clientX
+      const w0 = c.box.w
+      this.drag = (ev) => s.patchClip(c.id, { box: { ...c.box, w: clampNum(w0 + (ev.clientX - x0) / r.width, 0.08, Math.max(0.1, 1 - c.box.x)) } }, `clipsize:${c.id}`)
+    })
+    host.append(g)
+    return true
+  }
+
   render(): void {
     const s = this.store
     const o = s.selectedOverlay
     const host = this.els.sel
     this.renderCrop()
     if (this.renderCameraSelection()) return
+    if (!o && this.renderClipSelection()) return
     if (!o || s.cropMode || s.playhead < o.start - 1e-6 || s.playhead >= o.end + 1e-6) {
       host.hidden = true
       return
@@ -266,9 +329,6 @@ export class Stage {
         })
         host.append(g)
       }
-    } else if (o.kind === 'pip') {
-      const g = grip('h h-se', 'nwse-resize', (dx, _dy, orig) => ({ w: clampNum(orig.w + dx, 0.08, Math.max(0.1, 1 - orig.x)) }))
-      host.append(g)
     }
   }
 

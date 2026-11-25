@@ -373,7 +373,11 @@ async function init(): Promise<void> {
   timeline = new Timeline(store, $('timeline'), {
     strip: (id) => api.strip(id, 60),
     wave: (id) => api.waveform(id, 700),
-    sourceLength: (c) => (c.kind === 'recording' ? m.duration : c.kind === 'image' ? null : (store.media.get(c.media)?.duration ?? null))
+    sourceLength: (c) => (c.kind === 'recording' ? m.duration : c.kind === 'image' ? null : (store.media.get(c.media)?.duration ?? null)),
+    setTrack: (id, patch) => actions.setTrack(id, patch),
+    addVideoTrack: () => actions.newVideoTrack(),
+    addAudioTrack: () => actions.newAudioTrack(),
+    removeTrack: (id) => actions.deleteTrack(id)
   })
   actions.onReveal = (t) => timeline.reveal(t)
 

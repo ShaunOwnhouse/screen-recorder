@@ -1,4 +1,4 @@
-import { layout, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project, type Sound } from '../../shared/project.ts'
+import { activeClips, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project, type Sound } from '../../shared/project.ts'
 import type { Brand, MediaInfo, RecordingMeta } from '../../shared/types.ts'
 
 export type Tool = 'comments' | 'shapes' | 'media' | 'music' | 'titles' | 'cut' | 'crop'
@@ -47,7 +47,7 @@ export class Store {
   }
 
   get duration(): number {
-    return totalDuration(this.project.clips)
+    return totalDuration(this.project)
   }
 
   /** Rounds a time to a whole video frame, so cuts land exactly on one. */
@@ -201,12 +201,9 @@ export class Store {
     }
   }
 
-  /** The clip (and where it sits) that the playhead is in. */
-  placedNow(): ReturnType<typeof layout>[number] | null {
-    const placed = layout(this.project.clips)
-    let hit = placed[0] ?? null
-    for (const p of placed) if (this.playhead >= p.start - 1e-6) hit = p
-    return hit
+  /** The pieces showing at the playhead, from the back of the picture to the front. */
+  activeNow(): Clip[] {
+    return activeClips(this.project, this.playhead)
   }
 }
 

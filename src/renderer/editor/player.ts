@@ -1,4 +1,7 @@
-import { cameraBox, cameraPieces, clipPlaysOwnSound, clipTrack, clipVoiceParts, layout, overlayAlpha, isDrawn, usesCameraSound, zoomState, type BlurOverlay, type Clip, type PipOverlay, type Sound } from '../../shared/project.ts'
+import {
+  activeClips, cameraBox, cameraPieces, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFullBox, layerOf, overlayAlpha, soundOn, usesCameraSound,
+  zoomState, trackById, type BlurOverlay, type Clip, type Sound
+} from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
 import { clampNum, type Store } from './store.ts'
 
@@ -13,10 +16,12 @@ interface Node {
   clip: string
   media: string
   el: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement
+  /** A flat colour laid over the piece while it fades from (or to) a colour. */
+  tint: HTMLElement
   used: number
 }
 
-const MAX_VIDEO_NODES = 4
+const MAX_VIDEO_NODES = 8
 
 /**
  * Plays the project on the stage: the clips in order (with cross-fades), the zoom, blur and picture-in-picture, the
@@ -24,7 +29,6 @@ const MAX_VIDEO_NODES = 4
  */
 export class Player {
   private nodes = new Map<string, Node>()
-  private pipNodes = new Map<string, { el: HTMLVideoElement | HTMLImageElement; used: number }>()
   private blurNodes = new Map<string, HTMLElement>()
   private sounds = new Map<string, HTMLAudioElement>()
   private cam: HTMLVideoElement | null = null
@@ -86,16 +90,16 @@ export class Player {
 
   /** True while a picture that should be showing is still being loaded or found, so the clock waits for it. */
   private stalled(): boolean {
-    const t = this.store.playhead
-    for (const p of layout(this.store.project.clips)) {
-      if (t < p.start - 1e-6 || t >= p.end - 1e-6) continue
-      const n = this.nodes.get(p.clip.id)
+    const s = this.store
+    for (const c of activeClips(s.project, s.playhead)) {
+      if (trackById(s.project, c.track)?.hidden) continue
+      const n = this.nodes.get(c.id)
       if (n && n.el instanceof HTMLVideoElement && !n.el.error && (n.el.seeking || n.el.readyState < 2)) return true
     }
     return false
   }
 
-  // ---------- clips ----------
+  // ---------- pieces ----------
 
   private nodeFor(c: Clip): Node | null {
     let n = this.nodes.get(c.id)
@@ -122,8 +126,10 @@ export class Player {
     }
     el.className = 'layer'
     el.dataset.layer = c.id
-    this.els.layers.prepend(el)
-    n = { clip: c.id, media: c.kind === 'recording' ? this.recordingUrl : c.media, el, used: 0 }
+    const tint = document.createElement('div')
+    tint.className = 'layer-tint'
+    this.els.layers.append(el, tint)
+    n = { clip: c.id, media: c.kind === 'recording' ? this.recordingUrl : c.media, el, tint, used: 0 }
     this.nodes.set(c.id, n)
     this.trimNodes()
     return n
@@ -138,6 +144,7 @@ export class Player {
       n.el.load()
     }
     n.el.remove()
+    n.tint.remove()
     this.nodes.delete(id)
   }
 
@@ -149,77 +156,107 @@ export class Player {
     }
   }
 
+  /** How visible a piece is at time t because of its fades (1 = not faded at all), and the colour it fades into. */
+  private fadeAt(c: Clip, t: number): { amount: number; colour: string } {
+    const len = clipEnd(c) - c.start
+    let amount = 1
+    let colour = c.fadeIn.color
+    const din = Math.min(c.fadeIn.dur, len / 2)
+    const dout = Math.min(c.fadeOut.dur, len / 2)
+    if (din > 0.02 && t < c.start + din) amount = clampNum((t - c.start) / din, 0, 1)
+    if (dout > 0.02 && t > clipEnd(c) - dout) {
+      const a = clampNum((clipEnd(c) - t) / dout, 0, 1)
+      if (a < amount) {
+        amount = a
+        colour = c.fadeOut.color
+      }
+    }
+    return { amount, colour }
+  }
+
   private sync(): void {
     const s = this.store
     const p = s.project
     const t = s.playhead
-    const placed = layout(p.clips)
     const ids = new Set(p.clips.map((c) => c.id))
     for (const id of [...this.nodes.keys()]) if (!ids.has(id)) this.dropNode(id)
 
     const seq = ++this.tickCount
     const crop = s.cropMode ? null : p.crop
-    let any = false
-    placed.forEach((pl, i) => {
-      const c = pl.clip
-      const showing = t >= pl.start - 1e-6 && t < pl.end - 1e-6
-      const ahead = pl.start > t && pl.start - t < 1.5 && s.playing
-      const lastClip = i === placed.length - 1 && t >= pl.end - 1e-6
-      if (!showing && !ahead && !lastClip) {
+    const showing = new Set(activeClips(p, t).filter((c) => !trackById(p, c.track)?.hidden).map((c) => c.id))
+    for (const c of p.clips) {
+      const live = showing.has(c.id)
+      const ahead = !live && c.start > t && c.start - t < 1.5 && s.playing && !trackById(p, c.track)?.hidden
+      if (!live && !ahead) {
         const n = this.nodes.get(c.id)
         if (n) {
           n.el.style.display = 'none'
+          n.tint.style.display = 'none'
           if (n.el instanceof HTMLVideoElement && !n.el.paused) n.el.pause()
         }
-        return
+        continue
       }
       const n = this.nodeFor(c)
-      if (!n) return
+      if (!n) continue
       n.used = seq
-      if (showing || lastClip) any = true
       const el = n.el
-      el.style.display = showing || lastClip ? '' : 'none'
-      el.style.zIndex = String(i + 1)
-      const fadeIn = pl.overlap > 0 && t < pl.start + pl.overlap ? clampNum((t - pl.start) / pl.overlap, 0, 1) : 1
-      el.style.opacity = String(fadeIn)
-      this.placeNode(el, c, crop)
+      const z = String(layerOf(p, c.track) * 2 + 1)
+      el.style.display = live ? '' : 'none'
+      el.style.zIndex = z
+      const f = this.fadeAt(c, t)
+      const dissolve = f.colour === DISSOLVE
+      el.style.opacity = live && dissolve ? String(f.amount) : '1'
+      this.placeNode(el, n.tint, c, crop)
+      n.tint.style.zIndex = String(layerOf(p, c.track) * 2 + 2)
+      n.tint.style.display = live && !dissolve && f.amount < 1 ? '' : 'none'
+      if (!dissolve) {
+        n.tint.style.background = f.colour
+        n.tint.style.opacity = String(1 - f.amount)
+      }
       if (el instanceof HTMLCanvasElement && c.card) this.drawCardNode(el, c)
       if (el instanceof HTMLVideoElement) {
-        const want = clampNum(c.in + (t - pl.start), 0, Number.isFinite(el.duration) ? Math.max(0, el.duration - 0.01) : 1e9)
-        const live = showing || lastClip
-        const tolerance = s.playing ? 0.35 : 0.5 / s.fps
+        const want = clampNum(c.in + (t - c.start) * c.speed, 0, Number.isFinite(el.duration) ? Math.max(0, el.duration - 0.01) : 1e9)
+        const tolerance = s.playing ? 0.35 * Math.max(1, c.speed) : 0.5 / s.fps
         if (el.readyState > 0 || !live) {
           if (Math.abs(el.currentTime - want) > tolerance && !el.seeking) el.currentTime = want
           else if (!live && !s.playing && Math.abs(el.currentTime - c.in) > 0.05 && !el.seeking) el.currentTime = c.in
         }
-        // some of the recording's sound comes from a track taken out of it, or from the camera: its own sound is then off
-        el.volume = clipTrack(p, c).mode === 'own' ? clampNum(c.volume, 0, 1) : 0
-        if (s.playing && live && el.paused && t < pl.end - 0.02) void el.play().catch(() => undefined)
+        const rate = clampNum(c.speed, 0.25, 4)
+        if (el.playbackRate !== rate) el.playbackRate = rate
+        // sound from a track taken out of the recording, or from the camera, is played separately: this one is then off
+        const track = trackById(p, c.track)
+        el.muted = !clipPlaysOwnSound(p, c)
+        el.volume = clampNum(c.volume * (dissolve || f.amount >= 1 ? f.amount : f.amount), 0, 1)
+        if (track?.muted) el.muted = true
+        if (s.playing && live && el.paused && t < clipEnd(c) - 0.02) void el.play().catch(() => undefined)
         if ((!s.playing || !live) && !el.paused) el.pause()
       }
-    })
-    if (!any) for (const n of this.nodes.values()) n.el.style.display = 'none'
+    }
     this.syncSounds(t)
-    this.syncPips(t)
     this.syncCamera(t)
   }
 
-  private placeNode(el: Node['el'], c: Clip, crop: { x: number; y: number; width: number; height: number } | null): void {
+  private placeNode(el: Node['el'], tint: HTMLElement, c: Clip, crop: { x: number; y: number; width: number; height: number } | null): void {
     const st = el.style
-    if (c.kind === 'recording' && crop) {
+    const full = isFullBox(c.box) || !!c.card
+    let rect: { left: string; top: string; width: string; height: string }
+    if (full && c.kind === 'recording' && crop) {
       // the cropped part fills the frame; the rest is pushed outside it
-      st.width = `${100 / crop.width}%`
-      st.height = `${100 / crop.height}%`
-      st.left = `${(-crop.x / crop.width) * 100}%`
-      st.top = `${(-crop.y / crop.height) * 100}%`
+      rect = { left: `${(-crop.x / crop.width) * 100}%`, top: `${(-crop.y / crop.height) * 100}%`, width: `${100 / crop.width}%`, height: `${100 / crop.height}%` }
       st.objectFit = 'fill'
-    } else {
-      st.width = '100%'
-      st.height = '100%'
-      st.left = '0'
-      st.top = '0'
+    } else if (full) {
+      rect = { left: '0', top: '0', width: '100%', height: '100%' }
       st.objectFit = c.card ? 'fill' : 'contain'
+    } else {
+      const aspect = (c.width || 16) / (c.height || 9)
+      rect = { left: `${c.box.x * 100}%`, top: `${c.box.y * 100}%`, width: `${c.box.w * 100}%`, height: 'auto' }
+      st.aspectRatio = String(aspect)
+      st.objectFit = 'cover'
     }
+    Object.assign(st, rect)
+    if (full) st.aspectRatio = ''
+    st.outline = !full && c.border ? '4px solid #fff' : ''
+    Object.assign(tint.style, { ...rect, aspectRatio: full ? '' : String((c.width || 16) / (c.height || 9)) })
   }
 
   private drawCardNode(cv: HTMLCanvasElement, c: Clip): void {
@@ -241,18 +278,18 @@ export class Player {
 
   private syncSounds(t: number): void {
     const s = this.store
-    let list: Sound[] = s.project.sounds
-    const placed = s.placedNow()
-    const camVoice = usesCameraSound(s.project) && cameraPieces(s.project, true).some((pc) => t >= pc.start && t < pc.end)
-    const parts = clipVoiceParts(s.project)
+    const p = s.project
+    const parts = clipVoiceParts(p)
+    const camVoice = usesCameraSound(p) && cameraPieces(p, true).some((pc) => t >= pc.start && t < pc.end)
     const trackVoice = parts.some((v) => t >= v.start && t < v.start + v.length)
-    const voice = camVoice || trackVoice || (!!placed && clipPlaysOwnSound(s.project, placed.clip) && placed.clip.volume > 0)
+    const ownVoice = activeClips(p, t).some((c) => clipPlaysOwnSound(p, c) && c.volume > 0)
+    const voice = camVoice || trackVoice || ownVoice
     // the computer sound / microphone of the recording, played from their own files like any other sound
-    const virtual = parts.map((v, i) => ({
-      id: `track:${i}:${v.media}`, origin: 'split' as const, media: v.media, name: '', duration: 1e9, offset: v.from, start: v.start, length: v.length,
+    const virtual: Sound[] = parts.map((v, i) => ({
+      id: `track:${i}:${v.media}`, track: '', origin: 'split', media: v.media, name: '', duration: 1e9, offset: v.from, start: v.start, length: v.length, speed: v.speed,
       volume: v.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
     }))
-    list = [...list, ...virtual]
+    const list: Sound[] = [...p.sounds, ...virtual]
     const ids = new Set(list.map((x) => x.id))
     for (const [id, a] of this.sounds) {
       if (!ids.has(id)) {
@@ -264,7 +301,7 @@ export class Player {
     for (const m of list) {
       const info = s.media.get(m.media)
       let a = this.sounds.get(m.id)
-      if (!info) {
+      if (!info || (m.track && !soundOn(p, m.track))) {
         if (a && !a.paused) a.pause()
         continue
       }
@@ -283,13 +320,15 @@ export class Player {
         if (!a.paused) a.pause()
         continue
       }
-      let pos = m.offset + rel
-      if (m.loop && m.duration > 0) pos = m.offset + (rel % Math.max(0.1, m.duration - m.offset))
+      let pos = m.offset + rel * m.speed
+      if (m.loop && m.duration > 0) pos = m.offset + ((rel * m.speed) % Math.max(0.1, m.duration - m.offset))
       const fi = m.fadeIn > 0 ? clampNum(rel / m.fadeIn, 0, 1) : 1
       const fo = m.fadeOut > 0 ? clampNum((len - rel) / m.fadeOut, 0, 1) : 1
       a.volume = clampNum(m.volume * fi * fo * (m.duck && voice ? 0.3 : 1), 0, 1)
+      const rate = clampNum(m.speed, 0.25, 4)
+      if (a.playbackRate !== rate) a.playbackRate = rate
       if (s.playing) {
-        if (Math.abs(a.currentTime - pos) > 0.4 && !a.seeking) a.currentTime = pos
+        if (Math.abs(a.currentTime - pos) > 0.4 * Math.max(1, m.speed) && !a.seeking) a.currentTime = pos
         if (a.paused) void a.play().catch(() => undefined)
       } else if (!a.paused) a.pause()
     }
@@ -343,52 +382,11 @@ export class Player {
       if (!v.paused) v.pause()
       return
     }
-    const want = piece.from + (t - piece.start)
-    if (Math.abs(v.currentTime - want) > (s.playing ? 0.35 : 0.04) && !v.seeking) v.currentTime = Math.max(0, want)
+    const want = piece.from + (t - piece.start) * piece.speed
+    if (v.playbackRate !== clampNum(piece.speed, 0.25, 4)) v.playbackRate = clampNum(piece.speed, 0.25, 4)
+    if (Math.abs(v.currentTime - want) > (s.playing ? 0.35 * Math.max(1, piece.speed) : 0.04) && !v.seeking) v.currentTime = Math.max(0, want)
     if (s.playing && v.paused) void v.play().catch(() => undefined)
     if (!s.playing && !v.paused) v.pause()
-  }
-
-  // ---------- picture-in-picture ----------
-
-  private syncPips(t: number): void {
-    const s = this.store
-    const active = s.project.overlays.filter((o): o is PipOverlay => o.kind === 'pip' && t >= o.start && t < o.end)
-    const seq = this.tickCount
-    for (const o of active) {
-      let n = this.pipNodes.get(o.id)
-      const info = s.media.get(o.media)
-      if (!info) continue
-      if (!n) {
-        const el = info.kind === 'image' ? document.createElement('img') : document.createElement('video')
-        el.className = 'pip'
-        if (el instanceof HTMLVideoElement) el.playsInline = true
-        el.src = info.url
-        this.els.pips.append(el)
-        n = { el, used: seq }
-        this.pipNodes.set(o.id, n)
-      }
-      n.used = seq
-      const f = frameFor(s.aspect)
-      const hh = (o.w * f.W * (o.height || 9)) / (o.width || 16) / f.H
-      Object.assign(n.el.style, { display: '', left: `${o.x * 100}%`, top: `${o.y * 100}%`, width: `${o.w * 100}%`, height: `${hh * 100}%`, opacity: String(overlayAlpha(o, t)) })
-      if (n.el instanceof HTMLVideoElement) {
-        const want = o.in + (t - o.start)
-        if (Math.abs(n.el.currentTime - want) > (s.playing ? 0.35 : 0.05) && !n.el.seeking) n.el.currentTime = Math.max(0, want)
-        n.el.volume = clampNum(o.volume, 0, 1)
-        if (s.playing && n.el.paused) void n.el.play().catch(() => undefined)
-        if (!s.playing && !n.el.paused) n.el.pause()
-      }
-    }
-    for (const [id, n] of this.pipNodes) {
-      if (n.used === seq) continue
-      if (n.el instanceof HTMLVideoElement && !n.el.paused) n.el.pause()
-      n.el.style.display = 'none'
-      if (!s.project.overlays.some((o) => o.id === id)) {
-        n.el.remove()
-        this.pipNodes.delete(id)
-      }
-    }
   }
 
   // ---------- painting ----------
@@ -450,8 +448,8 @@ export class Player {
 
   /** The picture on the stage right now as a data URL, for the E2E tests and thumbnails. */
   get activeVideo(): HTMLVideoElement | null {
-    const p = this.store.placedNow()
-    const n = p ? this.nodes.get(p.clip.id) : null
+    const top = this.store.activeNow().filter((c) => c.kind !== 'image').pop()
+    const n = top ? this.nodes.get(top.id) : null
     return n && n.el instanceof HTMLVideoElement ? n.el : null
   }
 }

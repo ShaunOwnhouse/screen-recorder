@@ -1,4 +1,4 @@
-import { cameraCorner, usesCameraSound, type CameraTrack, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { cameraCorner, clipLength, DISSOLVE, isFullBox, MAX_SPEED, MIN_SPEED, usesCameraSound, type CameraTrack, type Fade, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -110,6 +110,7 @@ export class Panels {
           heading('Media'),
           button('+ Add videos, pictures or audio', () => void a.addAny(), 'primary wide', { id: 'add-media' }),
           tip('Choose as many files as you like. Videos and pictures go into the video at the playhead, one after another; audio files go under it as sounds.'),
+          button('⇥  Insert at the playhead and push the rest later', () => void a.addAny(undefined, true), 'ghost wide', { id: 'insert-media', title: 'Opens room for it on every track, so nothing is covered' }),
           button('▣  Add as picture-in-picture', () => void a.addPip(), 'ghost wide', { id: 'add-pip' }),
           tip('Shows it in a small window over the video instead — handy for a logo or a second view.')
         )
@@ -325,9 +326,6 @@ export class Panels {
         section('Glide time', range(o.ease, 0.2, 2, 0.1, (v) => patch({ ease: v }, `ease:${o.id}`), (v) => `${v.toFixed(1)} s`)),
         h('p', { class: 'tip', text: 'Drag the box on the video over the part to zoom in on. The video glides in, stays there, then glides back out.' })
       )
-    } else if (o.kind === 'pip') {
-      out.push(section('Size', range(o.w, 0.1, 0.7, 0.01, (v) => patch({ w: v }, `pw:${o.id}`), (v) => `${Math.round(v * 100)}%`)))
-      if (o.hasAudio) out.push(section('Its sound', range(o.volume, 0, 1.5, 0.05, (v) => patch({ volume: v }, `pv:${o.id}`), (v) => `${Math.round(v * 100)}%`)))
     }
 
     out.push(this.timeFields(o))
@@ -340,20 +338,38 @@ export class Panels {
     return out
   }
 
+  /** Fade in or out: how long, and into what: black, white, a brand colour, or see-through (the track behind shows). */
+  private fadeRow(label: string, f: Fade, pick: (f: Fade) => void, id: string): HTMLElement {
+    const colours: Array<[string, string]> = [['#000000', 'Black'], ['#ffffff', 'White'], [DISSOLVE, 'See-through (dissolve)'], ...this.store.brand.colors.map((c): [string, string] => [c, `Brand ${c}`])]
+    const sel = select(colours, f.color, (v) => pick({ ...f, color: v }), `${id}-colour`)
+    if (![...sel.options].some((o) => o.value === f.color)) sel.add(new Option(f.color, f.color), 0), (sel.value = f.color)
+    return section(label,
+      range(f.dur, 0, 5, 0.1, (v) => pick({ ...f, dur: Math.round(v * 10) / 10 }), (v) => (v < 0.05 ? 'None' : `${v.toFixed(1)} s`), `${id}-dur`),
+      f.dur > 0.02 ? sel : h('span'))
+  }
+
   private clipProps(c: Clip): HTMLElement[] {
     const s = this.store
     const patch = (p: Partial<Clip>, merge?: string): void => s.patchClip(c.id, p, merge ?? `c:${c.id}:${Object.keys(p)[0]}`)
-    const index = s.project.clips.findIndex((x) => x.id === c.id)
-    const out: HTMLElement[] = [h('h2', { class: 'props-title', text: c.card ? 'Title card' : c.kind === 'image' ? 'Picture' : c.kind === 'recording' ? 'Recording' : 'Video' }), h('p', { class: 'muted file-name', text: c.name })]
+    const track = s.project.tracks.find((t) => t.id === c.track)
+    const out: HTMLElement[] = [
+      h('h2', { class: 'props-title', text: c.card ? 'Title card' : c.kind === 'image' ? 'Picture' : c.kind === 'recording' ? 'Recording' : 'Video' }),
+      h('p', { class: 'muted file-name', text: `${c.name}${track ? ` · ${track.name}` : ''}` })
+    ]
     if (c.card) out.push(...this.cardProps(c, c.card))
     if (c.kind === 'image') {
-      out.push(section('Shown for', number(c.out - c.in, 0.5, 600, 0.5, (v) => patch({ out: s.snap(c.in + v) }), 'prop-length')))
+      out.push(section('Shown for', number(clipLength(c), 0.5, 600, 0.5, (v) => patch({ out: s.snap(v * c.speed) }), 'prop-length')))
+    } else {
+      out.push(
+        section('Speed', range(c.speed, MIN_SPEED, MAX_SPEED, 0.05, (v) => this.actions.setSpeed(Math.round(v * 100) / 100), (v) => `${Number(v.toFixed(2))}×`, 'prop-speed')),
+        h('div', { class: 'speed-presets' }, ...[0.5, 1, 1.5, 2, 3].map((v) => button(`${v}×`, () => this.actions.setSpeed(v), c.speed === v ? 'ghost small on' : 'ghost small', { 'data-speed': String(v) })))
+      )
     }
     if (c.kind !== 'image' && c.hasAudio) {
       out.push(section('Volume', range(c.volume, 0, 2, 0.05, (v) => patch({ volume: v }, `vol:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-volume')))
     }
     if (c.kind === 'recording' && c.hasAudio) {
-      const t = s.project.tracks
+      const t = s.project.recTracks
       if (usesCameraSound(s.project)) {
         out.push(h('p', { class: 'tip good', text: t.pc ? 'Your voice comes from the webcam’s microphone, so the microphone recorded with the screen is off. The computer’s sound is kept.' : 'Your voice comes from the webcam’s microphone, so the sound recorded with the screen is off.' }))
       } else if (t.pc && t.mic) {
@@ -361,10 +377,17 @@ export class Panels {
         out.push(h('p', { class: 'tip', text: 'The computer’s sound (a video you played) and your microphone were recorded as two tracks, so you can keep just one — or use “Separate the sound” to work with it on its own.' }))
       }
     }
-    if (index > 0) {
+    // fade from / to a colour at the start and end of the piece
+    out.push(
+      this.fadeRow('Fade in from', c.fadeIn, (f) => patch({ fadeIn: f }, `fi:${c.id}`), 'prop-fade-in'),
+      this.fadeRow('Fade out to', c.fadeOut, (f) => patch({ fadeOut: f }, `fo:${c.id}`), 'prop-fade-out')
+    )
+    // where it sits in the picture
+    if (!c.card) {
+      const full = isFullBox(c.box)
       out.push(
-        toggleSection(toggle('Fade in from the piece before', c.transition === 'fade', (on) => patch({ transition: on ? 'fade' : 'cut' }), 'prop-transition')),
-        c.transition === 'fade' ? section('Fade length', range(c.transitionDur, 0.2, 2, 0.1, (v) => patch({ transitionDur: s.snap(v) }, `td:${c.id}`), (v) => `${v.toFixed(1)} s`)) : h('span')
+        section('Size in the picture', select([['full', 'Whole picture'], ['small', 'Small window']], full ? 'full' : 'small', (v) => patch(v === 'full' ? { box: { x: 0, y: 0, w: 1 }, border: false } : { box: { x: 0.66, y: 0.06, w: 0.28 }, border: true }), 'prop-box-mode')),
+        ...(full ? [] : [section('Window width', range(c.box.w, 0.08, 0.95, 0.01, (v) => patch({ box: { ...c.box, w: v, x: Math.min(c.box.x, 1 - v) } }, `bw:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-box-w')), toggleSection(toggle('White frame', c.border, (on) => patch({ border: on }), 'prop-box-border')), h('p', { class: 'tip', text: 'Drag the window on the video to move it, and its corner to resize it.' })])
       )
     }
     if (c.kind !== 'image' && c.hasAudio) {
@@ -376,8 +399,10 @@ export class Panels {
     out.push(
       h('div', { class: 'psec actions' },
         button('Split at playhead', () => this.actions.split(), 'ghost', { id: 'prop-split' }),
-        button('Duplicate', () => this.actions.duplicate(), 'ghost', { id: 'prop-clip-duplicate' }),
-        button('Delete', () => this.actions.deleteSelected(), 'danger-ghost', { id: 'prop-delete' }))
+        button('Duplicate', () => this.actions.duplicate(), 'ghost', { id: 'prop-clip-duplicate', title: 'Put a copy on the track above, ready to slide wherever you like' })),
+      h('div', { class: 'psec actions' },
+        button('Delete', () => this.actions.deleteSelected(true), 'danger-ghost', { id: 'prop-delete', title: 'Remove it and close the gap on every track' }),
+        button('Delete, leave a gap', () => this.actions.deleteSelected(false), 'danger-ghost', { id: 'prop-delete-gap', title: 'Remove it and leave an empty space where it was' }))
     )
     if (c.kind !== 'image' && !c.card) {
       out.push(
@@ -449,6 +474,7 @@ export class Panels {
     return [
       h('h2', { class: 'props-title', text: m.origin === 'split' ? 'Sound from a video' : 'Music / audio' }),
       h('p', { class: 'muted file-name', text: m.name }),
+      section('Speed', range(m.speed, MIN_SPEED, MAX_SPEED, 0.05, (v) => this.actions.setSpeed(Math.round(v * 100) / 100), (v) => `${Number(v.toFixed(2))}×`, 'prop-music-speed')),
       section('Volume', range(m.volume, 0, 2, 0.05, (v) => patch({ volume: v }), pct, 'prop-music-volume')),
       section('Fade in', range(m.fadeIn, 0, 8, 0.5, (v) => patch({ fadeIn: v }), sec, 'prop-music-fadein')),
       section('Fade out', range(m.fadeOut, 0, 8, 0.5, (v) => patch({ fadeOut: v }), sec, 'prop-music-fadeout')),

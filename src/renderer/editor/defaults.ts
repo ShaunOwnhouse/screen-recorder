@@ -1,4 +1,4 @@
-import { newId, type Clip, type Overlay, type PipOverlay, type TitleCard } from '../../shared/project.ts'
+import { newClipBase, newId, type Clip, type Overlay, type TitleCard } from '../../shared/project.ts'
 import type { MediaInfo } from '../../shared/types.ts'
 import type { Store } from './store.ts'
 
@@ -43,19 +43,16 @@ export function newOverlay(kind: NewKind, s: Store): Overlay {
   }
 }
 
-export function newPip(s: Store, m: MediaInfo): PipOverlay {
-  const seconds = m.kind === 'image' ? 5 : Math.min(8, Math.max(1, m.duration))
-  return {
-    id: newId('o'), kind: 'pip', ...windowFor(s, seconds), fade: true, x: 0.66, y: 0.06, w: 0.28, media: m.id,
-    mediaKind: m.kind === 'image' ? 'image' : 'video', name: m.name, in: 0, sourceDuration: m.duration, hasAudio: m.hasAudio, volume: 1, width: m.width, height: m.height
-  }
+/** The same, as a small window in a corner (a picture-in-picture). */
+export function newPipClip(s: Store, m: MediaInfo): Clip {
+  return { ...newClipFrom(s, m), box: { x: 0.66, y: 0.06, w: 0.28 }, border: true }
 }
 
 export function newClipFrom(s: Store, m: MediaInfo): Clip {
   const frames = (t: number): number => Math.floor(t * s.fps) / s.fps
   return {
     id: newId('c'), kind: m.kind === 'image' ? 'image' : 'video', media: m.id, name: m.name, in: 0, out: m.kind === 'image' ? 5 : Math.max(0.2, frames(m.duration)),
-    hasAudio: m.hasAudio, volume: 1, transition: 'cut', transitionDur: 0.5, width: m.width, height: m.height
+    hasAudio: m.hasAudio, volume: 1, width: m.width, height: m.height, track: '', start: 0, ...newClipBase()
   }
 }
 
@@ -68,7 +65,7 @@ export const CARD_STYLES: Array<{ id: string; label: string; make: (s: Store) =>
 export function newCardClip(s: Store, style: (typeof CARD_STYLES)[number]): Clip {
   const size = s.outputSize
   return {
-    id: newId('c'), kind: 'image', media: 'card', name: 'Title card', in: 0, out: 3, hasAudio: false, volume: 1, transition: 'cut', transitionDur: 0.5,
+    id: newId('c'), kind: 'image', media: 'card', name: 'Title card', in: 0, out: 3, hasAudio: false, volume: 1, track: '', start: 0, ...newClipBase(),
     width: size.width, height: size.height, card: style.make(s)
   }
 }

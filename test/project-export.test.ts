@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { detachSound, duplicateClip, duplicateSound, newId, newProject, splitSound, trimSound, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
+import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, addVideoTrack, patchTrack, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -95,8 +95,23 @@ function recordingSetup(dir: string, secondsLong: number, opts: Parameters<typeo
   return { project, media: { recording: { path, kind: 'video', hasAudio: opts.tone !== null, duration: secondsLong, width: W, height: H } } }
 }
 
-const snd = (o: Partial<Sound> & Pick<Sound, 'media' | 'duration' | 'length'>): Sound => ({
-  id: newId('s'), origin: 'music', name: 'sound', offset: 0, start: 0, volume: 1, fadeIn: 0, fadeOut: 0, loop: false, duck: false, ...o
+const snd = (p: Project, o: Partial<Sound> & Pick<Sound, 'media' | 'duration' | 'length'>): Sound => ({
+  id: newId('s'), track: audioTracks(p)[0].id, origin: 'music', name: 'sound', offset: 0, start: 0, speed: 1, volume: 1, fadeIn: 0, fadeOut: 0, loop: false, duck: false, ...o
+})
+
+/** Puts pieces one after another on the bottom track (what a person gets by adding them in order). */
+function sequence(p: Project, clips: Clip[]): void {
+  let at = 0
+  p.clips = clips.map((c) => {
+    const placed: Clip = { ...c, track: baseVideoTrack(p).id, start: at }
+    at += clipLength(placed)
+    return placed
+  })
+}
+
+/** A new piece on its own: the 'video' kind, from the file with this id. */
+const piece = (p: Project, media: string, len: number, extra: Partial<Clip> = {}): Clip => ({
+  id: newId('c'), track: baseVideoTrack(p).id, start: 0, kind: 'video', media, name: media, in: 0, out: len, hasAudio: false, volume: 1, width: W, height: H, ...newClipBase(), ...extra
 })
 
 const overlay = <T extends Overlay>(o: Omit<T, 'id' | 'fade'> & { fade?: boolean }): T => ({ id: newId('o'), fade: false, ...o }) as T
@@ -116,32 +131,92 @@ test('cutting out the middle joins what is left with no gap', { timeout: 120000 
   const s = recordingSetup(dir, 4, { source: 'testsrc2' })
   const c = s.project.clips[0]
   const second: Clip = { ...c, id: newId('c'), in: 3, out: 4 }
-  s.project.clips = [{ ...c, out: 1 }, second]
+  sequence(s.project, [{ ...c, out: 1 }, second])
   const out = exportIt(dir, s)
   assert.ok(Math.abs(seconds(out.file) - 2) < 0.15, `${seconds(out.file)}`)
   assert.equal(execFileSync(ffmpeg, ['-v', 'error', '-i', out.file, '-f', 'null', '-']).toString(), '')
 }))
 
-test('a fade between two clips overlaps them and blends the colours', { timeout: 120000 }, inTemp((dir) => {
-  const red = makeVideo(dir, 'red.mp4', 2, { source: 'color=c=0xe02020' })
-  const blue = makeVideo(dir, 'blue.mp4', 2, { source: 'color=c=0x2040e0', tone: 880 })
-  const project = newProject({ duration: 2, width: W, height: H, hasAudio: true })
-  const a = project.clips[0]
-  const b: Clip = { ...a, id: newId('c'), media: 'blue', transition: 'fade', transitionDur: 0.6 }
-  project.clips = [a, b]
-  const out = exportIt(dir, {
-    project,
-    media: {
-      recording: { path: red, kind: 'video', hasAudio: true, duration: 2, width: W, height: H },
-      blue: { path: blue, kind: 'video', hasAudio: true, duration: 2, width: W, height: H }
-    }
-  })
-  assert.ok(Math.abs(seconds(out.file) - 3.4) < 0.15, `${seconds(out.file)}`)
-  const mid = frame(out.file, 1.7).at(100, 100)
-  assert.ok(mid[0] > 70 && mid[2] > 70, `blended ${mid}`)
-  assert.ok(near(frame(out.file, 0.5).at(100, 100), [0xe0, 0x20, 0x20]))
-  assert.ok(near(frame(out.file, 3).at(100, 100), [0x20, 0x40, 0xe0]))
-  assert.match(info(out.file), /Audio: aac/)
+test('a piece can fade in from black and out to a colour of the person\'s choice', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4)
+  const plain = exportIt(dir, s)
+  const normal = frame(plain.file, 2).at(300, 100)
+  const c = s.project.clips[0]
+  s.project.clips = [{ ...c, fadeIn: { dur: 1, color: '#000000' }, fadeOut: { dur: 1, color: '#ffffff' } }]
+  const out = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(out.file) - 4) < 0.2)
+  const dark = frame(out.file, 0.05).at(300, 100)
+  assert.ok(dark[0] < 40 && dark[1] < 60 && dark[2] < 40, `from black ${dark}`)
+  assert.ok(near(frame(out.file, 2).at(300, 100), normal, 8), `in the middle: untouched ${frame(out.file, 2).at(300, 100)} vs ${normal}`)
+  const white = frame(out.file, 3.95).at(300, 100)
+  assert.ok(white[0] > 200 && white[1] > 200 && white[2] > 200, `to white ${white}`)
+}))
+
+test('a piece on a track in front covers the one behind only while it is there, and a dissolve lets the one behind show through', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4)
+  const blue = makeVideo(dir, 'blue.mp4', 2, { source: 'color=c=0x2040e0' })
+  s.media.blue = { path: blue, kind: 'video', hasAudio: false, duration: 2, width: W, height: H }
+  const up = addVideoTrack(s.project)
+  s.project = up.project
+  s.project.clips = [...s.project.clips, piece(s.project, 'blue', 2, { track: up.track.id, start: 1, fadeIn: { dur: 1, color: DISSOLVE } })]
+  const out = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(out.file) - 4) < 0.2)
+  assert.ok(near(frame(out.file, 0.5).at(300, 100), [0x20, 0xa0, 0x40], 16), 'before it: the recording')
+  const mid = frame(out.file, 1.5).at(300, 100)
+  assert.ok(mid[2] > 100 && mid[1] > 70 && mid[0] < 80, `dissolving ${mid}`)
+  assert.ok(near(frame(out.file, 2.5).at(300, 100), [0x20, 0x40, 0xe0], 24), 'covering it')
+  assert.ok(near(frame(out.file, 3.5).at(300, 100), [0x20, 0xa0, 0x40], 16), 'after it: the recording again')
+  // a hidden track leaves nothing of its picture
+  const hidden = { ...s, project: patchTrack(s.project, up.track.id, { hidden: true }) }
+  assert.ok(near(frame(exportIt(dir, hidden).file, 2.5).at(300, 100), [0x20, 0xa0, 0x40], 16))
+}))
+
+test('a small piece on an upper track sits in its corner like a picture-in-picture window', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 3)
+  const blue = makeVideo(dir, 'pip.mp4', 3, { source: 'color=c=0x2040e0', tone: 880 })
+  s.media.pip = { path: blue, kind: 'video', hasAudio: true, duration: 3, width: W, height: H }
+  const up = addVideoTrack(s.project)
+  s.project = up.project
+  s.project.clips = [...s.project.clips, piece(s.project, 'pip', 1.5, { track: up.track.id, start: 1, hasAudio: true, box: { x: 0.6, y: 0.1, w: 0.3 }, border: true })]
+  const out = exportIt(dir, s)
+  assert.ok(near(frame(out.file, 1.8).at(430, 60), [0x20, 0x40, 0xe0], 24), `${frame(out.file, 1.8).at(430, 60)}`)
+  assert.ok(near(frame(out.file, 0.5).at(430, 60), [0x20, 0xa0, 0x40], 16))
+  assert.ok(near(frame(out.file, 2.8).at(430, 60), [0x20, 0xa0, 0x40], 16))
+  assert.ok(near(frame(out.file, 1.8).at(30, 300), [0x20, 0xa0, 0x40], 16), 'the rest of the picture is the recording')
+}))
+
+test('a piece can play faster or slower, picture and sound together', { timeout: 120000 }, inTemp((dir) => {
+  // two seconds red then two seconds blue, with a 440 Hz tone
+  const path = join(dir, 'twocolour.mp4')
+  run(['-f', 'lavfi', '-i', 'color=c=0xe02020:s=640x360:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=0x2040e0:s=640x360:r=30:d=2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[v]', '-map', '[v]', '-map', '2:a', '-t', '4',
+    '-c:v', 'libx264', '-colorspace', 'bt709', '-color_range', 'tv', '-c:a', 'aac', path])
+  const s: Setup = { project: newProject({ duration: 4, width: W, height: H, hasAudio: true }), media: { recording: { path, kind: 'video', hasAudio: true, duration: 4, width: W, height: H } } }
+  s.project.clips[0] = { ...s.project.clips[0], speed: 2 }
+  const fast = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(fast.file) - 2) < 0.2, `${seconds(fast.file)}`)
+  assert.ok(near(frame(fast.file, 0.5).at(300, 100), [0xe0, 0x20, 0x20], 40), 'first half of the picture')
+  assert.ok(near(frame(fast.file, 1.5).at(300, 100), [0x20, 0x40, 0xe0], 40), 'second half, already')
+  assert.ok(Math.abs(pitch(fast.file, 0.1, 0.5) - 440) < 60, 'the voice keeps its pitch')
+  s.project.clips[0] = { ...s.project.clips[0], speed: 0.5 }
+  const slow = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(slow.file) - 8) < 0.3, `${seconds(slow.file)}`)
+  assert.ok(near(frame(slow.file, 3).at(300, 100), [0xe0, 0x20, 0x20], 40), 'red lasts four seconds')
+  assert.ok(near(frame(slow.file, 5).at(300, 100), [0x20, 0x40, 0xe0], 40))
+}))
+
+test('a gap on the bottom track shows black, and a muted track is silent while a hidden one is gone', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 2, { tone: 440 })
+  const c = s.project.clips[0]
+  s.project.clips = [{ ...c, start: 1 }]
+  const out = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(out.file) - 3) < 0.2, `${seconds(out.file)}`)
+  assert.ok(near(frame(out.file, 0.5).at(300, 100), [0, 0, 0], 24), 'black before it starts')
+  assert.ok(near(frame(out.file, 2).at(300, 100), [0x20, 0xa0, 0x40], 16))
+  assert.ok(loud(out.file, 1.2, 1) > -30, 'its sound is there')
+  s.project = patchTrack(s.project, c.track, { muted: true })
+  assert.ok(loud(exportIt(dir, s).file, 1.2, 1) < -60, 'muted: silent')
+  assert.ok(near(frame(exportIt(dir, s).file, 2).at(300, 100), [0x20, 0xa0, 0x40], 16), 'muted: still shown')
 }))
 
 test('a drawn picture appears exactly when asked, in the right place and the right colour', { timeout: 120000 }, inTemp((dir) => {
@@ -199,19 +274,6 @@ test('zoom glides onto an area, holds, then returns', { timeout: 180000 }, inTem
   assert.ok(near(frame(out.file, 4.6).at(500, 100), [0x22, 0xdd, 0x22], 30), 'after it, back to normal')
 }))
 
-test('picture-in-picture shows another video in a corner for its window', { timeout: 120000 }, inTemp((dir) => {
-  const s = recordingSetup(dir, 3)
-  const blue = makeVideo(dir, 'pip.mp4', 3, { source: 'color=c=0x2040e0', tone: 880 })
-  s.media.pip = { path: blue, kind: 'video', hasAudio: true, duration: 3, width: W, height: H }
-  s.project.overlays = [
-    overlay<Overlay>({ kind: 'pip', start: 1, end: 2.5, x: 0.6, y: 0.1, w: 0.3, media: 'pip', mediaKind: 'video', name: 'pip.mp4', in: 0, sourceDuration: 3, hasAudio: true, volume: 1, width: W, height: H } as never)
-  ]
-  const out = exportIt(dir, s)
-  assert.ok(near(frame(out.file, 1.8).at(430, 60), [0x20, 0x40, 0xe0], 24), `${frame(out.file, 1.8).at(430, 60)}`)
-  assert.ok(near(frame(out.file, 0.5).at(430, 60), [0x20, 0xa0, 0x40], 16))
-  assert.ok(near(frame(out.file, 2.8).at(430, 60), [0x20, 0xa0, 0x40], 16))
-}))
-
 test('a picture clip and a title card are shown for as long as asked, between recording clips', { timeout: 120000 }, inTemp((dir) => {
   const s = recordingSetup(dir, 2)
   const card = makePng(dir, 'card.png', '0x6030c0', W, H)
@@ -219,7 +281,7 @@ test('a picture clip and a title card are shown for as long as asked, between re
   const rec = s.project.clips[0]
   const title: Clip = { ...rec, id: newId('c'), kind: 'image', media: 'card', name: 'Title', in: 0, out: 1.5, hasAudio: false, width: W, height: H, card: { title: 'x', subtitle: '', bg: ['#000', '#000'], color: '#fff', font: 'sans', align: 'center' } }
   const photo: Clip = { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic.png', in: 0, out: 1, hasAudio: false, width: 300, height: 300 }
-  s.project.clips = [title, rec, photo]
+  sequence(s.project, [title, rec, photo])
   s.media.pic = { path: pic, kind: 'image', hasAudio: false, duration: 0, width: 300, height: 300 }
   s.pictures = { [`card:${title.id}`]: { path: card, x: 0, y: 0, width: W, height: H } }
   const out = exportIt(dir, s)
@@ -235,7 +297,7 @@ test('music is mixed in at the chosen level with fades, even over a silent video
   const s = recordingSetup(dir, 4, { tone: null })
   s.media.song = { path: makeTone(dir, 'song.wav', 2), kind: 'video', hasAudio: true, duration: 2, width: 0, height: 0 }
   const make = (volume: number): string => {
-    s.project.sounds = [snd({ media: 'song', name: 'song.wav', duration: 2, start: 1, length: 3, volume, fadeIn: 0.3, fadeOut: 0.3, loop: true })]
+    s.project.sounds = [snd(s.project, { media: 'song', name: 'song.wav', duration: 2, start: 1, length: 3, volume, fadeIn: 0.3, fadeOut: 0.3, loop: true })]
     return exportIt(dir, s).file
   }
   const peak = (file: string, from: number, len: number): number => {
@@ -259,7 +321,7 @@ test('music steps back under a voice when asked to', { timeout: 120000 }, inTemp
   s.media.song = { path: makeTone(dir, 'song.wav', 3), kind: 'video', hasAudio: true, duration: 3, width: 0, height: 0 }
   const base = { media: 'song', name: 'song.wav', duration: 3, start: 0, length: 3, volume: 1 }
   const level = (duck: boolean): number => {
-    s.project.sounds = [snd({ ...base, duck })]
+    s.project.sounds = [snd(s.project, { ...base, duck })]
     const out = exportIt(dir, s)
     const r = spawnSync(ffmpeg, ['-hide_banner', '-ss', '1', '-i', out.file, '-vn', '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' })
     return Number(/mean_volume: (-?[\d.]+) dB/.exec(r.stderr)?.[1] ?? -99)
@@ -347,7 +409,7 @@ test('cutting the recording cuts the camera with it', { timeout: 120000 }, inTem
   const s = withCamera(dir, 'square')
   const c = s.project.clips[0]
   // keep 0–1 s and 2.5–4 s of the recording: the second piece starts at timeline 1 s and should show camera time 2.5 s (blue)
-  s.project.clips = [{ ...c, out: 1 }, { ...c, id: newId('c'), in: 2.5, out: 4 }]
+  sequence(s.project, [{ ...c, out: 1 }, { ...c, id: newId('c'), in: 2.5, out: 4 }])
   const out = exportIt(dir, s)
   assert.ok(Math.abs(seconds(out.file) - 2.5) < 0.2)
   assert.ok(near(frame(out.file, 0.5).at(480, 276), [0xe0, 0x10, 0x10], 30), 'first piece: red')
@@ -359,7 +421,7 @@ test('the camera is not shown over added pictures, and the lip-sync nudge moves 
   const pic = makePng(dir, 'pic.png', '0x808080', 300, 300)
   s.media.pic = { path: pic, kind: 'image', hasAudio: false, duration: 0, width: 300, height: 300 }
   const rec = s.project.clips[0]
-  s.project.clips = [{ ...rec, out: 2 }, { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic', in: 0, out: 1, hasAudio: false, width: 300, height: 300 }]
+  sequence(s.project, [{ ...rec, out: 2 }, { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic', in: 0, out: 1, hasAudio: false, width: 300, height: 300 }])
   const out = exportIt(dir, s)
   // nudge 0.5: at timeline 1.7 the camera is at 2.2 s → already blue
   assert.ok(near(frame(out.file, 1.7).at(480, 276), [0x10, 0x20, 0xe0], 30), `nudged ${frame(out.file, 1.7).at(480, 276)}`)
@@ -421,7 +483,7 @@ test('several sounds play together, and the sound split off a clip is its own, s
   const s = recordingSetup(dir, 4, { tone: null })
   s.media.a = { path: makeTone(dir, 'a.wav', 1), kind: 'video', hasAudio: true, duration: 1, width: 0, height: 0 }
   s.media.b = { path: makeTone(dir, 'b.wav', 1), kind: 'video', hasAudio: true, duration: 1, width: 0, height: 0 }
-  s.project.sounds = [snd({ media: 'a', duration: 1, length: 1, start: 0 }), snd({ media: 'b', duration: 1, length: 1, start: 3 })]
+  s.project.sounds = [snd(s.project, { media: 'a', duration: 1, length: 1, start: 0 }), snd(s.project, { media: 'b', duration: 1, length: 1, start: 3 })]
   const out = exportIt(dir, s)
   assert.ok(loud(out.file, 0.1, 0.8) > -6, 'the first sound plays at the start')
   assert.ok(loud(out.file, 1.5, 1) < -60, 'silence between them')
@@ -441,30 +503,6 @@ test('separating a clip\'s sound mutes the clip and the sound plays from the sam
   s.project = { ...s.project, sounds: [{ ...s.project.sounds[0], volume: 0 }] }
   assert.ok(loud(exportIt(dir, s).file, 0.5, 2) < -60, 'turning the separate sound down silences the video')
 }))
-
-test('sounds and clips can be split, trimmed and duplicated', () => {
-  const p = newProject({ duration: 10, width: W, height: H, hasAudio: true })
-  const song = snd({ media: 'x', duration: 20, length: 10, start: 2 })
-  const withSong: Project = { ...p, sounds: [song] }
-  const split = splitSound(withSong, song.id, 6)!
-  assert.equal(split.project.sounds.length, 2)
-  assert.equal(split.project.sounds[0].length, 4)
-  assert.equal(split.project.sounds[1].start, 6)
-  assert.equal(split.project.sounds[1].offset, 4, 'the second half carries on where the first stopped')
-  assert.equal(splitSound(withSong, song.id, 2.05), null, 'not right at an edge')
-  const trimmedEnd = trimSound(withSong, song.id, 'end', 5)!.sounds[0]
-  assert.equal(trimmedEnd.length, 3)
-  const trimmedStart = trimSound(withSong, song.id, 'start', 4)!.sounds[0]
-  assert.equal(trimmedStart.start, 4)
-  assert.equal(trimmedStart.offset, 2)
-  assert.equal(trimmedStart.length, 8)
-  const dup = duplicateSound(withSong, song.id)!
-  assert.equal(dup.project.sounds.length, 2)
-  assert.equal(dup.project.sounds[1].start, 12)
-  const clipCopy = duplicateClip(p, p.clips[0].id)!
-  assert.equal(clipCopy.project.clips.length, 2)
-  assert.notEqual(clipCopy.project.clips[1].id, p.clips[0].id)
-})
 
 /** The dominant pitch of the first seconds of a file (zero crossings), a cheap way to tell sounds apart. */
 function pitch(file: string, from = 0, len = 2): number {
@@ -489,7 +527,7 @@ function toneFile(dir: string, name: string, hz: number, secs: number): string {
 /** A recording that holds the computer's sound (440 Hz) and the microphone (880 Hz) as tracks of their own, plus the mix. */
 function twoTrackSetup(dir: string): Setup {
   const s = recordingSetup(dir, 4, { tone: 660 })
-  s.project.tracks = { pc: true, mic: true }
+  s.project.recTracks = { pc: true, mic: true }
   s.media['recording-pc'] = { path: toneFile(dir, 'pc.m4a', 440, 4), kind: 'video', hasAudio: true, duration: 4, width: 0, height: 0 }
   s.media['recording-mic'] = { path: toneFile(dir, 'mic.m4a', 880, 4), kind: 'video', hasAudio: true, duration: 4, width: 0, height: 0 }
   return s
@@ -510,7 +548,7 @@ test('using the webcam\'s voice keeps the computer sound and drops only the reco
   const s = withCamera(dir, 'circle', { hasAudio: true, audio: true })
   const two = twoTrackSetup(dir)
   s.media = { ...two.media, camera: { path: makeVideo(dir, 'cam3.mp4', 4, { tone: 1320 }), kind: 'video', hasAudio: true, duration: 4, width: 640, height: 480 } }
-  s.project.tracks = { pc: true, mic: true }
+  s.project.recTracks = { pc: true, mic: true }
   const out = exportIt(dir, s)
   // both the computer's 440 Hz and the webcam's 1320 Hz are heard; the microphone's 880 Hz is not
   const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-t', '3', '-i', out.file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 })

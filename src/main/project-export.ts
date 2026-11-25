@@ -1,6 +1,7 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  cameraPieces, clipLength, clipPlaysOwnSound, clipVoiceParts, FADE_SECONDS, usesCameraSound, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Overlay, type PipOverlay, type Project, type ZoomOverlay
+  cameraPieces, clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFullBox, paintOrder, soundOn, totalDuration, usesCameraSound,
+  zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Fade, type Overlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -144,18 +145,8 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
   const overlayFormat = wide ? 'yuv444' : 'yuv420'
   const g = new Graph()
 
-  // ---- where every clip sits, in whole frames ----
-  const lens = p.clips.map((c) => frames(clipLength(c)))
-  const overlaps = p.clips.map((c, i) =>
-    i > 0 && c.transition === 'fade' ? clamp(Math.round(c.transitionDur * fps), 1, Math.floor(Math.min(lens[i], lens[i - 1]) / 2)) : 0
-  )
-  const starts: number[] = []
-  let cursor = 0
-  p.clips.forEach((_, i) => {
-    starts.push(Math.max(0, cursor - overlaps[i]))
-    cursor = starts[i] + lens[i]
-  })
-  const totalFrames = Math.max(1, cursor)
+  // ---- how long the whole video is, in whole frames ----
+  const totalFrames = Math.max(1, frames(totalDuration(p)))
   const T = sec(totalFrames)
 
   const mediaOf = (id: string): ExportMedia => {
@@ -163,8 +154,33 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     if (!m) throw new Error(`A file used in this video is missing (${id}).`)
     return m
   }
+  const evenPx = (n: number): number => Math.max(2, Math.floor(n / 2) * 2)
+  const colourHex = (c: string): string => `0x${c.replace('#', '').slice(0, 6).padEnd(6, '0')}`
+  /** `atempo` only does 0.5–2 at a time, so bigger changes are chained. */
+  const tempo = (speed: number): string[] => {
+    const steps: number[] = []
+    let rest = speed
+    while (rest > 2 + 1e-9) {
+      steps.push(2)
+      rest /= 2
+    }
+    while (rest < 0.5 - 1e-9) {
+      steps.push(0.5)
+      rest /= 0.5
+    }
+    if (Math.abs(rest - 1) > 1e-9) steps.push(rest)
+    return steps.map((x) => `atempo=${num(x)}`)
+  }
+  const fadeVideo = (f: Fade, dir: 'in' | 'out', len: number): string => {
+    const d = Math.min(f.dur, len / 2)
+    if (d < 0.02) return ''
+    const st = dir === 'in' ? 0 : len - d
+    return f.color === DISSOLVE
+      ? `,fade=t=${dir}:st=${num(st)}:d=${num(d)}:alpha=1`
+      : `,fade=t=${dir}:st=${num(st)}:d=${num(d)}:color=${colourHex(f.color)}`
+  }
 
-  // ---- video: each clip cut to length and made the same size, rate and colour ----
+  // ---- video: a black canvas, then every piece from the back of the picture to the front ----
   const scaleTo = (sw: number, sh: number, matrix = true): string => {
     const colour = matrix ? ':out_color_matrix=bt709:out_range=tv' : ''
     if (sw === W && sh === H) return `scale=${SWS_FLAGS}${colour}`
@@ -173,57 +189,65 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`
     )
   }
-  const clipInput: number[] = []
-  const clipVideo = (c: Clip, i: number): string => {
-    const n = lens[i]
-    const len = sec(n)
-    let idx: number
-    let sw: number
-    let sh: number
-    const filters: string[] = []
-    if (c.kind === 'image') {
-      const path = c.card ? o.pictures[`card:${c.id}`]?.path : mediaOf(c.media).path
-      if (!path) throw new Error('A title card picture is missing.')
-      idx = g.file(['-loop', '1', '-framerate', String(fps), '-t', num(len)], path)
-      sw = c.card ? W : c.width
-      sh = c.card ? H : c.height
-      filters.push('setpts=PTS-STARTPTS')
-    } else {
-      const m = mediaOf(c.media)
-      const opts = c.in > 0.001 ? ['-ss', num(c.in), '-t', num(len + 0.5)] : ['-t', num(len + 0.5)]
-      idx = g.file(opts, m.path)
-      filters.push('setpts=PTS-STARTPTS', `fps=${fps}`)
-      if (c.kind === 'recording' && crop) filters.push(`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`)
-      sw = c.kind === 'recording' ? (crop?.width ?? even(o.recording.width)) : c.width
-      sh = c.kind === 'recording' ? (crop?.height ?? even(o.recording.height)) : c.height
-      // A source that ends a hair early is held on its last frame rather than throwing every later clip out of step.
-      filters.push('tpad=stop_mode=clone:stop_duration=1')
+  const canvas = g.label('base')
+  g.add(`color=c=black:s=${W}x${H}:r=${fps}:d=${num(T)},format=${wf},setsar=1,settb=AVTB[${canvas}]`)
+  let video = canvas
+  /** Which FFmpeg input each piece was opened as (its sound comes from the same one). */
+  const clipInput = new Map<string, number>()
+  for (const tr of paintOrder(p)) {
+    if (tr.hidden) continue
+    for (const c of p.clips.filter((x) => x.track === tr.id).sort((a, b) => a.start - b.start)) {
+      if (c.start >= T - 0.02) continue
+      const len = clipLength(c)
+      const n = frames(len)
+      const filters: string[] = []
+      let idx: number
+      let sw: number
+      let sh: number
+      if (c.kind === 'image') {
+        const path = c.card ? o.pictures[`card:${c.id}`]?.path : mediaOf(c.media).path
+        if (!path) throw new Error('A title card picture is missing.')
+        idx = g.file(['-loop', '1', '-framerate', String(fps), '-t', num(len)], path)
+        sw = c.card ? W : c.width
+        sh = c.card ? H : c.height
+        filters.push('setpts=PTS-STARTPTS')
+      } else {
+        const m = mediaOf(c.media)
+        idx = g.file([...(c.in > 0.001 ? ['-ss', num(c.in)] : []), '-t', num(len * c.speed + 0.5)], m.path)
+        filters.push(c.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(c.speed)}`, `fps=${fps}`)
+        if (c.kind === 'recording' && crop) filters.push(`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`)
+        sw = c.kind === 'recording' ? (crop?.width ?? even(o.recording.width)) : c.width
+        sh = c.kind === 'recording' ? (crop?.height ?? even(o.recording.height)) : c.height
+        // A source that ends a hair early is held on its last frame rather than throwing every later piece out of step.
+        filters.push('tpad=stop_mode=clone:stop_duration=1')
+      }
+      clipInput.set(c.id, idx)
+      let x = 0
+      let y = 0
+      const full = isFullBox(c.box) || !!c.card
+      if (full) filters.push(scaleTo(sw, sh))
+      else {
+        const pw = evenPx(c.box.w * W)
+        const ph = evenPx((pw * (sh || 9)) / (sw || 16))
+        const frame = c.border ? 4 : 0
+        filters.push(`scale=${pw}:${ph}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv`)
+        if (c.border) filters.push(`pad=${pw + 8}:${ph + 8}:4:4:color=white`)
+        x = clamp(Math.round(c.box.x * W), 0, Math.max(0, W - pw - frame * 2))
+        y = clamp(Math.round(c.box.y * H), 0, Math.max(0, H - ph - frame * 2))
+      }
+      const dissolves = (c.fadeIn.color === DISSOLVE && c.fadeIn.dur > 0.02) || (c.fadeOut.color === DISSOLVE && c.fadeOut.dur > 0.02)
+      filters.push('setsar=1', `format=${dissolves ? alphaFormat : wf}`, `trim=end_frame=${n}`, 'setpts=PTS-STARTPTS')
+      const label = g.label('v')
+      const fades = `${fadeVideo(c.fadeIn, 'in', len)}${fadeVideo(c.fadeOut, 'out', len)}`
+      // the fade filter forgets which colour matrix the picture uses; say so again or the colours shift
+      g.add(`[${idx}:v]${filters.join(',')}${fades}${fades ? ',setparams=range=tv:colorspace=bt709' : ''},setpts=PTS+${num(c.start)}/TB[${label}]`)
+      const nv = g.label('vl')
+      g.add(`[${video}][${label}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:enable='between(t,${num(c.start)},${num(Math.min(T, clipEnd(c)))})'[${nv}]`)
+      video = nv
     }
-    clipInput[i] = idx
-    filters.push(scaleTo(sw, sh), 'setsar=1', `format=${wf}`, `trim=end_frame=${n}`, 'setpts=PTS-STARTPTS', 'settb=AVTB')
-    const label = g.label('v')
-    g.add(`[${idx}:v]${filters.join(',')}[${label}]`)
-    return label
   }
-
-  const videoLabels = p.clips.map(clipVideo)
-  let vAcc = videoLabels[0]
-  let accFrames = lens[0]
-  for (let i = 1; i < p.clips.length; i++) {
-    const next = g.label('vj')
-    if (overlaps[i] > 0) {
-      g.add(`[${vAcc}][${videoLabels[i]}]xfade=transition=fade:duration=${num(sec(overlaps[i]))}:offset=${num(sec(accFrames - overlaps[i]))}[${next}]`)
-      accFrames += lens[i] - overlaps[i]
-    } else {
-      g.add(`[${vAcc}][${videoLabels[i]}]concat=n=2:v=1:a=0[${next}]`)
-      accFrames += lens[i]
-    }
-    vAcc = next
-  }
-  let video = vAcc
 
   // ---- blur / pixelate: part of the picture, so it goes under everything else ----
-  const evenPx = (n: number): number => Math.max(2, Math.floor(n / 2) * 2)
   const window = (a: Overlay): string => `enable='between(t,${num(a.start)},${num(a.end)})'`
   for (const b of p.overlays.filter((x): x is BlurOverlay => x.kind === 'blur')) {
     const x = clamp(Math.floor((b.x * W) / 2) * 2, 0, W - 2)
@@ -276,48 +300,16 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     }
   }
 
-  // ---- picture-in-picture, then the editor's drawn pictures, in the order they were added ----
-  const audioParts: string[] = []
+  // ---- the editor's drawn pictures (comments, arrows, spotlights…), in the order they were added ----
   const fade = (a: Overlay, len: number): string => {
     if (!a.fade) return ''
     const d = Math.min(FADE_SECONDS, len / 2)
     return d > 0.02 ? `,fade=t=in:st=0:d=${num(d)}:alpha=1,fade=t=out:st=${num(len - d)}:d=${num(d)}:alpha=1` : ''
   }
-  const place = (stream: string, a: Overlay, x: number, y: number): void => {
-    const nv = g.label('vo')
-    g.add(`[${video}][${stream}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:${window(a)}[${nv}]`)
-    video = nv
-  }
-  // picture-in-picture windows sit on top of everything drawn (the editor's preview does the same)
-  for (const a of [...p.overlays.filter((x) => x.kind !== 'pip'), ...p.overlays.filter((x) => x.kind === 'pip')]) {
+  for (const a of p.overlays) {
     const start = clamp(a.start, 0, T)
     const end = clamp(a.end, start, T)
     if (end - start < 0.05) continue
-    if (a.kind === 'pip') {
-      const m = mediaOf(a.media)
-      const pw = evenPx(a.w * W)
-      const ph = evenPx((pw * (a.height || m.height || 9)) / (a.width || m.width || 16))
-      const len = m.kind === 'image' ? end - start : Math.min(end - start, Math.max(0.1, m.duration - a.in))
-      const idx =
-        m.kind === 'image'
-          ? g.file(['-loop', '1', '-framerate', String(fps), '-t', num(len)], m.path)
-          : g.file(['-ss', num(a.in), '-t', num(len)], m.path)
-      const label = g.label('pv')
-      g.add(
-        `[${idx}:v]setpts=PTS-STARTPTS,fps=${fps},scale=${pw}:${ph}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
-          `pad=${pw + 8}:${ph + 8}:4:4:color=white,format=${alphaFormat}${fade(a, len)},setpts=PTS+${num(start)}/TB[${label}]`
-      )
-      place(label, a, clamp(Math.round(a.x * W), 0, W - pw - 8), clamp(Math.round(a.y * H), 0, H - ph - 8))
-      if (m.hasAudio && m.kind === 'video') {
-        const al = g.label('pa')
-        g.add(
-          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,` +
-            `volume=${num(clamp((a as PipOverlay).volume, 0, 2))},adelay=${Math.round(start * 1000)}|${Math.round(start * 1000)}[${al}]`
-        )
-        audioParts.push(al)
-      }
-      continue
-    }
     const pic = o.pictures[a.id]
     if (!pic) continue
     const len = end - start
@@ -326,7 +318,9 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     g.add(
       `[${idx}:v]format=rgba${fade(a, len)},scale=out_color_matrix=bt709:out_range=tv:flags=bicubic,format=${alphaFormat},setpts=PTS+${num(start)}/TB[${label}]`
     )
-    place(label, a, pic.x, pic.y)
+    const nv = g.label('vo')
+    g.add(`[${video}][${label}]overlay=${pic.x}:${pic.y}:eof_action=pass:format=${overlayFormat}:${window(a)}[${nv}]`)
+    video = nv
   }
 
   // ---- the face camera: on top of everything, following the recording wherever it is shown ----
@@ -356,13 +350,13 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       `:a='${shaped ? `255*clip(0.5-${dist}*${num(full / 2)},0,1)` : '255'}'`
     pieces.forEach((pc, i) => {
       const len = pc.end - pc.start
-      const idx = g.file(['-ss', num(pc.from), '-t', num(len + 0.3)], m.path)
+      const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.3)], m.path)
       const label = g.label('cam')
       const d = Math.min(FADE_SECONDS, len / 2)
       const fadeIn = camera.fade && i === 0 && d > 0.02 ? `,fade=t=in:st=0:d=${num(d)}:alpha=1` : ''
       const fadeOut = camera.fade && i === pieces.length - 1 && d > 0.02 ? `,fade=t=out:st=${num(len - d)}:d=${num(d)}:alpha=1` : ''
       g.add(
-        `[${idx}:v]setpts=PTS-STARTPTS,fps=${fps},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
+        `[${idx}:v]${pc.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(pc.speed)}`},fps=${fps},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
           `format=${alphaFormat},${geq}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(pc.start)}/TB[${label}]`
       )
       const nv = g.label('vo')
@@ -371,91 +365,75 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     })
   }
 
-  // ---- sound: each clip's own, the camera's voice, picture-in-picture sound, then every sound laid under the video ----
+  // ---- sound: every piece's own, the camera's voice, the recording's own tracks, then every sound on the audio tracks ----
   const cameraSound = usesCameraSound(p) && !!o.media[p.camera!.media]?.hasAudio
   const camSoundPieces = cameraSound ? cameraPieces(p, true) : []
-  // while the camera's voice is used, the screen recording is silent
-  const clipHasSound = (c: Clip): boolean => clipPlaysOwnSound(p, c) && mediaOf(c.media).hasAudio
+  const ownClips = p.clips.filter((c) => clipPlaysOwnSound(p, c) && !!o.media[c.media]?.hasAudio && c.start < T - 0.02 && clipInput.has(c.id))
   // the computer sound or the microphone alone, taken out of the recording
-  const trackParts = clipVoiceParts(p).filter((v) => o.media[v.media]?.hasAudio)
-  const sounds = p.sounds.filter((x) => o.media[x.media]?.hasAudio && o.media[x.media].kind === 'video' && x.start < T - 0.05)
-  const anySound = o.format !== 'gif' && (p.clips.some(clipHasSound) || camSoundPieces.length > 0 || trackParts.length > 0 || audioParts.length > 0 || sounds.length > 0)
+  const trackParts = clipVoiceParts(p).filter((v) => o.media[v.media]?.hasAudio && v.start < T - 0.02)
+  const sounds = p.sounds.filter((x) => soundOn(p, x.track) && o.media[x.media]?.hasAudio && o.media[x.media].kind === 'video' && x.start < T - 0.05)
+  const anySound = o.format !== 'gif' && (ownClips.length > 0 || camSoundPieces.length > 0 || trackParts.length > 0 || sounds.length > 0)
   let audio: string | null = null
   if (anySound) {
-    const clipAudio = p.clips.map((c, i) => {
-      const len = sec(lens[i])
+    const pre = `aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS`
+    const ms = (s: number): number => Math.max(0, Math.round(s * 1000))
+    const voiceParts: string[] = []
+    for (const c of ownClips) {
+      const len = clipLength(c)
       const label = g.label('a')
-      if (clipHasSound(c)) {
-        const idx = clipInput[i]
-        g.add(
-          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${num(clamp(c.volume, 0, 2))},` +
-            `apad=whole_dur=${num(len)},atrim=duration=${num(len)},asetpts=PTS-STARTPTS[${label}]`
-        )
-      } else {
-        g.add(`anullsrc=r=${AUDIO_RATE}:cl=stereo,atrim=duration=${num(len)},asetpts=PTS-STARTPTS[${label}]`)
-      }
-      return label
-    })
-    let aAcc = clipAudio[0]
-    for (let i = 1; i < clipAudio.length; i++) {
-      const next = g.label('aj')
-      if (overlaps[i] > 0) g.add(`[${aAcc}][${clipAudio[i]}]acrossfade=d=${num(sec(overlaps[i]))}:c1=tri:c2=tri[${next}]`)
-      else g.add(`[${aAcc}][${clipAudio[i]}]concat=n=2:v=0:a=1[${next}]`)
-      aAcc = next
+      const fi = Math.min(c.fadeIn.dur, len / 2)
+      const fo = Math.min(c.fadeOut.dur, len / 2)
+      g.add(
+        `[${clipInput.get(c.id)}:a]${[pre, ...tempo(c.speed), `volume=${num(clamp(c.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')}` +
+          (fi > 0.02 ? `,afade=t=in:st=0:d=${num(fi)}` : '') +
+          (fo > 0.02 ? `,afade=t=out:st=${num(len - fo)}:d=${num(fo)}` : '') +
+          `,adelay=${ms(c.start)}|${ms(c.start)}[${label}]`
+      )
+      voiceParts.push(label)
     }
-    let voice = aAcc
     if (camSoundPieces.length) {
       // the camera's own recording of the person's voice: it plays from the same file as the picture, so they stay together
       const cam = p.camera!
-      const parts = camSoundPieces.map((pc) => {
+      for (const pc of camSoundPieces) {
         const len = pc.end - pc.start
-        const idx = g.file(['-ss', num(pc.from), '-t', num(len + 0.1)], mediaOf(cam.media).path)
+        const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.1)], mediaOf(cam.media).path)
         const label = g.label('ca')
-        const ms = Math.round(pc.start * 1000)
-        g.add(
-          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${num(clamp(cam.volume, 0, 2))},` +
-            `atrim=duration=${num(len)},adelay=${ms}|${ms}[${label}]`
-        )
-        return label
-      })
-      const joined = g.label('cv')
-      g.add(`[${voice}]${parts.map((x) => `[${x}]`).join('')}amix=inputs=${parts.length + 1}:duration=first:normalize=0[${joined}]`)
-      voice = joined
+        g.add(`[${idx}:a]${[pre, ...tempo(pc.speed), `volume=${num(clamp(cam.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')},adelay=${ms(pc.start)}|${ms(pc.start)}[${label}]`)
+        voiceParts.push(label)
+      }
     }
-    if (trackParts.length) {
-      const parts = trackParts.map((v) => {
-        const len = Math.min(v.length, Math.max(0.1, T - v.start))
-        const idx = g.file(['-ss', num(v.from), '-t', num(len + 0.1)], mediaOf(v.media).path)
-        const label = g.label('tp')
-        const ms = Math.round(v.start * 1000)
-        g.add(
-          `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,volume=${num(clamp(v.volume, 0, 2))},` +
-            `atrim=duration=${num(len)},adelay=${ms}|${ms}[${label}]`
-        )
-        return label
-      })
-      const joined = g.label('tv')
-      g.add(`[${voice}]${parts.map((x) => `[${x}]`).join('')}amix=inputs=${parts.length + 1}:duration=first:normalize=0[${joined}]`)
-      voice = joined
+    for (const v of trackParts) {
+      const len = Math.min(v.length, Math.max(0.1, T - v.start))
+      const idx = g.file(['-ss', num(v.from), '-t', num(len * v.speed + 0.1)], mediaOf(v.media).path)
+      const label = g.label('tp')
+      g.add(`[${idx}:a]${[pre, ...tempo(v.speed), `volume=${num(clamp(v.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')},adelay=${ms(v.start)}|${ms(v.start)}[${label}]`)
+      voiceParts.push(label)
     }
-    const voiceHeard = p.clips.some(clipHasSound) || camSoundPieces.length > 0 || trackParts.length > 0
+    let voice = g.label('vx')
+    if (voiceParts.length) {
+      const joined = voiceParts.length === 1 ? `[${voiceParts[0]}]anull` : `${voiceParts.map((x) => `[${x}]`).join('')}amix=inputs=${voiceParts.length}:duration=longest:normalize=0`
+      g.add(`${joined},apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${voice}]`)
+    } else {
+      g.add(`anullsrc=r=${AUDIO_RATE}:cl=stereo,atrim=duration=${num(T)},asetpts=PTS-STARTPTS[${voice}]`)
+    }
+    const voiceHeard = voiceParts.length > 0
     const mixIn: string[] = []
     for (const m of sounds) {
       const file = mediaOf(m.media)
       const room = Math.max(0.1, T - m.start)
       const len = Math.min(room, Math.max(MIN_LEN, m.length))
+      const need = len * m.speed
       const idx = m.loop
-        ? g.file(['-stream_loop', '-1', ...(m.offset > 0.001 ? ['-ss', num(m.offset)] : []), '-t', num(len)], file.path)
-        : g.file(['-ss', num(m.offset), '-t', num(len)], file.path)
+        ? g.file(['-stream_loop', '-1', ...(m.offset > 0.001 ? ['-ss', num(m.offset)] : []), '-t', num(need)], file.path)
+        : g.file(['-ss', num(m.offset), '-t', num(need)], file.path)
       const fi = clamp(m.fadeIn, 0, len / 2)
       const fo = clamp(m.fadeOut, 0, len / 2)
       const ml = g.label('m')
       g.add(
-        `[${idx}:a]aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS,atrim=duration=${num(len)},` +
-          `volume=${num(clamp(m.volume, 0, 2))}` +
+        `[${idx}:a]${[pre, ...tempo(m.speed), `atrim=duration=${num(len)}`, `volume=${num(clamp(m.volume, 0, 2))}`].join(',')}` +
           (fi > 0.02 ? `,afade=t=in:st=0:d=${num(fi)}` : '') +
           (fo > 0.02 ? `,afade=t=out:st=${num(len - fo)}:d=${num(fo)}` : '') +
-          `,adelay=${Math.round(m.start * 1000)}|${Math.round(m.start * 1000)}[${ml}]`
+          `,adelay=${ms(m.start)}|${ms(m.start)}[${ml}]`
       )
       let bed = ml
       if (m.duck && voiceHeard) {
@@ -470,12 +448,11 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       }
       mixIn.push(bed)
     }
-    mixIn.push(...audioParts)
     audio = g.label('am')
     if (mixIn.length) {
       g.add(`[${voice}]${mixIn.map((x) => `[${x}]`).join('')}amix=inputs=${mixIn.length + 1}:duration=first:normalize=0,alimiter=limit=0.95,apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${audio}]`)
     } else {
-      g.add(`[${voice}]apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${audio}]`)
+      g.add(`[${voice}]alimiter=limit=0.95,apad=whole_dur=${num(T)},atrim=duration=${num(T)}[${audio}]`)
     }
   }
 
