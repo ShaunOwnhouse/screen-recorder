@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, addVideoTrack, patchTrack, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
+import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, patchTrack, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -579,4 +579,40 @@ test('the finished video can be sped up or slowed down, sound and picture togeth
     // atempo keeps the pitch the same
     assert.ok(Math.abs(pitch(out.file, 0.1, 0.5) - 440) < 60, `${speed}× pitch ${pitch(out.file, 0.1, 0.5)}`)
   }
+}))
+
+test('music dips partway through and comes back, and a clip\'s own sound can dip too', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 6, { tone: null })
+  s.media.song = { path: makeTone(dir, 'song.wav', 6), kind: 'video', hasAudio: true, duration: 6, width: 0, height: 0 }
+  // dip to almost nothing from 2 s to about 4 s, back up by 4.4 s
+  s.project.sounds = [snd(s.project, { media: 'song', name: 'song.wav', duration: 6, start: 0, length: 6, volEnv: envDip(undefined, 1.8, 1.6, 0.03, 0.2) })]
+  const out = exportIt(dir, s)
+  const before = loud(out.file, 0.2, 1.2)
+  const during = loud(out.file, 2.3, 1.2)
+  const after = loud(out.file, 4.8, 1)
+  assert.ok(before > -6, `full before the dip: ${before}`)
+  assert.ok(during < before - 20, `quiet in the dip: ${during} vs ${before}`)
+  assert.ok(after > before - 2, `back to full afterwards: ${after} vs ${before}`)
+  // the same line on a clip that has its own sound
+  const t = recordingSetup(dir, 6, { tone: 440 })
+  t.project.clips = t.project.clips.map((c) => ({ ...c, volEnv: envDip(undefined, 1.8, 1.6, 0.03, 0.2) }))
+  const own = exportIt(dir, t)
+  assert.ok(loud(own.file, 2.3, 1.2) < loud(own.file, 0.2, 1.2) - 20, 'the recording\'s own sound dips as well')
+}))
+
+test('the face camera can fade away for a stretch and come back, and its voice can dip on its own', { timeout: 120000 }, inTemp((dir) => {
+  const s = withCamera(dir, 'circle', { showEnv: [{ t: 0, v: 1 }, { t: 1.2, v: 1 }, { t: 1.6, v: 0 }, { t: 2.4, v: 0 }, { t: 2.8, v: 1 }] })
+  const out = exportIt(dir, s)
+  assert.ok(near(frame(out.file, 0.5).at(480, 276), [0xe0, 0x10, 0x10], 30), `visible at first: ${frame(out.file, 0.5).at(480, 276)}`)
+  assert.ok(near(frame(out.file, 2.0).at(480, 276), [0x20, 0xa0, 0x40], 20), `gone in the middle (the recording shows): ${frame(out.file, 2.0).at(480, 276)}`)
+  assert.ok(near(frame(out.file, 3.5).at(480, 276), [0x10, 0x20, 0xe0], 30), `back at the end: ${frame(out.file, 3.5).at(480, 276)}`)
+  const mid = frame(out.file, 1.4).at(480, 276)
+  assert.ok(mid[0] < 0xe0 - 8 && mid[0] > 0x20 + 8, `half way through the fade it is half there: ${mid}`)
+  // the voice from the camera follows its own line (in timeline seconds), not the picture's
+  const v = withCamera(dir, 'circle', { hasAudio: true, audio: true, volEnv: [{ t: 0, v: 1 }, { t: 1.5, v: 1 }, { t: 1.8, v: 0 }, { t: 3, v: 0 }] })
+  v.media.camera = { ...v.media.camera, path: makeVideo(dir, 'cam3.mp4', 4, { tone: 880, source: 'color=c=0xe01010', size: [480, 480] }), hasAudio: true }
+  const voiced = exportIt(dir, v)
+  assert.ok(loud(voiced.file, 0.2, 1) > -28, 'heard at first')
+  assert.ok(loud(voiced.file, 2.2, 0.8) < -40, 'then silent while the line is down')
+  assert.ok(near(frame(voiced.file, 1.0).at(480, 276), [0xe0, 0x10, 0x10], 40), `the picture stays while only the voice dips: ${frame(voiced.file, 1.0).at(480, 276)}`)
 }))

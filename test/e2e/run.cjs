@@ -963,6 +963,15 @@ async function save(app, editor, name) {
       await editor.locator('#prop-cam-size').fill('0.3')
       await editor.selectOption('#prop-cam-corner', 'bottom-right')
       await editor.locator('#prop-cam-nudge').fill('0')
+      // hide just the camera picture for a stretch, later in the recording
+      check(`${T}: the camera has a "Show the camera over time" graph`, await editor.isVisible('#lvl-cam-show-graph'))
+      const Dcam = (await editorState(editor)).duration
+      await editor.evaluate((t) => window.__editor.store.seek(t), Dcam * 0.6)
+      await editor.click('#lvl-cam-show-dip')
+      const showEnv = await editor.evaluate(() => window.__editor.store.project.camera.showEnv)
+      const hiddenAt = showEnv.filter((q) => q.v < 0.2)
+      check(`${T}: "Dip here" makes the camera fade out and come back`, !!showEnv && showEnv.length === 4 && hiddenAt.length === 2, JSON.stringify(showEnv))
+      check(`${T}: the line shows on the camera bar in the timeline`, (await editor.locator('.blk.cam-blk svg.lvl-tl').count()) >= 1)
       st = await editorState(editor)
       const screenCopy = path.join(userData, 'screen-copy.mp4')
       const pendingScreen = fs.readdirSync(path.join(userData, 'pending')).find((f) => /^Recording .*\d\.mp4$/.test(f))
@@ -984,6 +993,10 @@ async function save(app, editor, name) {
       const elsewhere = pixelAt(out, t, W * 0.1, H * 0.5, W, H)
       const elsewhereScreen = pixelAt(screenCopy, t, W * 0.1, H * 0.5, W, H)
       check(`${T}: the rest of the screen is untouched`, !!elsewhere && dist(elsewhere, elsewhereScreen) < 40, `video ${elsewhere} vs screen ${elsewhereScreen}`)
+      const tHide = (hiddenAt[0].t + hiddenAt[1].t) / 2
+      const hideOut = pixelAt(out, tHide, cx, cy, W, H)
+      const hideScreen = pixelAt(screenCopy, tHide, cx, cy, W, H)
+      check(`${T}: while the camera is faded out the screen shows through in the saved video`, !!hideOut && !!hideScreen && dist(hideOut, hideScreen) < 45, `video ${hideOut} vs screen ${hideScreen} at ${tHide.toFixed(2)}s`)
       check(`${T}: its files are cleaned up once saved`, !fs.readdirSync(path.join(userData, 'pending')).some((f) => /camera/.test(f)))
       await setSettings(main, { camera: false })
     }

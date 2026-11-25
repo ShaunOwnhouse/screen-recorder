@@ -1,3 +1,4 @@
+import { levelLine } from './level.ts'
 import {
   audioTracks, cameraPieces, clipEnd, clipLength, moveClip, moveSound, soundEnd, trackById, trimClip, trimSound, videoTracks, type Clip, type Overlay, type Sound, type Track
 } from '../../shared/project.ts'
@@ -270,7 +271,9 @@ export class Timeline {
           const t = document.createElement('span')
           t.className = 'blk-label'
           t.textContent = 'Face camera'
-          b.append(t)
+          const shown = levelLine(cam.showEnv, 0, pc.start, pc.end, s.pxPerSec, CAM_H - 10)
+          const heard = cam.audio ? levelLine(cam.volEnv, 0, pc.start, pc.end, s.pxPerSec, CAM_H - 10, 'lvl-tl voice') : null
+          b.append(...(shown ? [shown] : []), ...(heard ? [heard] : []), t)
           return b
         })
       )
@@ -369,6 +372,8 @@ export class Timeline {
       f.style.width = `${this.x(Math.min(c.fadeOut.dur, len / 2))}px`
       b.append(f)
     }
+    const line = c.hasAudio && c.kind !== 'image' ? levelLine(c.volEnv, c.start, c.start, clipEnd(c), s.pxPerSec, VIDEO_H - 10) : null
+    if (line) b.append(line)
     b.append(label, handle('l', 'start'), handle('r', 'end'))
     return b
   }
@@ -388,7 +393,8 @@ export class Timeline {
     const label = document.createElement('span')
     label.className = 'blk-label'
     label.textContent = `${m.name} · ${Math.round(m.volume * 100)}%${m.speed !== 1 ? ` · ${Number(m.speed.toFixed(2))}×` : ''}${m.duck ? ' · quieter under voice' : ''}`
-    b.append(cv, label, handle('l', 'start'), handle('r', 'end'))
+    const line = levelLine(m.volEnv, m.start, m.start, soundEnd(m), s.pxPerSec, 36)
+    b.append(cv, ...(line ? [line] : []), label, handle('l', 'start'), handle('r', 'end'))
     return b
   }
 

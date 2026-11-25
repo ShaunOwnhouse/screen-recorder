@@ -2,11 +2,19 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   activeClips, addAudioTrack, addClip, addSound, addVideoTrack, baseVideoTrack, cameraPieces, clipEnd, clipLength, cutOverlays, deleteClip, detachSound,
-  duplicateClip, duplicateSound, insertClipPushing, isFree, isPlain, moveClip, moveSound, newCamera, newClipBase, newId, newProject, nearestFree, openGap,
+  duplicateClip, duplicateSound, insertClipPushing, insertGap, isFree, isPlain, moveClip, moveSound, newCamera, newClipBase, newId, newProject, nearestFree, openGap,
   overlayAlpha, patchTrack, removeSpan, removeTrack, setClipSpeed, setSoundSpeed, soundEnd, splitAt, totalDuration, trimClip, trimSound, videoTracks,
-  zoomState, type Clip, type Overlay, type Project, type Sound, type ZoomOverlay
+  envAt, envCut, envDip, envOpen, envPut, envRamp, envRemove, envScale, envShift, envSplit, zoomState, type Clip, type Overlay, type Project, type Sound, type ZoomOverlay
 } from '../src/shared/project.ts'
 
+const splitSoundPieces = (p: Project, id: string, at: number): [Sound, Sound] => {
+  const s = p.sounds.find((x) => x.id === id)!
+  const next = splitAt(p, at)!.project
+  assert.equal(next.sounds.length, p.sounds.length + 1, `split ${s.name}`)
+  const pieces = [...next.sounds].sort((a, b) => a.start - b.start)
+  return [pieces[0], pieces[1]]
+}
+const insertGapFor = (p: Project, at: number, len: number): Project => insertGap(p, at, len)
 const base = (): Project => newProject({ duration: 20, width: 1920, height: 1080, hasAudio: true })
 const text = (start: number, end: number): Overlay => ({ id: newId('o'), kind: 'text', start, end, fade: true, x: 0.1, y: 0.1, w: 0.3, text: 'hi', size: 24, color: '#fff', bg: '', font: 'sans', align: 'left', tx: 0.5, ty: 0.5 })
 const times = (p: Project): Array<[number, number]> => p.overlays.map((o) => [o.start, o.end])
@@ -291,4 +299,77 @@ test('zoom glides to the chosen area, holds, and goes back', () => {
 test('cutting and opening gaps are exact inverses for things after the gap', () => {
   const o = [text(10, 12)]
   assert.deepEqual(times({ ...base(), overlays: cutOverlays(openGap(o, 5, 3), 5, 8) }), [[10, 12]])
+})
+
+test('a level line goes straight between its points and stays level before the first and after the last', () => {
+  const e = envPut(envPut(envPut(undefined, 2, 1), 4, 0), 6, 1)
+  assert.equal(envAt(undefined, 3), 1)
+  assert.equal(envAt(e, 0), 1)
+  assert.equal(envAt(e, 3), 0.5)
+  assert.equal(envAt(e, 4), 0)
+  assert.equal(envAt(e, 5), 0.5)
+  assert.equal(envAt(e, 99), 1)
+  assert.deepEqual(envRemove(e, 1).map((q) => q.t), [2, 6])
+  // putting a point nearly on top of another replaces it, and levels stay between 0 and 1
+  assert.deepEqual(envPut(e, 4.02, 5).map((q) => [q.t, q.v]), [[2, 1], [4.02, 1], [6, 1]])
+})
+
+test('a dip goes down, holds, and comes back to where it was; a ramp glides and stays', () => {
+  const d = envDip(undefined, 10, 5, 0.1, 0.5)
+  assert.equal(envAt(d, 9), 1)
+  assert.ok(Math.abs(envAt(d, 12) - 0.1) < 1e-9)
+  assert.ok(Math.abs(envAt(d, 10.25) - 0.55) < 1e-9)
+  assert.equal(envAt(d, 20), 1)
+  const r = envRamp(d, 30, 0, 2)
+  assert.equal(envAt(r, 29), 1)
+  assert.equal(envAt(r, 31), 0.5)
+  assert.equal(envAt(r, 40), 0)
+  assert.ok(Math.abs(envAt(r, 12) - 0.1) < 1e-9, 'the earlier dip is kept')
+})
+
+test('splitting, trimming, speeding and cutting move the line with the sound it belongs to', () => {
+  const e = [{ t: 0, v: 1 }, { t: 4, v: 1 }, { t: 6, v: 0 }, { t: 10, v: 0 }]
+  const [a, b] = envSplit(e, 5)
+  assert.equal(envAt(a, 5), 0.5)
+  assert.equal(envAt(b, 0), 0.5)
+  assert.equal(envAt(b, 1), 0)
+  assert.equal(envAt(envShift(e, 3), 3), 1)
+  assert.equal(envAt(envShift(e, -4), 0), 1)
+  assert.equal(envAt(envShift(e, -6), 0), 0)
+  assert.equal(envAt(envScale(e, 0.5), 3), 0)
+  assert.equal(envAt(envCut(e, 0, 4), 0), 1)
+  assert.equal(envAt(envCut(e, 0, 4), 2), 0)
+  assert.equal(envAt(envOpen(e, 2, 3), 6), 1)
+  assert.equal(envAt(envOpen(e, 2, 3), 9), 0)
+})
+
+test('splitting or trimming a sound keeps its level line lined up with the music', () => {
+  const dip = [{ t: 0, v: 1 }, { t: 8, v: 1 }, { t: 9, v: 0 }, { t: 11, v: 0 }, { t: 12, v: 1 }]
+  const added = addSound(base(), song(0, 20))
+  const withEnv: Project = { ...added.project, sounds: added.project.sounds.map((x) => ({ ...x, volEnv: dip })) }
+  const id = withEnv.sounds[0].id
+  const [left, right] = splitSoundPieces(withEnv, id, 10)
+  assert.equal(envAt(left.volEnv, 9.5), 0, 'before the split nothing changed')
+  assert.equal(envAt(right.volEnv, 0.5), 0, 'still dipped at 10.5 s of the original')
+  assert.equal(envAt(right.volEnv, 1.5), 0.5, '11.5 s of the original, on its way back up')
+  assert.equal(envAt(right.volEnv, 2), 1)
+  // trimming 4 s off the front moves the line 4 s earlier along with the music
+  const trimmed = trimSound(withEnv, id, 'start', 4)!
+  assert.equal(envAt(trimmed.sounds[0].volEnv, 5), 0, 'the same moment of the music, 4 s earlier')
+  // a faster sound is shorter, and its dip shrinks with it
+  const fast = setSoundSpeed(withEnv, id, 2)!
+  assert.equal(envAt(fast.sounds[0].volEnv, 5), 0)
+})
+
+test('the camera\'s lines slide with the timeline when time is cut out or opened up, and a split-off sound keeps its line', () => {
+  const cam = newCamera({ media: 'cam', name: 'cam', duration: 20, width: 640, height: 480, hasAudio: true }, 0, 16 / 9)
+  const p: Project = { ...base(), camera: { ...cam, showEnv: [{ t: 0, v: 1 }, { t: 10, v: 1 }, { t: 12, v: 0 }, { t: 16, v: 0 }] } }
+  const cut = removeSpan(p, 2, 6)
+  assert.equal(envAt(cut.camera!.showEnv, 6), 1)
+  assert.equal(envAt(cut.camera!.showEnv, 8), 0, 'the fade-out that started at 10 s now starts at 6 s')
+  const opened = insertGapFor(p, 2, 3)
+  assert.equal(envAt(opened.camera!.showEnv, 13), 1)
+  assert.equal(envAt(opened.camera!.showEnv, 15), 0)
+  const e = addClip(base(), { ...video(6, 'talk'), volEnv: [{ t: 0, v: 0.5 }] }, 20)
+  assert.deepEqual(detachSound(e.project, e.select!)!.sound.volEnv, [{ t: 0, v: 0.5 }])
 })

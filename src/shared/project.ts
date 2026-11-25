@@ -53,6 +53,103 @@ export interface Box {
 export const FULL_BOX: Box = { x: 0, y: 0, w: 1 }
 export const isFullBox = (b: Box): boolean => b.w >= 0.999
 
+/**
+ * A level that changes over time, drawn as a line through points (and straight between them): 1 = as set, 0 = silent (or
+ * hidden). Before the first point and after the last it stays at that point's level. Used to dip the music under a voice,
+ * or to let the face camera disappear for a while.
+ */
+export interface EnvPoint {
+  /** Seconds from the start of the piece (for the face camera: seconds on the whole timeline). */
+  t: number
+  /** 0–1 */
+  v: number
+}
+
+/** The level at time t (1 when there are no points). */
+export function envAt(env: EnvPoint[] | undefined, t: number): number {
+  if (!env || !env.length) return 1
+  if (t <= env[0].t) return env[0].v
+  const last = env[env.length - 1]
+  if (t >= last.t) return last.v
+  for (let i = 1; i < env.length; i++) {
+    if (t < env[i].t) {
+      const a = env[i - 1]
+      const b = env[i]
+      return b.t - a.t < 1e-9 ? b.v : a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t)
+    }
+  }
+  return last.v
+}
+
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v))
+
+/** Puts a point in (replacing one that is almost at the same time), keeping the points in time order. */
+export function envPut(env: EnvPoint[] | undefined, t: number, v: number): EnvPoint[] {
+  const out = (env ?? []).filter((p) => Math.abs(p.t - t) > 0.04)
+  out.push({ t: Math.max(0, t), v: clamp01(v) })
+  return out.sort((a, b) => a.t - b.t)
+}
+
+export function envRemove(env: EnvPoint[] | undefined, index: number): EnvPoint[] {
+  return (env ?? []).filter((_, i) => i !== index)
+}
+
+/** The level goes down to `low` for `hold` seconds from time t, then comes back to what it was. */
+export function envDip(env: EnvPoint[] | undefined, t: number, hold = 3, low = 0.12, ramp = 0.4): EnvPoint[] {
+  const before = envAt(env, t)
+  const after = envAt(env, t + hold + ramp * 2)
+  let e = (env ?? []).filter((p) => p.t < t - 0.04 || p.t > t + hold + ramp * 2 + 0.04)
+  for (const [tt, v] of [[t, before], [t + ramp, low], [t + ramp + hold, low], [t + ramp * 2 + hold, after]] as const) e = envPut(e, tt, v)
+  return e
+}
+
+/** From time t the level glides to `to` over `dur` seconds and stays there. */
+export function envRamp(env: EnvPoint[] | undefined, t: number, to: number, dur = 1.5): EnvPoint[] {
+  const from = envAt(env, t)
+  let e = (env ?? []).filter((p) => p.t < t - 0.04)
+  e = envPut(e, t, from)
+  return envPut(e, t + dur, to)
+}
+
+/** Slides every point by `by` seconds (negative = earlier) and drops the ones that fall before 0, keeping the level at 0. */
+export function envShift(env: EnvPoint[] | undefined, by: number): EnvPoint[] | undefined {
+  if (!env || !env.length) return env
+  const start = envAt(env, -by)
+  const kept = env.filter((p) => p.t + by > 1e-6).map((p) => ({ t: p.t + by, v: p.v }))
+  const out = by < 0 ? [{ t: 0, v: start }, ...kept] : [...kept]
+  return out.length ? out : undefined
+}
+
+/** Stretches or squeezes the line in time (for when the piece it belongs to is sped up or slowed down). */
+export function envScale(env: EnvPoint[] | undefined, by: number): EnvPoint[] | undefined {
+  return env && env.length ? env.map((p) => ({ t: p.t * by, v: p.v })) : env
+}
+
+/** Takes the stretch [a, b) out of the line: points inside go, later ones slide earlier. */
+export function envCut(env: EnvPoint[] | undefined, a: number, b: number): EnvPoint[] | undefined {
+  if (!env || !env.length) return env
+  const cut = b - a
+  const after = envAt(env, b)
+  const out = [...env.filter((p) => p.t < a - 1e-6), { t: a, v: after }, ...env.filter((p) => p.t > b + 1e-6).map((p) => ({ t: p.t - cut, v: p.v }))]
+  return out
+}
+
+/** Opens a gap of `len` seconds at `at`: later points slide later, and the level just holds across the gap. */
+export function envOpen(env: EnvPoint[] | undefined, at: number, len: number): EnvPoint[] | undefined {
+  if (!env || !env.length) return env
+  const v = envAt(env, at)
+  return [...env.filter((p) => p.t < at - 1e-6), { t: at, v }, { t: at + len, v }, ...env.filter((p) => p.t >= at - 1e-6).map((p) => ({ t: p.t + len, v: p.v }))]
+}
+
+/** Splits at time t into the part before it and the part after it (which starts again at 0). */
+export function envSplit(env: EnvPoint[] | undefined, t: number): [EnvPoint[] | undefined, EnvPoint[] | undefined] {
+  if (!env || !env.length) return [env, env]
+  const v = envAt(env, t)
+  const left = [...env.filter((p) => p.t < t - 1e-6), { t, v }]
+  const right = envShift(env, -t)
+  return [left, right]
+}
+
 /** A piece on a video track: the recording, a video or picture the person added, or a title card. */
 export interface Clip {
   id: string
@@ -83,6 +180,8 @@ export interface Clip {
   audioSource?: 'mix' | 'pc' | 'mic'
   fadeIn: Fade
   fadeOut: Fade
+  /** The piece's own sound over time (see EnvPoint). */
+  volEnv?: EnvPoint[]
   box: Box
   /** A white frame round a piece that is smaller than the picture. */
   border: boolean
@@ -231,6 +330,8 @@ export interface Sound {
   loop: boolean
   /** Turn it down whenever the video has sound (a voice). */
   duck: boolean
+  /** Its level over time (see EnvPoint): dip the music under a voice, bring it back later. */
+  volEnv?: EnvPoint[]
 }
 
 export const MIN_SOUND = 0.1
@@ -268,6 +369,10 @@ export interface CameraTrack {
   audio: boolean
   /** 0–2: how loud the camera's sound is. */
   volume: number
+  /** How visible the camera is over the timeline (see EnvPoint): fade it out for a while and back. */
+  showEnv?: EnvPoint[]
+  /** The camera's sound over the timeline. */
+  volEnv?: EnvPoint[]
 }
 
 export interface Project {
@@ -467,14 +572,14 @@ export function trimClip(p: Project, id: string, edge: 'start' | 'end', to: numb
   if (edge === 'start') {
     let start = clamp(to, prevEnd, end - MIN_CLIP)
     if (c.kind === 'image') {
-      next = { ...c, start, in: 0, out: (end - start) * c.speed }
+      next = { ...c, start, in: 0, out: (end - start) * c.speed, volEnv: envShift(c.volEnv, c.start - start) }
     } else {
       let nin = c.in + (start - c.start) * c.speed
       if (nin < 0) {
         start = c.start - c.in / c.speed
         nin = 0
       }
-      next = { ...c, start, in: nin }
+      next = { ...c, start, in: nin, volEnv: envShift(c.volEnv, c.start - start) }
     }
   } else {
     const e = clamp(to, c.start + MIN_CLIP, nextStart)
@@ -491,7 +596,7 @@ export function setClipSpeed(p: Project, id: string, speed: number): Project | n
   const c = p.clips.find((x) => x.id === id)
   if (!c) return null
   const sp = clamp(speed, MIN_SPEED, MAX_SPEED)
-  const next = { ...c, speed: sp }
+  const next = { ...c, speed: sp, volEnv: envScale(c.volEnv, c.speed / sp) }
   const grow = clipEnd(next) - clipEnd(c)
   let clips = p.clips.map((x) => (x.id === id ? next : x))
   let sounds = p.sounds
@@ -537,19 +642,21 @@ export function duplicateClip(p: Project, id: string): Edit | null {
 /** Cuts a piece in two at time t of the timeline. */
 export function splitClipAt(c: Clip, t: number): [Clip, Clip] {
   const off = (t - c.start) * c.speed
-  const first: Clip = { ...c, out: c.in + off, fadeOut: NO_FADE }
+  const [envA, envB] = envSplit(c.volEnv, t - c.start)
+  const first: Clip = { ...c, out: c.in + off, fadeOut: NO_FADE, volEnv: envA }
   const second: Clip = {
-    ...c, id: newId('c'), start: t, in: c.kind === 'image' ? 0 : c.in + off, out: c.kind === 'image' ? c.out - c.in - off : c.out, fadeIn: NO_FADE
+    ...c, id: newId('c'), start: t, in: c.kind === 'image' ? 0 : c.in + off, out: c.kind === 'image' ? c.out - c.in - off : c.out, fadeIn: NO_FADE, volEnv: envB
   }
   return [first, second]
 }
 
 export function splitSoundAt(s: Sound, t: number): [Sound, Sound] {
   const rel = t - s.start
-  const first: Sound = { ...s, length: rel, fadeOut: 0 }
+  const [envA, envB] = envSplit(s.volEnv, rel)
+  const first: Sound = { ...s, length: rel, fadeOut: 0, volEnv: envA }
   const adv = rel * s.speed
   const second: Sound = {
-    ...s, id: newId('s'), start: t, length: s.length - rel, offset: s.loop && s.duration > 0 ? (s.offset + adv) % s.duration : s.offset + adv, fadeIn: 0
+    ...s, id: newId('s'), start: t, length: s.length - rel, offset: s.loop && s.duration > 0 ? (s.offset + adv) % s.duration : s.offset + adv, fadeIn: 0, volEnv: envB
   }
   return [first, second]
 }
@@ -594,7 +701,8 @@ export function removeSpan(p: Project, a: number, b: number): Project {
     if (s.start >= a - EPS && e <= b + EPS) continue
     sounds.push(s.start >= b - EPS ? { ...s, start: s.start - cut } : s)
   }
-  return { ...split, clips, sounds, overlays: cutOverlays(p.overlays, a, b) }
+  const camera = split.camera ? { ...split.camera, showEnv: envCut(split.camera.showEnv, a, b), volEnv: envCut(split.camera.volEnv, a, b) } : split.camera
+  return { ...split, clips, sounds, camera, overlays: cutOverlays(p.overlays, a, b) }
 }
 
 /** Opens a gap of `len` seconds at `at` on every track: whatever is playing there is split and the later part slides later. */
@@ -604,6 +712,7 @@ export function insertGap(p: Project, at: number, len: number): Project {
     ...split,
     clips: split.clips.map((c) => (c.start >= at - EPS ? { ...c, start: c.start + len } : c)),
     sounds: split.sounds.map((s) => (s.start >= at - EPS ? { ...s, start: s.start + len } : s)),
+    camera: split.camera ? { ...split.camera, showEnv: envOpen(split.camera.showEnv, at, len), volEnv: envOpen(split.camera.volEnv, at, len) } : split.camera,
     overlays: openGap(p.overlays, at, len)
   }
 }
@@ -713,7 +822,7 @@ export function trimSound(p: Project, id: string, edge: 'start' | 'end', to: num
     const offset = clamp(s.offset + (start - s.start) * s.speed, 0, Math.max(0, s.duration - MIN_SOUND))
     // the file can only be pulled back as far as its beginning
     const moved = (offset - s.offset) / s.speed
-    next = { ...s, start: s.start + moved, offset, length: end - (s.start + moved) }
+    next = { ...s, start: s.start + moved, offset, length: end - (s.start + moved), volEnv: envShift(s.volEnv, -moved) }
   }
   return { ...p, sounds: p.sounds.map((x) => (x.id === id ? next : x)) }
 }
@@ -724,7 +833,7 @@ export function setSoundSpeed(p: Project, id: string, speed: number): Project | 
   const sp = clamp(speed, MIN_SPEED, MAX_SPEED)
   // keep the same stretch of the file: a faster sound is shorter
   const length = s.loop ? s.length : Math.max(MIN_SOUND, (s.length * s.speed) / sp)
-  const next = { ...s, speed: sp, length }
+  const next = { ...s, speed: sp, length, volEnv: s.loop ? s.volEnv : envScale(s.volEnv, s.speed / sp) }
   const grow = soundEnd(next) - soundEnd(s)
   let clips = p.clips
   let sounds = p.sounds.map((x) => (x.id === id ? next : x))
@@ -775,6 +884,8 @@ export interface VoicePart {
   length: number
   volume: number
   speed: number
+  /** Its level over time, from where it starts on the timeline. */
+  env?: EnvPoint[]
 }
 
 /** Does this piece's sound count at all (its track is neither muted nor hidden)? */
@@ -789,7 +900,7 @@ export function clipVoiceParts(p: Project): VoicePart[] {
   for (const c of p.clips) {
     const t = clipTrack(p, c)
     if (t.mode === 'media' && t.media && c.hasAudio && soundOn(p, c.track)) {
-      out.push({ media: t.media, from: c.in, start: c.start, length: clipLength(c), volume: c.volume, speed: c.speed })
+      out.push({ media: t.media, from: c.in, start: c.start, length: clipLength(c), volume: c.volume, speed: c.speed, env: c.volEnv })
     }
   }
   return out
@@ -809,7 +920,7 @@ export function detachSound(p: Project, id: string): { project: Project; sound: 
   if (track.mode === 'none') return null
   const made = addSound(p, {
     id: newId('s'), origin: 'split', media: track.media ?? c.media, name: `Sound of ${c.name}`, duration: c.out, offset: c.in, start: c.start,
-    length: clipLength(c), speed: c.speed, volume: c.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
+    length: clipLength(c), speed: c.speed, volume: c.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false, volEnv: c.volEnv
   })
   const clips = made.project.clips.map((x) => (x.id === id ? { ...x, hasAudio: false } : x))
   return { project: { ...made.project, clips }, sound: made.sound }

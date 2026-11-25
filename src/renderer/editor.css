@@ -1664,3 +1664,32 @@ button.accent {
   pointer-events: none;
   display: none;
 }
+
+/* ---- level lines: volume / visibility over time ---- */
+.lvl-svg {
+  display: block;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.lvl-grid { stroke: rgba(255, 255, 255, 0.1); stroke-width: 1; stroke-dasharray: 3 4; }
+.lvl-line { fill: none; stroke: #facc15; stroke-width: 2.2; stroke-linejoin: round; pointer-events: none; }
+.lvl-head { stroke: #fff; stroke-width: 1.5; opacity: 0.7; pointer-events: none; }
+.lvl-pt { fill: #facc15; stroke: #1f2937; stroke-width: 2; cursor: grab; }
+.lvl-pt:hover { fill: #fff; }
+.lvl-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.lvl-rec { margin-top: 2px; }
+.lvl-tl {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  pointer-events: none;
+  overflow: visible;
+}
+.lvl-tl polyline { fill: none; stroke: #facc15; stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.7)); }
+.lvl-tl circle { fill: #facc15; stroke: #1f2937; stroke-width: 1; }
+.lvl-tl.voice polyline { stroke: #7dd3fc; stroke-dasharray: 5 3; }
+.lvl-tl.voice circle { fill: #7dd3fc; }

@@ -1,7 +1,7 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
   cameraPieces, clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFullBox, paintOrder, soundOn, totalDuration, usesCameraSound,
-  zoomTarget, zoomWeight, type BlurOverlay, type Clip, type Fade, type Overlay, type Project, type ZoomOverlay
+  zoomTarget, zoomWeight, type BlurOverlay, type Clip, type EnvPoint, type Fade, type Overlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -170,6 +170,28 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     }
     if (Math.abs(rest - 1) > 1e-9) steps.push(rest)
     return steps.map((x) => `atempo=${num(x)}`)
+  }
+  /**
+   * A level that changes over time, as an FFmpeg expression of time (straight lines between the points). `at` is where the
+   * expression's own clock starts on the line's clock, so a piece that begins at 12 s on the timeline passes 12.
+   */
+  const envExpr = (env: EnvPoint[] | undefined, tv: string, at = 0): string | null => {
+    const pts = (env ?? []).filter((q) => Number.isFinite(q.t) && Number.isFinite(q.v)).sort((a, b) => a.t - b.t)
+    if (!pts.length || pts.every((q) => Math.abs(q.v - 1) < 1e-4)) return null
+    const x = at ? `(${tv}+${num(at)})` : tv
+    let expr = num(clamp(pts[pts.length - 1].v, 0, 1))
+    for (let i = pts.length - 1; i >= 1; i--) {
+      const a = pts[i - 1]
+      const b = pts[i]
+      const seg = b.t - a.t < 1e-6 ? num(clamp(b.v, 0, 1)) : `${num(clamp(a.v, 0, 1))}+(${num(clamp(b.v - a.v, -1, 1))})*(${x}-${num(a.t)})/${num(b.t - a.t)}`
+      expr = `if(lt(${x},${num(b.t)}),${seg},${expr})`
+    }
+    return `if(lt(${x},${num(pts[0].t)}),${num(clamp(pts[0].v, 0, 1))},${expr})`
+  }
+  /** `volume` that follows a line over time (or nothing at all when there is none). */
+  const levelOver = (env: EnvPoint[] | undefined, at = 0): string[] => {
+    const e = envExpr(env, 't', at)
+    return e ? [`volume='${e}':eval=frame`] : []
   }
   const fadeVideo = (f: Fade, dir: 'in' | 'out', len: number): string => {
     const d = Math.min(f.dur, len / 2)
@@ -345,9 +367,14 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
           : `(max(${hx},${hy})-1)`
     const ring = (bw ? `gte(${dist},${num((-2 * bw) / full)})` : '0')
     const shaped = camera.shape !== 'square'
-    const geq =
-      `geq=lum='if(${ring},235,lum(X,Y))':cb='if(${ring},128,cb(X,Y))':cr='if(${ring},128,cr(X,Y))'` +
-      `:a='${shaped ? `255*clip(0.5-${dist}*${num(full / 2)},0,1)` : '255'}'`
+    const geqFor = (at: number): string => {
+      const show = envExpr(camera.showEnv, 'T', at)
+      const base = shaped ? `255*clip(0.5-${dist}*${num(full / 2)},0,1)` : '255'
+      return (
+        `geq=lum='if(${ring},235,lum(X,Y))':cb='if(${ring},128,cb(X,Y))':cr='if(${ring},128,cr(X,Y))'` +
+        `:a='${show ? `(${base})*(${show})` : base}'`
+      )
+    }
     pieces.forEach((pc, i) => {
       const len = pc.end - pc.start
       const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.3)], m.path)
@@ -357,7 +384,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       const fadeOut = camera.fade && i === pieces.length - 1 && d > 0.02 ? `,fade=t=out:st=${num(len - d)}:d=${num(d)}:alpha=1` : ''
       g.add(
         `[${idx}:v]${pc.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(pc.speed)}`},fps=${fps},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
-          `format=${alphaFormat},${geq}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(pc.start)}/TB[${label}]`
+          `format=${alphaFormat},${geqFor(pc.start)}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(pc.start)}/TB[${label}]`
       )
       const nv = g.label('vo')
       g.add(`[${video}][${label}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:enable='between(t,${num(pc.start)},${num(pc.end)})'[${nv}]`)
@@ -384,7 +411,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       const fi = Math.min(c.fadeIn.dur, len / 2)
       const fo = Math.min(c.fadeOut.dur, len / 2)
       g.add(
-        `[${clipInput.get(c.id)}:a]${[pre, ...tempo(c.speed), `volume=${num(clamp(c.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')}` +
+        `[${clipInput.get(c.id)}:a]${[pre, ...tempo(c.speed), `volume=${num(clamp(c.volume, 0, 2))}`, `atrim=duration=${num(len)}`, ...levelOver(c.volEnv)].join(',')}` +
           (fi > 0.02 ? `,afade=t=in:st=0:d=${num(fi)}` : '') +
           (fo > 0.02 ? `,afade=t=out:st=${num(len - fo)}:d=${num(fo)}` : '') +
           `,adelay=${ms(c.start)}|${ms(c.start)}[${label}]`
@@ -398,7 +425,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
         const len = pc.end - pc.start
         const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.1)], mediaOf(cam.media).path)
         const label = g.label('ca')
-        g.add(`[${idx}:a]${[pre, ...tempo(pc.speed), `volume=${num(clamp(cam.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')},adelay=${ms(pc.start)}|${ms(pc.start)}[${label}]`)
+        g.add(`[${idx}:a]${[pre, ...tempo(pc.speed), `volume=${num(clamp(cam.volume, 0, 2))}`, `atrim=duration=${num(len)}`, ...levelOver(cam.volEnv, pc.start)].join(',')},adelay=${ms(pc.start)}|${ms(pc.start)}[${label}]`)
         voiceParts.push(label)
       }
     }
@@ -406,7 +433,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       const len = Math.min(v.length, Math.max(0.1, T - v.start))
       const idx = g.file(['-ss', num(v.from), '-t', num(len * v.speed + 0.1)], mediaOf(v.media).path)
       const label = g.label('tp')
-      g.add(`[${idx}:a]${[pre, ...tempo(v.speed), `volume=${num(clamp(v.volume, 0, 2))}`, `atrim=duration=${num(len)}`].join(',')},adelay=${ms(v.start)}|${ms(v.start)}[${label}]`)
+      g.add(`[${idx}:a]${[pre, ...tempo(v.speed), `volume=${num(clamp(v.volume, 0, 2))}`, `atrim=duration=${num(len)}`, ...levelOver(v.env)].join(',')},adelay=${ms(v.start)}|${ms(v.start)}[${label}]`)
       voiceParts.push(label)
     }
     let voice = g.label('vx')
@@ -430,7 +457,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       const fo = clamp(m.fadeOut, 0, len / 2)
       const ml = g.label('m')
       g.add(
-        `[${idx}:a]${[pre, ...tempo(m.speed), `atrim=duration=${num(len)}`, `volume=${num(clamp(m.volume, 0, 2))}`].join(',')}` +
+        `[${idx}:a]${[pre, ...tempo(m.speed), `atrim=duration=${num(len)}`, `volume=${num(clamp(m.volume, 0, 2))}`, ...levelOver(m.volEnv)].join(',')}` +
           (fi > 0.02 ? `,afade=t=in:st=0:d=${num(fi)}` : '') +
           (fo > 0.02 ? `,afade=t=out:st=${num(len - fo)}:d=${num(fo)}` : '') +
           `,adelay=${ms(m.start)}|${ms(m.start)}[${ml}]`

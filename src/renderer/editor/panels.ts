@@ -4,6 +4,7 @@ import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
 import { button, h, number, range, section, select, toggle } from './dom.ts'
 import { luminance } from './draw.ts'
+import { levelEditor } from './level.ts'
 import { overlayLabel } from './timeline.ts'
 import { fmtTime, type Store, type Tool } from './store.ts'
 
@@ -368,6 +369,12 @@ export class Panels {
     }
     if (c.kind !== 'image' && c.hasAudio) {
       out.push(section('Volume', range(c.volume, 0, 2, 0.05, (v) => patch({ volume: v }, `vol:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-volume')))
+      const mine = (): Clip | undefined => s.project.clips.find((x) => x.id === c.id)
+      out.push(levelEditor(s, {
+        title: 'Volume over time', low: 'silent', id: 'lvl-clip', line: () => mine()?.volEnv,
+        span: () => ({ origin: mine()?.start ?? 0, length: mine() ? clipLength(mine()!) : 1 }),
+        set: (env, merge) => s.patchClip(c.id, { volEnv: env }, merge)
+      }))
     }
     if (c.kind === 'recording' && c.hasAudio) {
       const t = s.project.recTracks
@@ -453,11 +460,26 @@ export class Panels {
       section('Fix lip-sync', range(cam.nudge, -1, 1, 0.01, (v) => patch({ nudge: v }, 'cam:nudge'), sec, 'prop-cam-nudge')),
       h('p', { class: 'tip good', text: 'Webcams are often a little late. If your voice is slightly ahead of your lips, move this up; if behind, down.' }),
       toggleSection(toggle('Fade in and out', cam.fade, (on) => patch({ fade: on }), 'prop-cam-fade')),
+      levelEditor(s, {
+        title: 'Show the camera over time', low: 'hidden', id: 'lvl-cam-show', line: () => s.project.camera?.showEnv,
+        span: () => ({ origin: 0, length: s.duration }),
+        set: (env, merge) => s.patchCamera({ showEnv: env }, merge),
+        tip: 'Make the camera disappear for a while and come back: move the playhead to where it should go, then click “＋ Dip here” or “Fade out from here”. Only the picture fades; your voice carries on.'
+      }),
       ...(cam.hasAudio
         ? [
             section('Your voice comes from', select([['camera', 'The webcam’s microphone (voice and lips together)'], ['screen', 'The microphone recorded with the screen']], cam.audio ? 'camera' : 'screen', (v) => patch({ audio: v === 'camera' }), 'prop-cam-audio')),
             h('p', { class: 'tip good', text: cam.audio ? 'Your voice is taken from the webcam’s own recording, so it always matches your lips. Sound the computer played while recording is kept.' : 'Your voice is the microphone recorded with the screen. If it doesn’t match your lips, switch to the webcam’s microphone.' }),
-            ...(cam.audio ? [section('Webcam sound volume', range(cam.volume, 0, 2, 0.05, (v) => patch({ volume: v }, 'cam:vol'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-volume'))] : [])
+            ...(cam.audio
+              ? [
+                  section('Webcam sound volume', range(cam.volume, 0, 2, 0.05, (v) => patch({ volume: v }, 'cam:vol'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-volume')),
+                  levelEditor(s, {
+                    title: 'Webcam sound over time', low: 'silent', id: 'lvl-cam-voice', line: () => s.project.camera?.volEnv,
+                    span: () => ({ origin: 0, length: s.duration }),
+                    set: (env, merge) => s.patchCamera({ volEnv: env }, merge)
+                  })
+                ]
+              : [])
           ]
         : [h('p', { class: 'tip', text: 'This camera recording has no sound of its own.' })]),
       h('div', { class: 'psec actions' },
@@ -472,11 +494,18 @@ export class Panels {
     const patch = (p: Partial<Sound>, merge?: string): void => s.patchSound(m.id, p, merge ?? `m:${m.id}:${Object.keys(p)[0]}`)
     const pct = (v: number): string => `${Math.round(v * 100)}%`
     const sec = (v: number): string => `${v.toFixed(1)} s`
+    const mine = (): Sound | undefined => s.project.sounds.find((x) => x.id === m.id)
     return [
       h('h2', { class: 'props-title', text: m.origin === 'split' ? 'Sound from a video' : 'Music / audio' }),
       h('p', { class: 'muted file-name', text: m.name }),
       section('Speed', range(m.speed, MIN_SPEED, MAX_SPEED, 0.05, (v) => this.actions.setSpeed(Math.round(v * 100) / 100), (v) => `${Number(v.toFixed(2))}×`, 'prop-music-speed')),
       section('Volume', range(m.volume, 0, 2, 0.05, (v) => patch({ volume: v }), pct, 'prop-music-volume')),
+      levelEditor(s, {
+        title: 'Volume over time', low: 'silent', id: 'lvl-sound', line: () => mine()?.volEnv,
+        span: () => ({ origin: mine()?.start ?? 0, length: mine()?.length ?? 1 }),
+        set: (env, merge) => s.patchSound(m.id, { volEnv: env }, merge),
+        tip: 'Drop the music while someone speaks, then bring it back: click “＋ Dip here” where the voice starts, or click the graph to place points yourself. Or turn on “Record while playing” and move the Level slider as the video plays.'
+      }),
       section('Fade in', range(m.fadeIn, 0, 8, 0.5, (v) => patch({ fadeIn: v }), sec, 'prop-music-fadein')),
       section('Fade out', range(m.fadeOut, 0, 8, 0.5, (v) => patch({ fadeOut: v }), sec, 'prop-music-fadeout')),
       toggleSection(toggle('Repeat to fill its length', m.loop, (on) => patch({ loop: on }), 'prop-music-loop')),

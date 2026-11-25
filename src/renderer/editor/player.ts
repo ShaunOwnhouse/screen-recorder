@@ -1,5 +1,5 @@
 import {
-  activeClips, cameraBox, cameraPieces, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFullBox, layerOf, overlayAlpha, soundOn, usesCameraSound,
+  activeClips, cameraBox, envAt, cameraPieces, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFullBox, layerOf, overlayAlpha, soundOn, usesCameraSound,
   zoomState, trackById, type BlurOverlay, type Clip, type Sound
 } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
@@ -226,7 +226,7 @@ export class Player {
         // sound from a track taken out of the recording, or from the camera, is played separately: this one is then off
         const track = trackById(p, c.track)
         el.muted = !clipPlaysOwnSound(p, c)
-        el.volume = clampNum(c.volume * (dissolve || f.amount >= 1 ? f.amount : f.amount), 0, 1)
+        el.volume = clampNum(c.volume * f.amount * envAt(c.volEnv, t - c.start), 0, 1)
         if (track?.muted) el.muted = true
         if (s.playing && live && el.paused && t < clipEnd(c) - 0.02) void el.play().catch(() => undefined)
         if ((!s.playing || !live) && !el.paused) el.pause()
@@ -287,7 +287,7 @@ export class Player {
     // the computer sound / microphone of the recording, played from their own files like any other sound
     const virtual: Sound[] = parts.map((v, i) => ({
       id: `track:${i}:${v.media}`, track: '', origin: 'split', media: v.media, name: '', duration: 1e9, offset: v.from, start: v.start, length: v.length, speed: v.speed,
-      volume: v.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false
+      volume: v.volume, fadeIn: 0, fadeOut: 0, loop: false, duck: false, volEnv: v.env
     }))
     const list: Sound[] = [...p.sounds, ...virtual]
     const ids = new Set(list.map((x) => x.id))
@@ -324,7 +324,7 @@ export class Player {
       if (m.loop && m.duration > 0) pos = m.offset + ((rel * m.speed) % Math.max(0.1, m.duration - m.offset))
       const fi = m.fadeIn > 0 ? clampNum(rel / m.fadeIn, 0, 1) : 1
       const fo = m.fadeOut > 0 ? clampNum((len - rel) / m.fadeOut, 0, 1) : 1
-      a.volume = clampNum(m.volume * fi * fo * (m.duck && voice ? 0.3 : 1), 0, 1)
+      a.volume = clampNum(m.volume * fi * fo * envAt(m.volEnv, rel) * (m.duck && voice ? 0.3 : 1), 0, 1)
       const rate = clampNum(m.speed, 0.25, 4)
       if (a.playbackRate !== rate) a.playbackRate = rate
       if (s.playing) {
@@ -365,7 +365,7 @@ export class Player {
     const piece = (heard ? voicePieces : pieces).find((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
     const shown = pieces.some((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
     v.muted = !heard
-    v.volume = clampNum(cam.volume, 0, 1)
+    v.volume = clampNum(cam.volume * envAt(cam.volEnv, t), 0, 1)
     const box = cameraBox(cam, s.aspect)
     const first = pieces[0]
     const last = pieces[pieces.length - 1]
@@ -374,6 +374,7 @@ export class Player {
       const d = 0.3
       alpha = Math.max(0, Math.min(1, piece === first ? (t - first.start) / d : 1, piece === last ? (last.end - t) / d : 1))
     }
+    alpha *= envAt(cam.showEnv, t)
     Object.assign(v.style, {
       display: shown ? '' : 'none', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: String(alpha),
       borderRadius: cam.shape === 'circle' ? '50%' : cam.shape === 'rounded' ? '22%' : '0', border: cam.border ? '3px solid #fff' : '0'
