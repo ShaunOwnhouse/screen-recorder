@@ -488,10 +488,17 @@ function pixelAt(file, t, x, y, w, h) {
 }
 const nearColour = (a, b, tol = 40) => !!a && a.every((v, i) => Math.abs(v - b[i]) <= tol)
 
+/** After a save the editor stays open (to keep editing); click Finish, then wait for it to go. */
+async function finishSaved(app, editor, ms) {
+  await editor.waitForSelector('#saved:not([hidden])', { timeout: ms })
+  await editor.click('#saved-finish', { noWaitAfter: true })
+  await waitGone(app, 'editor.html', ms)
+}
+
 async function save(app, editor, name) {
   await editor.fill('#name', name)
   await editor.click('#save')
-  await waitGone(app, 'editor.html', 180000)
+  await finishSaved(app, editor, 180000)
   return path.join(outDir, `${name}.mp4`)
 }
 
@@ -1044,7 +1051,7 @@ async function save(app, editor, name) {
       const { editor } = await record(app, main, 'saveas', { seconds: 3 })
       await editor.fill('#name', 'ignored-name')
       await editor.click('#save-as')
-      await waitGone(app, 'editor.html', 120000)
+      await finishSaved(app, editor, 120000)
       validate('Save as', target, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 2 })
     }
 
@@ -1060,7 +1067,7 @@ async function save(app, editor, name) {
       check('Discard: nothing was saved to the output folder', !fs.existsSync(path.join(outDir, 'Recording discard.mp4')))
     }
 
-    // 8b) Speed: the finished video can be sped up or slowed down as a whole
+    // 8b) Speed, the preview of the finished video, and carrying on editing after a save
     if (only('speed')) {
       const { editor } = await record(app, main, 'speed', { seconds: 6 })
       const opts = await editor.$$eval('#speed option', (o) => o.map((x) => x.value))
@@ -1068,10 +1075,43 @@ async function save(app, editor, name) {
       const before = (await editorState(editor)).duration
       await editor.selectOption('#speed', '2')
       check('Speed: choosing 2× is remembered by the project', (await editor.evaluate(() => window.__editor.store.project.speed)) === 2)
-      const out = await save(app, editor, 'e2e-speed')
+
+      // preview the finished video before saving
+      await editor.click('#preview-final')
+      await editor.waitForSelector('#pv:not([hidden])', { timeout: 180000 })
+      const pvDur = await editor.evaluate(() => new Promise((res) => {
+        const v = document.getElementById('pv-video')
+        const done = () => res(v.duration)
+        if (v.readyState >= 1) done()
+        else v.addEventListener('loadedmetadata', done, { once: true })
+        setTimeout(() => res(v.duration || 0), 20000)
+      }))
+      check('Preview: the finished video can be watched before saving, at its sped-up length', Math.abs(pvDur - before / 2) < 1, `${Number(pvDur).toFixed(2)} s vs ${(before / 2).toFixed(2)} s`)
+      await editor.click('#pv-close')
+      check('Preview: "Back to editing" returns to the editor', await editor.isHidden('#pv'))
+
+      await editor.fill('#name', 'e2e-speed')
+      await editor.click('#save')
+      await editor.waitForSelector('#saved:not([hidden])', { timeout: 180000 })
+      const out = path.join(outDir, 'e2e-speed.mp4')
       const secs = (() => { const m = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(info(out)); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : 0 })()
       check('Speed: the saved video is half as long at 2×', Math.abs(secs - before / 2) < 0.8, `${secs.toFixed(2)} s vs ${(before / 2).toFixed(2)} s`)
       validate('Saved at double speed', out, { audio: true, minSeconds: before / 2 - 0.8, maxSeconds: before / 2 + 0.8 })
+      check('Keep editing: the editor is still open after saving', !editor.isClosed() && (await editor.isVisible('#saved')))
+      // carry on: back to normal speed, save again as another file
+      await editor.click('#saved-keep')
+      check('Keep editing: "Keep editing" closes the message and the editor can still be used', (await editor.isHidden('#saved')) && (await editor.isEnabled('#save')))
+      await editor.selectOption('#speed', '1')
+      await editor.fill('#name', 'e2e-speed-again')
+      await editor.click('#save')
+      await editor.waitForSelector('#saved:not([hidden])', { timeout: 180000 })
+      const out2 = path.join(outDir, 'e2e-speed-again.mp4')
+      const secs2 = (() => { const m = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(info(out2)); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : 0 })()
+      check('Keep editing: a second save from the same recording works (normal speed this time)', Math.abs(secs2 - before) < 0.8 && fs.existsSync(out), `${secs2.toFixed(2)} s vs ${before.toFixed(2)} s`)
+      await editor.click('#saved-finish', { noWaitAfter: true })
+      await waitGone(app, 'editor.html', 60000)
+      const left = fs.readdirSync(path.join(userData, 'pending')).filter((f) => /\.mp4$/i.test(f))
+      check('Keep editing: Finish removes the recording and leaves the saved videos', left.length === 0 && fs.existsSync(out) && fs.existsSync(out2), left.join(','))
     }
 
     // 9) Other save formats: the default stays MP4 · H.264; everything else warns, and really converts
@@ -1100,7 +1140,7 @@ async function save(app, editor, name) {
         await editor.selectOption('#format', 'mkv')
         await editor.fill('#name', 'e2e-format-mkv')
         await editor.click('#save')
-        await waitGone(app, 'editor.html', 180000)
+        await finishSaved(app, editor, 180000)
         validateOther('MKV (re-wrapped, not re-encoded)', path.join(outDir, 'e2e-format-mkv.mkv'),
           { container: /matroska/, video: /^h264 \(High\)/, audio: /aac/, width: W, height: H, min: 2, max: 12 })
       }
@@ -1122,7 +1162,7 @@ async function save(app, editor, name) {
         await cutFirstThird(editor)
         await editor.fill('#name', 'e2e-format-mov')
         await editor.click('#save')
-        await waitGone(app, 'editor.html', 180000)
+        await finishSaved(app, editor, 180000)
         validateOther('MOV (trimmed, re-encoded)', path.join(outDir, 'e2e-format-mov.mov'),
           { container: /mov,mp4/, video: /^h264 \(High\)/, audio: /aac/, width: W, height: H, min: 1, max: 5 })
         check('MOV: starts instantly (moov before mdat)', isFaststart(path.join(outDir, 'e2e-format-mov.mov')))
@@ -1142,7 +1182,7 @@ async function save(app, editor, name) {
         check(`Format: ${name} shows its notice`, await editor.isVisible('#format-notice'), (await editor.textContent('#format-notice')).slice(0, 100))
         await editor.fill('#name', `e2e-format-${id}`)
         await editor.click('#save')
-        await waitGone(app, 'editor.html', 300000)
+        await finishSaved(app, editor, 300000)
         validateOther(`${name} (converted)`, path.join(outDir, `e2e-format-${id}.${ext}`), want)
       }
     }

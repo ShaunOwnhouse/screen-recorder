@@ -17,6 +17,9 @@ const editor: EditorApi = {
   save: (req) => ipcRenderer.invoke('editor:save', req),
   cancelExport: () => ipcRenderer.invoke('editor:cancel'),
   discard: () => ipcRenderer.invoke('editor:discard'),
+  previewFinal: (req) => ipcRenderer.invoke('editor:preview-final', req),
+  finish: () => ipcRenderer.invoke('editor:finish'),
+  revealPath: (path) => ipcRenderer.invoke('editor:reveal-path', path),
   onProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, f: number): void => cb(f)
     ipcRenderer.on('editor:progress', listener)

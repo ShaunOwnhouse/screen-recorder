@@ -4,6 +4,7 @@ import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts
 import { Actions } from './editor/actions.ts'
 import { loadBrandFonts } from './editor/brand.ts'
 import { frameFor, renderCardPicture, renderOverlayPicture } from './editor/draw.ts'
+import { initLayout } from './editor/layout.ts'
 import { Panels } from './editor/panels.ts'
 import { Player } from './editor/player.ts'
 import { Stage } from './editor/stage.ts'
@@ -34,6 +35,7 @@ let actions: Actions
 let timeline: Timeline
 let triedProxy = false
 let saving = false
+let lastSaved = ''
 
 function fmtBytes(b: number): string {
   return b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(1)} MB` : `${(b / 1024 ** 3).toFixed(2)} GB`
@@ -133,6 +135,45 @@ async function drawPictures(): Promise<DrawnPicture[]> {
   return out
 }
 
+/** Makes a small, quick copy of the finished video and plays it, so the speed, the sound and every edit can be checked before saving. */
+async function previewFinal(): Promise<void> {
+  if (!src || saving) return
+  saving = true
+  store.setPlaying(false)
+  showBusy('Making a preview…', 'Putting everything together at a small size so you can watch the finished video.', true)
+  let res: { ok: boolean; url?: string; duration?: number; error?: string }
+  try {
+    res = await api.previewFinal({ project: store.project, pictures: await drawPictures() })
+  } catch (err) {
+    res = { ok: false, error: (err as Error).message }
+  }
+  saving = false
+  if (res.ok && res.url) {
+    busy.hidden = true
+    const v = $<HTMLVideoElement>('pv-video')
+    v.src = res.url
+    $('pv').hidden = false
+    void v.play().catch(() => undefined)
+    return
+  }
+  if (!res.error) {
+    busy.hidden = true
+    return
+  }
+  busyTitle.textContent = 'Could not make the preview'
+  busyDetail.textContent = res.error
+  busyCancel.hidden = false
+  busyCancel.textContent = 'Close'
+}
+
+function closePreview(): void {
+  const v = $<HTMLVideoElement>('pv-video')
+  v.pause()
+  v.removeAttribute('src')
+  v.load()
+  $('pv').hidden = true
+}
+
 async function save(saveAs: boolean): Promise<void> {
   if (!src || saving) return
   saving = true
@@ -148,7 +189,7 @@ async function save(saveAs: boolean): Promise<void> {
       : !plain
         ? 'Putting your edits together at the same quality as the recording.'
         : format === 'mp4'
-          ? 'Moving the original — no re-encode, no quality loss.'
+          ? 'Saving a copy of the original — no re-encode, no quality loss.'
           : 'Re-wrapping the video — no re-encode, no quality loss.',
     edited
   )
@@ -162,7 +203,15 @@ async function save(saveAs: boolean): Promise<void> {
     res = { ok: false, error: (err as Error).message }
   }
   saving = false
-  if (res.ok) return // The main process closes this window.
+  if (res.ok) {
+    // The window stays open: the recording is kept until the person chooses Finish, so a mistake can still be put right.
+    busy.hidden = true
+    $('saved').hidden = false
+    $('saved-path').textContent = res.path ?? ''
+    $('saved-path').title = res.path ?? ''
+    lastSaved = res.path ?? ''
+    return
+  }
   if (!res.error) {
     busy.hidden = true
     return
@@ -291,7 +340,7 @@ function showLoadError(message: string): void {
   stageMsg.append(text, actionsEl)
   stageMsg.classList.add('interactive')
   stageMsg.hidden = false
-  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar', 'duplicate-sel']) ($(id) as HTMLButtonElement).disabled = true
+  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar', 'duplicate-sel', 'preview-final']) ($(id) as HTMLButtonElement).disabled = true
   nameInput.disabled = true
 }
 
@@ -354,6 +403,7 @@ async function init(): Promise<void> {
   })
   window.addEventListener('resize', layoutFrame)
   new ResizeObserver(layoutFrame).observe(stage)
+  initLayout(layoutFrame)
 
   $('play').addEventListener('click', () => player.toggle())
   $('split').addEventListener('click', () => actions.split())
@@ -372,8 +422,24 @@ async function init(): Promise<void> {
   const zoom = $<HTMLInputElement>('tl-zoom')
   zoom.addEventListener('input', () => timeline.setZoom(6 * Math.pow(400 / 6, Number(zoom.value) / 100)))
   zoom.value = String(Math.round((Math.log(store.pxPerSec / 6) / Math.log(400 / 6)) * 100))
-  $('save').addEventListener('click', () => void save(false))
-  $('save-as').addEventListener('click', () => void save(true))
+  $('preview-final').addEventListener('click', () => void previewFinal())
+  $('pv-close').addEventListener('click', closePreview)
+  $('pv-save').addEventListener('click', () => {
+    closePreview()
+    $('saved').hidden = true
+    void save(false)
+  })
+  $('saved-show').addEventListener('click', () => void api.revealPath(lastSaved))
+  $('saved-keep').addEventListener('click', () => ($('saved').hidden = true))
+  $('saved-finish').addEventListener('click', () => void api.finish())
+  $('save').addEventListener('click', () => {
+    $('saved').hidden = true
+    void save(false)
+  })
+  $('save-as').addEventListener('click', () => {
+    $('saved').hidden = true
+    void save(true)
+  })
   $('discard').addEventListener('click', () => void api.discard())
   bindDrops()
 

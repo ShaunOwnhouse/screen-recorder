@@ -212,6 +212,12 @@ export interface SaveRequest {
   format: VideoFormat
 }
 
+/** What the editor sends to make a quick preview of the finished video. */
+export interface PreviewRequest {
+  project: Project
+  pictures: DrawnPicture[]
+}
+
 export interface ShotSource {
   width: number
   height: number

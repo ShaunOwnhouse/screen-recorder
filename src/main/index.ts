@@ -91,8 +91,8 @@ const editor = new EditorController({
     n.on('click', () => shell.showItemInFolder(path))
     n.show()
     recorder.update({ lastFile: path })
-    afterReview()
   },
+  onFinished: () => afterReview(),
   onDiscarded: () => afterReview(),
   onClosed: () => maybeQuit(),
   saveBrand: (brand) => updateSettings({ brand }).brand

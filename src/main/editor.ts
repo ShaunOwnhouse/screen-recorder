@@ -6,13 +6,13 @@ import { buildCopyArgs, buildProxyArgs, TRACK_NAMES } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
 import { ProgressParser, parseMediaInfo } from './parse.ts'
-import { cameraFileFor, cameraInfoFor, moveFile, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
 import { buildProjectArgs, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
 import { isPlain, type Project } from '../shared/project.ts'
 import type { AssetSave, EditorLoad } from '../shared/api.ts'
 import { videoFormat } from '../shared/formats.ts'
-import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, RecordingMeta, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
+import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, PreviewRequest, RecordingMeta, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
 
 const VIDEO_EXT = ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'mpg', 'mpeg']
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
@@ -32,7 +32,10 @@ interface Deps {
   settings: () => Settings
   encoders: () => Promise<EncoderInfo[]>
   formats: () => Promise<VideoFormat[]>
+  /** A video was saved (the editor stays open so the person can carry on editing). */
   onSaved: (path: string) => void
+  /** The person is done with this recording (Finish, or closed the window after saving). */
+  onFinished: () => void
   onDiscarded: () => void
   onClosed: () => void
   saveBrand: (brand: Brand) => Brand
@@ -48,6 +51,9 @@ export class EditorController {
   private counter = 0
   /** The recording holds more than one sound track (a mix and the two it was made from). */
   private multiTrack = false
+  /** Something has been saved from this recording; the recording itself stays until the person finishes. */
+  private savedOnce = false
+  private readonly savedPaths = new Set<string>()
   /** Background FFmpeg jobs that read the recording to draw the timeline; they must not still be running when it is moved or deleted. */
   private readonly previewJobs = new Set<ChildProcess>()
   private readonly strips = new Map<string, string>()
@@ -119,6 +125,11 @@ export class EditorController {
       this.exportProc?.kill()
     })
     ipcMain.handle('editor:discard', (e) => (this.owns(e.sender) ? this.discard() : false))
+    ipcMain.handle('editor:preview-final', (e, req: PreviewRequest) => (this.owns(e.sender) ? this.previewFinal(req) : { ok: false }))
+    ipcMain.handle('editor:finish', (e) => (this.owns(e.sender) ? this.finish() : false))
+    ipcMain.handle('editor:reveal-path', (e, path: string) => {
+      if (this.owns(e.sender) && this.savedPaths.has(path) && existsSync(path)) shell.showItemInFolder(path)
+    })
   }
 
   private owns(sender: Electron.WebContents): boolean {
@@ -135,6 +146,8 @@ export class EditorController {
 
   open(file: string): void {
     this.file = file
+    this.savedOnce = false
+    this.savedPaths.clear()
     this.added.clear()
     this.strips.clear()
     this.waves.clear()
@@ -167,6 +180,20 @@ export class EditorController {
     })
     this.win.on('closed', () => {
       this.win = null
+      // Closing the window after saving counts as finishing: the recording has been turned into a video, so it goes.
+      if (this.savedOnce && this.file) {
+        const f = this.file
+        this.file = null
+        this.savedOnce = false
+        for (const p of this.previewJobs) p.kill()
+        try {
+          removePending(f)
+        } catch {
+          // a file that is still in use is cleaned up the next time the app starts
+        }
+        this.deps.onFinished()
+        return
+      }
       this.deps.onClosed()
     })
     this.deps.load(this.win)
@@ -174,6 +201,7 @@ export class EditorController {
 
   close(): void {
     this.file = null
+    rmSync(this.previewDir(), { recursive: true, force: true })
     for (const p of this.previewJobs) p.kill()
     if (this.win && !this.win.isDestroyed()) this.win.destroy()
   }
@@ -325,7 +353,7 @@ export class EditorController {
       if (keepsFile && isPlain(project, meta.duration) && !convert) {
         // Untouched recording: no re-encode, zero quality loss — moved as-is (MP4) or re-wrapped (MKV/MOV).
         // A recording with separate sound tracks is re-wrapped (no re-encode) so the saved file has just the mix, one track.
-        if (format === 'mp4' && !this.multiTrack) moveFile(file, target)
+        if (format === 'mp4' && !this.multiTrack) copyFileSync(file, target)
         else await this.run(buildCopyArgs(file, target, container), meta.duration)
       } else {
         scratch = mkdtempSync(join(app.getPath('userData'), 'export-'))
@@ -339,16 +367,63 @@ export class EditorController {
       if (scratch) rmSync(scratch, { recursive: true, force: true })
     }
 
-    removePending(file)
-    this.close()
+    // The editor stays open: the recording is kept until the person chooses Finish, so a mistake can still be put right.
+    this.savedOnce = true
+    this.savedPaths.add(target)
     this.deps.onSaved(target)
     return { ok: true, path: target }
+  }
+
+  private previewDir(): string {
+    return join(app.getPath('userData'), 'preview')
+  }
+
+  private previewCount = 0
+
+  /** A small, quick version of the finished video (every edit, the speed and the sound) to watch before saving. */
+  private async previewFinal(req: PreviewRequest): Promise<{ ok: boolean; url?: string; duration?: number; error?: string }> {
+    const file = this.file
+    if (!file || !this.win || this.exportProc) return { ok: false }
+    const project = req.project
+    if (!project || !Array.isArray(project.clips) || !project.clips.length) return { ok: false, error: 'There is nothing to preview.' }
+    const meta = await probeMedia(file)
+    if (!meta) return { ok: false, error: 'Could not read the recording.' }
+    rmSync(this.previewDir(), { recursive: true, force: true })
+    mkdirSync(this.previewDir(), { recursive: true })
+    const n = ++this.previewCount
+    const output = join(this.previewDir(), `preview-${n}.mp4`)
+    const scratch = mkdtempSync(join(app.getPath('userData'), 'export-'))
+    try {
+      const built = await this.buildExport(project, req.pictures ?? [], scratch, file, meta, output, 'mp4', false, true)
+      await this.run(built.args, built.seconds)
+      const id = `preview${n}`
+      const info: MediaInfo = { id, name: 'Preview', kind: 'video', duration: built.seconds, width: 0, height: 0, hasAudio: true, url: addedMediaUrl(id) }
+      this.added.set(id, { info, path: output })
+      return { ok: true, url: info.url, duration: built.seconds }
+    } catch (err) {
+      rmSync(output, { force: true })
+      return this.cancelled ? { ok: false } : { ok: false, error: (err as Error).message }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  }
+
+  /** Done with this recording: the saved videos stay, the recording and its editing files are removed. */
+  private async finish(): Promise<boolean> {
+    const file = this.file
+    if (!file || this.exportProc) return false
+    await this.stopPreviewJobs()
+    removePending(file)
+    this.savedOnce = false
+    this.close()
+    this.deps.onFinished()
+    return true
   }
 
   /** Writes the editor's pictures to disk and builds the FFmpeg command for the whole project. */
   private async buildExport(
     project: Project, drawn: DrawnPicture[], scratch: string, file: string, meta: RecordingMeta, target: string, format: VideoFormat,
-    convert: boolean
+    convert: boolean, preview = false
   ): Promise<{ args: string[]; seconds: number }> {
     const pictures: Record<string, ExportPicture> = {}
     drawn.forEach((d, i) => {
@@ -370,7 +445,7 @@ export class EditorController {
     const encoder = chooseEncoder(encoders, s.encoder, quality)
     return buildProjectArgs({
       project, media, pictures, recording: { width: meta.width, height: meta.height }, fps: meta.fps, output: target, format, quality, encoder,
-      basicTuning: needsBasicTuning(encoders, encoder)
+      basicTuning: needsBasicTuning(encoders, encoder), preview
     })
   }
 
@@ -579,11 +654,12 @@ export class EditorController {
       cancelId: 1,
       title: 'Discard recording',
       message: 'Discard this recording?',
-      detail: 'It will be permanently deleted.'
+      detail: this.savedOnce ? 'The video you saved stays where it is; the recording is deleted.' : 'It will be permanently deleted.'
     })
     if (res.response !== 0) return false
     await this.stopPreviewJobs()
     removePending(file)
+    this.savedOnce = false
     this.close()
     this.deps.onDiscarded()
     return true

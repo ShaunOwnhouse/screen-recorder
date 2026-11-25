@@ -39,6 +39,8 @@ export interface ProjectExportInput {
   quality: Quality
   encoder: string
   basicTuning?: boolean
+  /** A small, quick version to watch before saving: 540 p, light encode, always MP4. */
+  preview?: boolean
 }
 
 export interface ProjectExport {
@@ -518,13 +520,17 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     audio = null
   } else {
     finalVideo = g.label('vf')
-    const fmt = o.format === 'mp4' || o.format === 'mkv' || o.format === 'mov' ? pixelFormatFor(encoder, o.quality) : 'yuv420p'
-    g.add(`[${video}]format=${fmt}[${finalVideo}]`)
+    const fmt = !o.preview && (o.format === 'mp4' || o.format === 'mkv' || o.format === 'mov') ? pixelFormatFor(encoder, o.quality) : 'yuv420p'
+    g.add(`[${video}]${o.preview ? `scale=-2:'min(540,ih)':flags=bilinear,` : ''}format=${fmt}[${finalVideo}]`)
   }
   args.push('-filter_complex', g.lines.join(';'), '-map', `[${finalVideo}]`)
   if (audio) args.push('-map', `[${audio}]`)
 
-  if (o.format === 'gif') {
+  if (o.preview) {
+    args.push('-fps_mode', 'cfr', '-r', String(Math.min(fps, 30)), '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-tag:v', 'avc1', ...COLOR_TAGS)
+    if (audio) args.push('-c:a', 'aac', '-b:a', '128k')
+    args.push('-movflags', '+faststart')
+  } else if (o.format === 'gif') {
     args.push('-an', '-loop', '0')
   } else if (o.format === 'hevc') {
     args.push('-fps_mode', 'cfr', '-r', String(fps), '-g', String(fps * 2))

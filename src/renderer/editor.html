@@ -10,6 +10,16 @@
     <link rel="stylesheet" href="./editor.css" />
   </head>
   <body>
+    <div id="pv" class="pv" role="dialog" aria-label="Preview of the finished video" hidden>
+      <div class="pv-box">
+        <div class="pv-head"><b>Preview of the finished video</b><span class="muted">a small, quick copy — the saved file has the full quality</span></div>
+        <video id="pv-video" controls playsinline></video>
+        <div class="pv-actions">
+          <button id="pv-close" type="button" class="ghost">Back to editing</button>
+          <button id="pv-save" type="button" class="primary">Looks good — Save</button>
+        </div>
+      </div>
+    </div>
     <div class="editor">
       <header class="bar">
         <div class="title">
@@ -17,6 +27,7 @@
           <span id="info" class="muted"></span>
         </div>
         <div class="title-actions">
+          <button id="preview-final" type="button" class="accent" title="Make a quick small copy of the finished video (with the speed, music and every edit) and watch it before saving">▶ Preview final video</button>
           <button id="discard" type="button" class="danger-ghost">Discard</button>
         </div>
       </header>
@@ -24,6 +35,7 @@
       <div class="work">
         <nav id="rail" class="rail" aria-label="Tools"></nav>
         <aside id="drawer" class="drawer" aria-label="Add things"></aside>
+        <div id="grip-drawer" class="grip v" role="separator" aria-orientation="vertical" title="Drag to make this panel wider or narrower (double-click to hide or show it)"></div>
         <section class="stage-wrap">
           <div id="stage" class="stage">
             <div id="frame" class="frame">
@@ -50,8 +62,11 @@
             <span class="hint">Drag things on the video to move them · corner handles resize</span>
           </div>
         </section>
+        <div id="grip-props" class="grip v" role="separator" aria-orientation="vertical" title="Drag to make this panel wider or narrower (double-click to hide or show it)"></div>
         <aside id="props" class="props" aria-label="Settings for the selected thing"></aside>
       </div>
+
+      <div id="grip-timeline" class="grip h" role="separator" aria-orientation="horizontal" title="Drag up or down to give the picture or the timeline more room (double-click to reset)"></div>
 
       <section class="tl-wrap">
         <div class="tl-tools">
@@ -69,6 +84,14 @@
       </section>
 
       <footer class="save">
+        <div id="saved" class="saved" role="status" hidden>
+          <span class="ok">✓ Saved</span>
+          <span id="saved-path" class="path"></span>
+          <span class="spacer"></span>
+          <button id="saved-show" type="button" class="ghost">Show in folder</button>
+          <button id="saved-keep" type="button" class="primary" title="Close this message and carry on editing (you can save again)">Keep editing</button>
+          <button id="saved-finish" type="button" class="ghost" title="Done with this recording: the saved video stays, the recording is removed">Finish</button>
+        </div>
         <div class="save-row">
           <label class="name-field">
             <span class="label">File name</span>

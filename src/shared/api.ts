@@ -1,6 +1,6 @@
 import type { UpdateStatus } from './updates.ts'
 import type {
-  AudioLevels, Brand, BrandFont, CameraInfo, Capabilities, EditorSource, MediaInfo, MicInfo, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
+  AudioLevels, Brand, BrandFont, CameraInfo, Capabilities, EditorSource, MediaInfo, MicInfo, PreviewRequest, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
   ShotSaveRequest, ShotSource
 } from './types.ts'
 
@@ -74,6 +74,12 @@ export interface EditorApi {
   save(req: SaveRequest): Promise<{ ok: boolean; path?: string; error?: string }>
   cancelExport(): Promise<void>
   discard(): Promise<boolean>
+  /** Makes a small, quick version of the finished video (speed, music, everything) so it can be watched before saving. */
+  previewFinal(req: PreviewRequest): Promise<{ ok: boolean; url?: string; duration?: number; error?: string }>
+  /** Done with this recording: the videos saved from it stay, the recording itself is removed. */
+  finish(): Promise<boolean>
+  /** Shows a video saved from this recording in its folder. */
+  revealPath(path: string): Promise<void>
   onProgress(cb: (fraction: number) => void): () => void
 }
 
