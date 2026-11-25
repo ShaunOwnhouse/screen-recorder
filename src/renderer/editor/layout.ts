@@ -54,7 +54,8 @@ export function initLayout(onChange: () => void): void {
   const work = document.querySelector<HTMLElement>('.work')!
   const saved = load()
   const set = (name: string, px: number): void => root.style.setProperty(name, `${Math.round(px)}px`)
-  if (saved.tl) set('--tl-h', saved.tl)
+  // the timeline starts with room for every row (it is taller on a tall window); the person can drag it anyway
+  set('--tl-h', saved.tl ?? clamp(window.innerHeight * 0.42, 300, 500))
   if (saved.drawer) set('--drawer-w', saved.drawer)
   if (saved.props) set('--props-w', saved.props)
   work.classList.toggle('no-drawer', !!saved.noDrawer)
@@ -74,7 +75,7 @@ export function initLayout(onChange: () => void): void {
     () => (tl0 = document.querySelector<HTMLElement>('.tl-wrap')!.getBoundingClientRect().height)
   )
   gt.addEventListener('dblclick', () => {
-    root.style.removeProperty('--tl-h')
+    set('--tl-h', clamp(window.innerHeight * 0.42, 300, 500))
     delete saved.tl
     save(saved)
     onChange()
