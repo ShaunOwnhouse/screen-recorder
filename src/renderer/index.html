@@ -39,7 +39,10 @@
       </section>
 
       <div id="update-banner" class="banner update" role="status" hidden>
-        <span id="update-text"></span>
+        <div class="update-main">
+          <span id="update-text"></span>
+          <div id="update-bar" class="update-bar" hidden><i></i></div>
+        </div>
         <button id="update-action" type="button" class="update-btn" hidden></button>
       </div>
 
@@ -351,7 +354,7 @@
             <span class="label">Screen Snap <span id="app-version"></span></span>
             <div class="path-row">
               <span id="update-line" class="status-line"></span>
-              <button id="update-check" type="button" class="ghost">Check now</button>
+              <button id="update-check" type="button" class="link-btn" title="Look for a new version right now (Screen Snap also looks by itself)">Check now</button>
             </div>
             <span id="update-hint" class="hint"></span>
           </div>

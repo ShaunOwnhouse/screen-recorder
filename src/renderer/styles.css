@@ -1067,3 +1067,53 @@ select {
 .cam-info select {
   width: 100%;
 }
+
+/* ---- updates: one banner with the button and the download progress ---- */
+.update-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.update-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.update-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #22c55e;
+  transition: width 0.3s;
+}
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  flex: none;
+}
+.link-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.link-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  text-decoration: none;
+}
+button.has-update::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  vertical-align: middle;
+}

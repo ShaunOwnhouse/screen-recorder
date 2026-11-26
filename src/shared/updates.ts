@@ -43,7 +43,12 @@ export interface UpdateBanner {
   /** What the banner's button does; no button when undefined. */
   action?: 'restart' | 'download' | 'open'
   label?: string
+  /** 0–100 while the update is downloading: the banner shows a progress bar. */
+  progress?: number
 }
+
+/** Is there an update the person can do something about (found, downloading or ready)? Marks the Settings → Updates section. */
+export const updateWaiting = (s: UpdateStatus): boolean => s.state === 'available' || s.state === 'downloading' || s.state === 'ready'
 
 /** What the panel shows at the top, or null when there's nothing worth interrupting for. */
 export function updateBanner(s: UpdateStatus): UpdateBanner | null {
@@ -54,9 +59,9 @@ export function updateBanner(s: UpdateStatus): UpdateBanner | null {
     return { text: `Version ${s.latest} is available.`, action: 'open', label: 'Get the update' }
   }
   if (s.state === 'available' && s.manualDownload) {
-    return { text: `Version ${s.latest} is available.`, action: 'download', label: 'Download it' }
+    return { text: `Version ${s.latest} is available.`, action: 'download', label: 'Update now' }
   }
-  if (s.state === 'downloading') return { text: `Downloading update ${s.latest}… ${Math.round(s.percent ?? 0)}%` }
+  if (s.state === 'downloading') return { text: `Downloading update ${s.latest}… ${Math.round(s.percent ?? 0)}%`, progress: Math.min(100, Math.max(0, s.percent ?? 0)) }
   return null
 }
 

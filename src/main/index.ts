@@ -146,10 +146,30 @@ const updater = new Updater({
   busy: () => {
     if (recorder.getStatus().state !== 'idle') return 'Finish your recording (or screenshot) first, then restart to update.'
     if (shots.isOpen()) return 'Save or discard the screenshot you are editing first — unsaved screenshots are not kept across a restart.'
+    if (editor.isOpen()) return 'Save or finish the video you are editing first, then restart to update.'
     return null
   }
 })
-updater.on('status', (status) => mainWindow?.webContents.send('update:status', status))
+// Say so once per version, even when the app is in the background: a notice that opens Screen Snap, where the banner has the button.
+let noticeFor = ''
+updater.on('status', (status) => {
+  mainWindow?.webContents.send('update:status', status)
+  const found = status.state === 'ready' || (status.state === 'available' && (status.manualDownload || status.notifyOnly))
+  if (!found || !status.latest || noticeFor === status.latest || recorder.getStatus().state !== 'idle') return
+  noticeFor = status.latest
+  try {
+    if (!Notification.isSupported()) return
+    const n = new Notification({
+      title: status.state === 'ready' ? `Screen Snap ${status.latest} is ready` : `Screen Snap ${status.latest} is available`,
+      body: status.state === 'ready' ? 'Open Screen Snap and click “Restart to update”. Your settings and recordings are kept.' : 'Open Screen Snap and click “Update now”.',
+      silent: false
+    })
+    n.on('click', () => showMainWindow())
+    n.show()
+  } catch {
+    // a notice is only a convenience; the banner in the app says the same
+  }
+})
 
 function newestPending(): string | null {
   const [first] = listPending()

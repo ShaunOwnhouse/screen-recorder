@@ -1,6 +1,6 @@
 import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
 import { acceleratorFromKey, acceleratorLabel } from '../shared/hotkeys.ts'
-import { updateBanner, updateLine, type UpdateStatus } from '../shared/updates.ts'
+import { updateBanner, updateLine, updateWaiting, type UpdateStatus } from '../shared/updates.ts'
 import type { AudioLevels, Capabilities, RecordingStatus, Settings } from '../shared/types.ts'
 
 const api = window.api
@@ -92,6 +92,7 @@ const el = {
   updateBanner: $('update-banner'),
   updateText: $('update-text'),
   updateAction: $<HTMLButtonElement>('update-action'),
+  updateBar: $('update-bar'),
   updateLine: $('update-line'),
   updateCheck: $<HTMLButtonElement>('update-check'),
   updateHint: $('update-hint'),
@@ -335,7 +336,12 @@ function renderUpdate(s: UpdateStatus): void {
     el.updateAction.hidden = !banner.action
     el.updateAction.textContent = banner.label ?? ''
     el.updateAction.dataset.action = banner.action ?? ''
+    // while it downloads, the banner shows how far it has got
+    el.updateBar.hidden = banner.progress === undefined
+    ;(el.updateBar.firstElementChild as HTMLElement).style.width = `${banner.progress ?? 0}%`
   }
+  // a dot on the Updates section button while there is something to do
+  document.querySelector('button[data-target="g-updates"]')?.classList.toggle('has-update', updateWaiting(s))
 }
 
 async function runUpdateAction(): Promise<void> {
