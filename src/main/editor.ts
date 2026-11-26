@@ -178,6 +178,28 @@ export class EditorController {
     this.win.on('close', (e) => {
       if (this.exportProc) e.preventDefault()
     })
+    // If any part of the window ends up below the usable screen (under the taskbar), the page is told how much, so the
+    // save row and the timeline stay on screen whatever the monitor, its scaling or where the window was dragged.
+    let below = -1
+    const watch = (): void => {
+      const w = this.win
+      if (!w || w.isDestroyed() || w.isFullScreen() || w.isMinimized()) return
+      const cb = w.getContentBounds()
+      const wa = screen.getDisplayMatching(w.getBounds()).workArea
+      const zoom = w.webContents.getZoomFactor() || 1
+      const px = Math.max(0, Math.round((cb.y + cb.height - (wa.y + wa.height)) / zoom))
+      if (px !== below) {
+        below = px
+        w.webContents.send('editor:below-screen', px)
+      }
+    }
+    const watchTimer = setInterval(watch, 700)
+    for (const ev of ['resize', 'move', 'maximize', 'unmaximize', 'restore', 'show'] as const) this.win.on(ev as 'resize', watch)
+    this.win.webContents.on('did-finish-load', () => {
+      below = -1
+      watch()
+    })
+    this.win.on('closed', () => clearInterval(watchTimer))
     this.win.on('closed', () => {
       this.win = null
       // Closing the window after saving counts as finishing: the recording has been turned into a video, so it goes.

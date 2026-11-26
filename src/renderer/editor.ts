@@ -408,6 +408,10 @@ async function init(): Promise<void> {
   window.addEventListener('resize', layoutFrame)
   new ResizeObserver(layoutFrame).observe(stage)
   initLayout(layoutFrame)
+  window.editor.onBelowScreen((px) => {
+    document.querySelector<HTMLElement>('.editor')!.style.setProperty('--below', `${px}px`)
+    layoutFrame()
+  })
 
   $('play').addEventListener('click', () => player.toggle())
   $('split').addEventListener('click', () => actions.split())

@@ -20,6 +20,11 @@ const editor: EditorApi = {
   previewFinal: (req) => ipcRenderer.invoke('editor:preview-final', req),
   finish: () => ipcRenderer.invoke('editor:finish'),
   revealPath: (path) => ipcRenderer.invoke('editor:reveal-path', path),
+  onBelowScreen: (cb) => {
+    const listener = (_e: IpcRendererEvent, px: number): void => cb(px)
+    ipcRenderer.on('editor:below-screen', listener)
+    return () => ipcRenderer.removeListener('editor:below-screen', listener)
+  },
   onProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, f: number): void => cb(f)
     ipcRenderer.on('editor:progress', listener)

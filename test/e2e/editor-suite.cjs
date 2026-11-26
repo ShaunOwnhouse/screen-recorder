@@ -21,6 +21,41 @@ async function editorSuite(c) {
   ff(['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=0xe0c020:s=300x300', '-frames:v', '1', pic])
   ff(['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=44100,volume=6', '-t', '5', song])
 
+  // ---- the layout fits the window, on a big monitor and on a small one ----
+  const fit = () => editor.evaluate(() => {
+    const el = (q) => document.querySelector(q)
+    const foot = el('footer.save').getBoundingClientRect()
+    const tl = el('#timeline').getBoundingClientRect()
+    const stage = el('#stage').getBoundingClientRect()
+    return { innerH: innerHeight, innerW: innerWidth, footBottom: Math.round(foot.bottom), saveBtn: Math.round(el('#save').getBoundingClientRect().bottom), stageH: Math.round(stage.height), tlH: Math.round(tl.height), docH: document.documentElement.scrollHeight, bodyH: document.body.scrollHeight }
+  })
+  const sizeTo = async (w, h) => {
+    await app.evaluate(({ BrowserWindow }, [ww, hh]) => {
+      const win = BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')
+      if (win) { win.setMinimumSize(300, 300); win.setBounds({ x: 0, y: 0, width: ww, height: hh }) }
+    }, [w, h])
+    await sleep(700)
+  }
+  for (const [w, h] of [[1920, 1040], [1920, 1080], [1366, 728], [1100, 640], [1100, 580]]) {
+    await sizeTo(w, h)
+    const f = await fit()
+    check(`${tag}: at ${w}×${h} the save row is fully on screen (nothing pushed below the window)`, f.saveBtn <= f.innerH + 1 && f.docH <= f.innerH + 1 && f.bodyH <= f.innerH + 1, JSON.stringify(f))
+  }
+  // a window that hangs below the usable screen (under the taskbar) keeps its save row in view
+  await sizeTo(1920, 1040)
+  await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')
+    if (win) win.setBounds({ x: 0, y: 260, width: 1600, height: 1000 })
+  })
+  await sleep(1400)
+  const hang = await editor.evaluate(() => {
+    const below = parseFloat(getComputedStyle(document.querySelector('.editor')).getPropertyValue('--below')) || 0
+    const foot = document.querySelector('footer.save').getBoundingClientRect()
+    return { below, screenY: window.screenY, footBottom: Math.round(foot.bottom), availH: screen.availHeight, innerH: innerHeight }
+  })
+  check(`${tag}: a window hanging below the screen is told so, and its save row stays on screen`, hang.below > 100 && hang.screenY + hang.footBottom <= hang.availH + 2, JSON.stringify(hang))
+  await sizeTo(1440, 920)
+
   // ---- the screen ----
   check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
   check(`${tag}: the timeline has Video, Comments and Audio rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Audio/.test(await editor.textContent('#label-music')))

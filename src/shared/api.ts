@@ -80,6 +80,8 @@ export interface EditorApi {
   finish(): Promise<boolean>
   /** Shows a video saved from this recording in its folder. */
   revealPath(path: string): Promise<void>
+  /** How many pixels of the window are below the usable screen (under the taskbar), so the page can keep everything in view. */
+  onBelowScreen(cb: (px: number) => void): () => void
   onProgress(cb: (fraction: number) => void): () => void
 }
 
