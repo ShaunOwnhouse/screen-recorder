@@ -756,10 +756,19 @@ async function save(app, editor, name) {
         check('Updates: nothing to click but Check now when up to date', (await main.isHidden('#update-action')) && (await main.isVisible('#update-check')))
         // An app left open for days looks again when the window is used: coming back after a while checks the feed, coming back at once doesn't
         const focusMain = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.emit('focus'))
-        await sleep(4500)
-        const hits0 = feedHits
-        await focusMain()
-        const looked = await (async () => { for (let i = 0; i < 40 && feedHits === hits0; i++) await sleep(250); return feedHits > hits0 })()
+        // the app's own first look (20 s after it starts) must be over, or it can land in the middle of this and count as "a look just now"
+        const upFor = await app.evaluate(() => process.uptime())
+        if (upFor < 32) await sleep((32 - upFor) * 1000)
+        // up to three tries, each after a quiet spell longer than the shortened "a while": the app must look at the feed when the window is used
+        let looked = false
+        let hits0 = feedHits
+        for (let attempt = 0; attempt < 3 && !looked; attempt++) {
+          await sleep(4500)
+          hits0 = feedHits
+          await focusMain()
+          for (let i = 0; i < 16 && feedHits === hits0; i++) await sleep(250)
+          looked = feedHits > hits0
+        }
         check('Updates: coming back to the window after a while looks for an update again', looked, `${feedHits} vs ${hits0}`)
         await sleep(600)
         const hits1 = feedHits
