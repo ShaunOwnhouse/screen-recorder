@@ -140,7 +140,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node test/e2e/update.cjs "dist/Screen-Snap-Setup-$APP_VERSION.exe" --github
+        run: node test/e2e/update-github.cjs "dist/Screen-Snap-Setup-$APP_VERSION.exe"
 
       # Only reached when the end-to-end test above passed. Publishes the installers the test just ran.
       - name: Publish the Windows build to the Latest build release
@@ -181,6 +181,7 @@ jobs:
           path: |
             test-results/e2e
             test-results/update
+            test-results/update-github
           if-no-files-found: ignore
           retention-days: 2
 

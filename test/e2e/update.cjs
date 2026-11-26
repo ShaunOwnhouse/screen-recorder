@@ -1,8 +1,6 @@
 'use strict'
 // Real update test (Windows only): the installed app finds a newer build, downloads it, restarts into it, and keeps its settings.
-//   node test/e2e/update.cjs "<path to the Screen-Snap-Setup-<version>.exe just built>" [--github]
-// With --github the "newer build" is not served from this computer but hosted on one fixed GitHub release (update-test) and
-// downloaded through GitHub's real download links — redirects and partial downloads included — the way installed copies get updates.
+//   node test/e2e/update.cjs "<path to the Screen-Snap-Setup-<version>.exe just built>"
 // 1. builds a newer installer, 2. serves it as an update feed on this computer, 3. installs the older one silently,
 // 4. runs the installed app and waits for the update to download, 5. clicks "Restart to update", 6. waits for the installer
 // to replace the program, 7. runs the new version and checks it is the new version, still has the old settings, and is up to date.
@@ -18,13 +16,11 @@ if (process.platform !== 'win32') {
 }
 
 const ROOT = path.resolve(__dirname, '../..')
-const GITHUB = process.argv.includes('--github')
-const REPO = process.env.GITHUB_REPOSITORY || ''
-const RESULTS = path.join(ROOT, 'test-results', GITHUB ? 'update-github' : 'update')
+const RESULTS = path.join(ROOT, 'test-results', 'update')
 fs.rmSync(RESULTS, { recursive: true, force: true })
 fs.mkdirSync(RESULTS, { recursive: true })
 
-const oldInstaller = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) || '')
+const oldInstaller = path.resolve(process.argv[2] || '')
 if (!fs.existsSync(oldInstaller)) throw new Error(`installer not found: ${oldInstaller}`)
 const OLD = /Setup-(\d+\.\d+\.\d+)\.exe$/.exec(path.basename(oldInstaller))?.[1]
 if (!OLD) throw new Error('could not read the version from the installer name')
@@ -61,39 +57,20 @@ async function waitFor(fn, ms, every = 1000) {
   let feed = null
   try {
     // 1) a newer installer (and the latest.yml that announces it)
-    // (the run that serves it from this computer builds it; the GitHub run reuses that build)
-    const reuse = GITHUB && fs.existsSync(path.join(UPDATE_OUT, 'latest.yml')) && fs.existsSync(path.join(UPDATE_OUT, `Screen-Snap-Setup-${NEW}.exe`))
-    if (!reuse) log(`building the newer build (${NEW}) to serve as the update…`)
-    const b = reuse
-      ? { status: 0 }
-      : spawnSync(
-          'npx',
-          ['electron-builder', '--win', 'nsis', '--publish', 'never', `-c.extraMetadata.version=${NEW}`, '-c.directories.output=dist-update',
-            '-c.publish.provider=generic', '-c.publish.url=http://127.0.0.1:1'],
-          { cwd: ROOT, shell: true, stdio: 'inherit' }
-        )
+    log(`building the newer build (${NEW}) to serve as the update…`)
+    const b = spawnSync(
+      'npx',
+      ['electron-builder', '--win', 'nsis', '--publish', 'never', `-c.extraMetadata.version=${NEW}`, '-c.directories.output=dist-update',
+        '-c.publish.provider=generic', '-c.publish.url=http://127.0.0.1:1'],
+      { cwd: ROOT, shell: true, stdio: 'inherit' }
+    )
     const files = fs.existsSync(UPDATE_OUT) ? fs.readdirSync(UPDATE_OUT) : []
     check('A newer installer and latest.yml were built', b.status === 0 && files.includes('latest.yml') && files.includes(`Screen-Snap-Setup-${NEW}.exe`), files.join(', '))
     check('The update feed file names the new version', /version:\s*2\.0\.0/.test(fs.readFileSync(path.join(UPDATE_OUT, 'latest.yml'), 'utf8')))
 
-    // 2) serve it: from this computer, or from the fixed GitHub release
+    // 2) serve it
     let served = 0
-    let feedUrl = ''
-    const gh = (...args) => spawnSync('gh', [...args, '--repo', REPO], { encoding: 'utf8', shell: true, env: process.env })
-    const toUpload = [`Screen-Snap-Setup-${NEW}.exe`, `Screen-Snap-Setup-${NEW}.exe.blockmap`, 'latest.yml']
-    if (GITHUB) {
-      if (!REPO) throw new Error('GITHUB_REPOSITORY is not set')
-      const view = gh('release', 'view', 'update-test')
-      if (view.status !== 0) {
-        const made = gh('release', 'create', 'update-test', '--prerelease', '--title', '"Update test (used by the build checks only)"', '--notes', '"A throwaway newer build the update test downloads. Not for downloading."')
-        log(`release update-test created: exit ${made.status} ${made.stderr || ''}`.trim())
-      }
-      const up = gh('release', 'upload', 'update-test', ...toUpload.map((f) => `"${path.join(UPDATE_OUT, f)}"`), '--clobber')
-      log(`uploaded the newer build to GitHub: exit ${up.status} ${up.stderr || ''}`.trim())
-      check('The newer build was uploaded to the test release on GitHub', up.status === 0)
-      feedUrl = `https://github.com/${REPO}/releases/download/update-test`
-    }
-    if (!GITHUB) feed = http.createServer((req, res) => {
+    feed = http.createServer((req, res) => {
       const file = path.join(UPDATE_OUT, decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, ''))
       if (!file.startsWith(UPDATE_OUT) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
         res.writeHead(404)
@@ -112,10 +89,8 @@ async function waitFor(fn, ms, every = 1000) {
       if (/\.exe$/.test(file)) served += size
       fs.createReadStream(file).pipe(res)
     })
-    if (!GITHUB) {
-      await new Promise((r) => feed.listen(0, '127.0.0.1', r))
-      feedUrl = `http://127.0.0.1:${feed.address().port}`
-    }
+    await new Promise((r) => feed.listen(0, '127.0.0.1', r))
+    const feedUrl = `http://127.0.0.1:${feed.address().port}`
 
     // 3) settings the person already has, then install the OLD build silently
     const appData = path.join(process.env.APPDATA, 'Screen Snap')
@@ -125,14 +100,6 @@ async function waitFor(fn, ms, every = 1000) {
     // left over from the end-to-end test that ran just before this one, so make sure none is.
     spawnSync('taskkill', ['/F', '/T', '/IM', 'Screen Snap.exe'], { windowsHide: true })
     await sleep(3000)
-    // an earlier run in the same job (the other feed) leaves its copy behind: remove it so this one starts clean
-    const uninstaller = path.join(INSTALL_DIR, 'Uninstall Screen Snap.exe')
-    if (fs.existsSync(uninstaller)) {
-      log('removing the copy left by the earlier run…')
-      spawnSync(uninstaller, ['/S', `_?=${INSTALL_DIR}`], { windowsHide: true, timeout: 3 * 60 * 1000 })
-      await sleep(3000)
-      fs.rmSync(INSTALL_DIR, { recursive: true, force: true })
-    }
     log(`installing ${OLD} silently into ${INSTALL_DIR}…`)
     const inst = spawnSync(oldInstaller, ['/S', '/currentuser', `/D=${INSTALL_DIR}`], { windowsHide: true, timeout: 5 * 60 * 1000 })
     log(`installer finished: exit ${inst.status}${inst.error ? `, ${inst.error.message}` : ''}`)
@@ -158,7 +125,7 @@ async function waitFor(fn, ms, every = 1000) {
     }, 300000, 1500)
     check('The app found the newer version and downloaded it by itself', !!ready && ready.state === 'ready' && ready.latest === NEW, JSON.stringify(ready))
     log(`update download served ${(served / 1048576).toFixed(1)} MB from the feed`)
-    if (!GITHUB) check('The update was fetched from the feed', served > 0, `${(served / 1048576).toFixed(1)} MB`)
+    check('The update was fetched from the feed', served > 0, `${(served / 1048576).toFixed(1)} MB`)
     await main.waitForSelector('#update-banner:not([hidden])', { timeout: 10000 }).catch(() => {})
     const banner = await main.textContent('#update-banner').catch(() => '')
     check('A banner offers "Restart to update"', /Restart to update/.test(banner) && banner.includes(NEW), banner.replace(/\s+/g, ' ').slice(0, 160))
@@ -199,7 +166,6 @@ async function waitFor(fn, ms, every = 1000) {
     await app?.close().catch(() => {})
     spawnSync('taskkill', ['/F', '/IM', 'Screen Snap.exe', '/T'], { windowsHide: true })
     feed?.close()
-    if (GITHUB && REPO) for (const f of ['Screen-Snap-Setup-2.0.0.exe', 'Screen-Snap-Setup-2.0.0.exe.blockmap', 'latest.yml']) spawnSync('gh', ['release', 'delete-asset', 'update-test', f, '--yes', '--repo', REPO], { shell: true, env: process.env })
   }
   fs.writeFileSync(path.join(RESULTS, 'results.json'), JSON.stringify(results, null, 2))
   const bad = results.filter((r) => !r.ok)
