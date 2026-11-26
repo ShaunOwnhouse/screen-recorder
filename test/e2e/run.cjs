@@ -954,7 +954,9 @@ async function save(app, editor, name) {
 
       // ---- in the editor ----
       const T = 'Camera editor'
-      await editor.evaluate(() => window.__editor.store.seek(1))
+      // the camera's piece starts where the camera really began relative to the screen (measured each run, up to a few seconds), so look just after that
+      const camStart = await editor.evaluate(() => window.__editor.store.project.clips.find((c) => c.media === 'camera')?.start ?? 0)
+      await editor.evaluate((t) => window.__editor.store.seek(t), Math.max(1, camStart + 0.8))
       await sleep(900)
       const camClip = () => editor.evaluate(() => window.__editor.store.project.clips.find((c) => c.media === 'camera') ?? null)
       const recClip = () => editor.evaluate(() => window.__editor.store.project.clips.find((c) => c.kind === 'recording') ?? null)
