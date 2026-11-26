@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { app, shell } from 'electron'
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 import { friendlyUpdateError, type UpdateStatus } from '../shared/updates.ts'
+import { showUpdatingWindow } from './updating-window.ts'
 
 const LOCAL_FEED = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/
 /** The tests can also read the "newer build" from one fixed GitHub release (to try GitHub's real download links). */
@@ -154,7 +155,10 @@ export class Updater extends EventEmitter {
     if (this.status.state !== 'ready') return { ok: false, reason: 'No update is ready yet.' }
     const busy = this.deps.busy()
     if (busy) return { ok: false, reason: busy }
-    setImmediate(() => autoUpdater.quitAndInstall(true, true))
+    setImmediate(() => {
+      showUpdatingWindow() // the installer is silent: this says what is happening until the new copy opens
+      autoUpdater.quitAndInstall(true, true)
+    })
     return { ok: true }
   }
 }

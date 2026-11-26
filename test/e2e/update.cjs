@@ -139,11 +139,17 @@ async function waitFor(fn, ms, every = 1000) {
     const exited = await Promise.race([exitedP, sleep(120000).then(() => false)])
     check('The old copy closed itself so the update could be installed', exited)
     app = null
+    // While the installer works nothing else is on screen, so a small window says what is going on (people opened the app half way through)
+    const splashCount = () => ps('(Get-Process | Where-Object { $_.MainWindowTitle -eq "Updating Screen Snap" } | Measure-Object).Count')
+    const splash = await waitFor(() => splashCount() !== '0', 20000, 500)
+    check('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
     const installed = await waitFor(() => exeVersion().startsWith(NEW), 240000, 2000)
     check(`The installer replaced the program with ${NEW}`, !!installed, exeVersion())
     // The installer restarts the app by itself.
     const relaunched = await waitFor(() => running(), 90000, 1000)
     check('The new version started itself after the update', !!relaunched)
+    const splashGone = await waitFor(() => splashCount() === '0', 30000, 1000)
+    check('The "Updating" window closes once the new version has started', !!splashGone)
     spawnSync('taskkill', ['/F', '/IM', 'Screen Snap.exe', '/T'], { windowsHide: true })
     await sleep(3000)
 
