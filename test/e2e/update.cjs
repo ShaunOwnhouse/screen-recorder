@@ -143,6 +143,10 @@ async function waitFor(fn, ms, every = 1000) {
     const splashCount = () => ps('(Get-Process | Where-Object { $_.MainWindowTitle -eq "Updating Screen Snap" } | Measure-Object).Count')
     const splash = await waitFor(() => splashCount() !== '0', 20000, 500)
     check('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
+    if (!splash) {
+      log('powershell processes:', ps('Get-Process powershell -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) [$($_.MainWindowTitle)]" }'))
+      log('window log:', ps('Get-Content "$env:TEMP\\screen-snap-updating.log" -ErrorAction SilentlyContinue'))
+    }
     const installed = await waitFor(() => exeVersion().startsWith(NEW), 240000, 2000)
     check(`The installer replaced the program with ${NEW}`, !!installed, exeVersion())
     // The installer restarts the app by itself.
