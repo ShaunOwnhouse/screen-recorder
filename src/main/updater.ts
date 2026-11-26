@@ -51,7 +51,9 @@ export class Updater extends EventEmitter {
       ? null
       : !app.isPackaged
         ? 'This is a development copy, so it doesn’t update itself.'
-        : process.env.PORTABLE_EXECUTABLE_FILE
+        : (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore
+          ? 'This copy comes from the Microsoft Store, which updates it for you.'
+          : process.env.PORTABLE_EXECUTABLE_FILE
           ? 'The portable version can’t update itself — install Screen Snap with the Setup file to get automatic updates.'
           : process.platform === 'linux'
             ? 'Automatic updates aren’t available on Linux yet.'
