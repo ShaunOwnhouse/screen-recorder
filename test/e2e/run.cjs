@@ -526,9 +526,11 @@ async function save(app, editor, name) {
 
   // A tiny update feed on this computer (Windows only: Linux runs from source, which never self-updates).
   let feedVersion = require(path.join(ROOT, 'package.json')).version
+  let feedHits = 0 // how many times the app has looked at latest.yml
   const feedServer = http.createServer((req, res) => {
     // electron-updater asks for latest.yml?noCache=<token>, so ignore the query string
     if (/latest\.yml$/.test(req.url.split('?')[0])) {
+      feedHits++
       res.writeHead(200, { 'Content-Type': 'text/yaml' })
       res.end(`version: ${feedVersion}\nfiles:\n  - url: Screen-Snap-Setup-${feedVersion}.exe\n    sha512: AAAA\n    size: 1\npath: Screen-Snap-Setup-${feedVersion}.exe\nsha512: AAAA\nreleaseDate: '2026-01-01T00:00:00.000Z'\n`)
     } else {
@@ -544,7 +546,7 @@ async function save(app, editor, name) {
     ? { executablePath: path.resolve(target), args: flags }
     : { executablePath: path.join(ROOT, 'node_modules/electron/dist/electron'), args: ['--no-sandbox', ROOT, ...flags] }
   log('launching', target ? path.resolve(target) : 'Electron from source', '| platform', process.platform)
-  const app = await electron.launch({ ...launch, timeout: 120000, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...(isWin ? { SCREEN_SNAP_UPDATE_FEED: feedUrl } : {}) } })
+  const app = await electron.launch({ ...launch, timeout: 120000, env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...(isWin ? { SCREEN_SNAP_UPDATE_FEED: feedUrl, SCREEN_SNAP_UPDATE_STALE_MS: '4000' } : {}) } })
   const errors = []
   app.process().stderr.on('data', (d) => {
     const s = String(d)
@@ -752,6 +754,19 @@ async function save(app, editor, name) {
         await main.waitForFunction(() => /up to date/.test(document.getElementById('update-line').textContent), null, { timeout: 30000 })
           .then(() => check('Updates: "Check now" says you are up to date when there is nothing newer', true), async () => check('Updates: "Check now" says you are up to date when there is nothing newer', false, await line()))
         check('Updates: nothing to click but Check now when up to date', (await main.isHidden('#update-action')) && (await main.isVisible('#update-check')))
+        // An app left open for days looks again when the window is used: coming back after a while checks the feed, coming back at once doesn't
+        const focusMain = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.emit('focus'))
+        await sleep(4500)
+        const hits0 = feedHits
+        await focusMain()
+        const looked = await (async () => { for (let i = 0; i < 40 && feedHits === hits0; i++) await sleep(250); return feedHits > hits0 })()
+        check('Updates: coming back to the window after a while looks for an update again', looked, `${feedHits} vs ${hits0}`)
+        await sleep(600)
+        const hits1 = feedHits
+        await focusMain()
+        await focusMain()
+        await sleep(1200)
+        check('Updates: coming back to the window straight away does not look again', feedHits === hits1, `${feedHits} vs ${hits1}`)
         // A newer version exists, automatic updates are off → it is announced with a Download button
         await main.evaluate(() => window.api.setSettings({ autoUpdate: false }))
         feedVersion = '99.0.0'

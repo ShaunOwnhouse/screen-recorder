@@ -206,6 +206,7 @@ function createMainWindow(): void {
   // Keeps the control panel out of every recording (WDA_EXCLUDEFROMCAPTURE on Windows 10 2004+).
   mainWindow.setContentProtection(true)
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('focus', () => updater.checkIfStale())
   mainWindow.on('close', (e) => {
     if (!quitting && recorder.getStatus().state !== 'idle') {
       e.preventDefault()

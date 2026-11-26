@@ -9,7 +9,9 @@ const LOCAL_FEED = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/
 /** The tests can also read the "newer build" from one fixed GitHub release (to try GitHub's real download links). */
 const TEST_FEED = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/update-test\/?$/
 const FIRST_CHECK_MS = 20_000
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
+const CHECK_EVERY_MS = 60 * 60 * 1000
+/** Coming back to the window looks again if the last look was longer ago than this. */
+const STALE_AFTER_MS = 15 * 60 * 1000
 
 interface Deps {
   /** Is "download and install updates automatically" switched on? */
@@ -40,12 +42,17 @@ export class Updater extends EventEmitter {
   private readonly unsupported: string | null
   private timer: NodeJS.Timeout | null = null
   private checking = false
+  private lastCheck = 0
+  private readonly staleAfter: number
 
   constructor(private readonly deps: Deps) {
     super()
     const feed = process.env.SCREEN_SNAP_UPDATE_FEED
     const override = feed && (LOCAL_FEED.test(feed) || TEST_FEED.test(feed)) ? feed : null // for tests only: a feed on this very computer, or the fixed test release
     // macOS only lets signed apps replace themselves; until the app is signed an update is announced and installed by hand.
+    // tests can shorten "a while" (only together with their own feed)
+    const staleTest = Number(process.env.SCREEN_SNAP_UPDATE_STALE_MS)
+    this.staleAfter = override && staleTest > 0 ? staleTest : STALE_AFTER_MS
     this.notifyOnly = process.platform === 'darwin' && !this.meta.signedBuild
     this.unsupported = override
       ? null
@@ -89,9 +96,10 @@ export class Updater extends EventEmitter {
     this.emit('status', this.status)
   }
 
-  /** Checks shortly after start-up, then every few hours. */
+  /** Checks shortly after start-up, then every hour. */
   start(): void {
     if (this.unsupported) return
+    this.lastCheck = Date.now() // the first look is booked below, so coming to the window during start-up doesn't add another
     this.timer = setTimeout(() => {
       void this.check()
       this.timer = setInterval(() => void this.check(), CHECK_EVERY_MS)
@@ -108,6 +116,7 @@ export class Updater extends EventEmitter {
     // Don't look again while a download is under way or already finished.
     if (this.status.state === 'downloading' || this.status.state === 'ready') return this.status
     this.checking = true
+    this.lastCheck = Date.now()
     try {
       autoUpdater.autoDownload = this.deps.auto() && !this.notifyOnly
       await autoUpdater.checkForUpdates()
@@ -117,6 +126,13 @@ export class Updater extends EventEmitter {
       this.checking = false
     }
     return this.status
+  }
+
+  /** Called when the person opens or returns to the window: looks again if it has been a while (the app may have been open for days). */
+  checkIfStale(): void {
+    if (this.unsupported || this.timer === null) return // not started yet: the first check is already booked
+    if (Date.now() - this.lastCheck < this.staleAfter) return
+    void this.check()
   }
 
   /** Starts the download of a found update — or, where the app can't install it itself, opens the download page. */
