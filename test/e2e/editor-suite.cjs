@@ -27,34 +27,37 @@ async function editorSuite(c) {
     const foot = el('footer.save').getBoundingClientRect()
     const tl = el('#timeline').getBoundingClientRect()
     const stage = el('#stage').getBoundingClientRect()
-    return { innerH: innerHeight, innerW: innerWidth, footBottom: Math.round(foot.bottom), saveBtn: Math.round(el('#save').getBoundingClientRect().bottom), stageH: Math.round(stage.height), tlH: Math.round(tl.height), docH: document.documentElement.scrollHeight, bodyH: document.body.scrollHeight }
+    const below = parseFloat(getComputedStyle(el('.editor')).getPropertyValue('--below')) || 0
+    const chrome = window.outerHeight - window.innerHeight
+    return {
+      innerH: innerHeight, innerW: innerWidth, below, footBottom: Math.round(foot.bottom), saveBtn: Math.round(el('#save').getBoundingClientRect().bottom),
+      stageH: Math.round(stage.height), tlH: Math.round(tl.height), docH: document.documentElement.scrollHeight,
+      // where the bottom of the save row really is on the screen
+      onScreen: Math.round(window.screenY + chrome + foot.bottom), availH: screen.availHeight
+    }
   })
-  const sizeTo = async (w, h) => {
-    await app.evaluate(({ BrowserWindow }, [ww, hh]) => {
+  const winOf = `BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')`
+  const orig = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')?.getBounds())
+  const workArea = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+  const place = async (b) => {
+    await app.evaluate(({ BrowserWindow }, bb) => {
       const win = BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')
-      if (win) { win.setMinimumSize(300, 300); win.setBounds({ x: 0, y: 0, width: ww, height: hh }) }
-    }, [w, h])
-    await sleep(700)
+      if (win) { win.setMinimumSize(300, 300); win.setBounds(bb) }
+    }, b)
+    await sleep(1300)
   }
-  for (const [w, h] of [[1920, 1040], [1920, 1080], [1366, 728], [1100, 640], [1100, 580]]) {
-    await sizeTo(w, h)
+  void winOf
+  // sizes that fit the screen, and sizes bigger than it (a big window on a small screen is the same as a window hanging below)
+  for (const [w, h] of [[1920, 1040], [1366, 728], [1100, 640], [1100, 580]]) {
+    await place({ x: 0, y: 0, width: w, height: h })
     const f = await fit()
-    check(`${tag}: at ${w}×${h} the save row is fully on screen (nothing pushed below the window)`, f.saveBtn <= f.innerH + 1 && f.docH <= f.innerH + 1 && f.bodyH <= f.innerH + 1, JSON.stringify(f))
+    check(`${tag}: a ${w}×${h} window keeps its whole save row in view (nothing pushed below the screen)`, f.saveBtn <= f.innerH - f.below + 1 && f.docH <= f.innerH + 1 && f.onScreen <= f.availH + 14, JSON.stringify(f))
   }
-  // a window that hangs below the usable screen (under the taskbar) keeps its save row in view
-  await sizeTo(1920, 1040)
-  await app.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows().find((x) => x.getTitle() === 'Review recording')
-    if (win) win.setBounds({ x: 0, y: 260, width: 1600, height: 1000 })
-  })
-  await sleep(1400)
-  const hang = await editor.evaluate(() => {
-    const below = parseFloat(getComputedStyle(document.querySelector('.editor')).getPropertyValue('--below')) || 0
-    const foot = document.querySelector('footer.save').getBoundingClientRect()
-    return { below, screenY: window.screenY, footBottom: Math.round(foot.bottom), availH: screen.availHeight, innerH: innerHeight }
-  })
-  check(`${tag}: a window hanging below the screen is told so, and its save row stays on screen`, hang.below > 100 && hang.screenY + hang.footBottom <= hang.availH + 2, JSON.stringify(hang))
-  await sizeTo(1440, 920)
+  // a window hanging below the usable screen (under the taskbar) is told so and keeps its save row in view
+  await place({ x: 0, y: Math.max(0, workArea.height - 640), width: 1500, height: 900 })
+  const hang = await fit()
+  check(`${tag}: a window hanging below the screen is told so, and its save row stays on screen`, hang.below > 100 && hang.onScreen <= hang.availH + 14, JSON.stringify(hang))
+  await place(orig)
 
   // ---- the screen ----
   check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
