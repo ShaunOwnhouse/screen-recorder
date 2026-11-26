@@ -341,8 +341,12 @@ async function editorSuite(c) {
   check(`${tag}: the dip is drawn as a line on the sound in the timeline`, (await editor.locator(`.blk.music-blk[data-sound="${mus.id}"] svg.lvl-tl polyline`).count()) === 1)
   const pts = await editor.locator('#lvl-sound-graph circle.lvl-pt').count()
   check(`${tag}: and as points in the graph`, pts === 4, `${pts} points`)
+  await editor.locator('#lvl-sound-graph').scrollIntoViewIfNeeded()
   const box = await editor.locator('#lvl-sound-graph').boundingBox()
-  await editor.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.5)
+  // click half way between the two low points, wherever that is on the graph (its length depends on the sound), clear of every point
+  const soundLen = await editor.evaluate((id) => window.__editor.store.project.sounds.find((m) => m.id === id).length, mus.id)
+  const dipMid = (low[0].t + low[1].t) / 2
+  await editor.mouse.click(box.x + 10 + (dipMid / soundLen) * (box.width - 20), box.y + box.height * 0.5)
   env = await musEnv()
   check(`${tag}: clicking the graph adds a point`, env.length === 5 && env.some((p) => Math.abs(p.v - 0.5) < 0.2 && p.t > low[0].t && p.t < low[1].t), JSON.stringify(env))
   const lastPt = editor.locator('#lvl-sound-graph circle.lvl-pt >> nth=2')
