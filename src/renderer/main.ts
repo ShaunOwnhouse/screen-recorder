@@ -1,6 +1,6 @@
 import { IMAGE_FORMATS, VIDEO_FORMATS } from '../shared/formats.ts'
 import { acceleratorFromKey, acceleratorLabel } from '../shared/hotkeys.ts'
-import { updateBanner, updateLine, updateWaiting, type UpdateStatus } from '../shared/updates.ts'
+import { updateButton, updateLine, updateWaiting, type UpdateStatus } from '../shared/updates.ts'
 import type { AudioLevels, Capabilities, RecordingStatus, Settings } from '../shared/types.ts'
 
 const api = window.api
@@ -89,10 +89,7 @@ const el = {
   pauseText: $('pause-text'),
   pauseIcon: $('pause-icon'),
   keyHint: $('key-hint'),
-  updateBanner: $('update-banner'),
-  updateText: $('update-text'),
   updateAction: $<HTMLButtonElement>('update-action'),
-  updateBar: $('update-bar'),
   updateLine: $('update-line'),
   updateCheck: $<HTMLButtonElement>('update-check'),
   updateHint: $('update-hint'),
@@ -329,19 +326,16 @@ function renderUpdate(s: UpdateStatus): void {
       : s.notifyOnly
         ? 'This Mac build is not code-signed yet, so updates are announced here and installed by hand.'
         : 'Updates download in the background. Your settings and recordings are kept.'
-  const banner = updateBanner(s)
-  el.updateBanner.hidden = !banner
-  if (banner) {
-    el.updateText.textContent = banner.text
-    el.updateAction.hidden = !banner.action
-    el.updateAction.textContent = banner.label ?? ''
-    el.updateAction.dataset.action = banner.action ?? ''
-    // while it downloads, the banner shows how far it has got
-    el.updateBar.hidden = banner.progress === undefined
-    ;(el.updateBar.firstElementChild as HTMLElement).style.width = `${banner.progress ?? 0}%`
-  }
-  // a dot on the Updates section button while there is something to do
-  document.querySelector('button[data-target="g-updates"]')?.classList.toggle('has-update', updateWaiting(s))
+  // The status line (with the download's progress) says what is going on; when there is something to click it becomes a button.
+  const button = updateButton(s)
+  el.updateAction.hidden = !button
+  el.updateAction.textContent = button?.label ?? ''
+  el.updateAction.dataset.action = button?.action ?? ''
+  el.updateCheck.hidden = !!button
+  // a green dot on the Settings header and on its Updates button while there is something to do, so it is seen without opening anything
+  const waiting = updateWaiting(s)
+  document.querySelector('button[data-target="g-updates"]')?.classList.toggle('has-update', waiting)
+  document.getElementById('settings-toggle')?.classList.toggle('has-update', waiting)
 }
 
 async function runUpdateAction(): Promise<void> {

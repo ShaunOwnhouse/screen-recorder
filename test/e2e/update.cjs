@@ -126,9 +126,11 @@ async function waitFor(fn, ms, every = 1000) {
     check('The app found the newer version and downloaded it by itself', !!ready && ready.state === 'ready' && ready.latest === NEW, JSON.stringify(ready))
     log(`update download served ${(served / 1048576).toFixed(1)} MB from the feed`)
     check('The update was fetched from the feed', served > 0, `${(served / 1048576).toFixed(1)} MB`)
-    await main.waitForSelector('#update-banner:not([hidden])', { timeout: 10000 }).catch(() => {})
-    const banner = await main.textContent('#update-banner').catch(() => '')
-    check('A banner offers "Restart to update"', /Restart to update/.test(banner) && banner.includes(NEW), banner.replace(/\s+/g, ' ').slice(0, 160))
+    // Settings → Updates says the new version is ready and offers the button (the person opens Settings to see it)
+    if ((await main.getAttribute('#settings-toggle', 'aria-expanded').catch(() => '')) !== 'true') await main.click('#settings-toggle').catch(() => {})
+    await main.waitForSelector('#update-action:not([hidden])', { timeout: 10000 }).catch(() => {})
+    const banner = `${await main.textContent('#update-line').catch(() => '')} | ${await main.textContent('#update-action').catch(() => '')}`
+    check('Settings → Updates offers "Restart to update" for the new version', /Restart to update/.test(banner) && banner.includes(NEW), banner.replace(/\s+/g, ' ').slice(0, 160))
     await main.screenshot({ path: path.join(RESULTS, 'update-ready.png') }).catch(() => {})
 
     // 5) restart into it

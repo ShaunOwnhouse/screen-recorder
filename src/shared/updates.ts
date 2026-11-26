@@ -38,30 +38,20 @@ export function updateLine(s: UpdateStatus): string {
   }
 }
 
-export interface UpdateBanner {
-  text: string
-  /** What the banner's button does; no button when undefined. */
-  action?: 'restart' | 'download' | 'open'
-  label?: string
-  /** 0–100 while the update is downloading: the banner shows a progress bar. */
-  progress?: number
+/** The one button Settings → Updates shows when there is something to do (instead of "Check now"). */
+export interface UpdateButton {
+  action: 'restart' | 'download' | 'open'
+  label: string
 }
 
-/** Is there an update the person can do something about (found, downloading or ready)? Marks the Settings → Updates section. */
+/** Is there an update the person can do something about (found, downloading or ready)? Marks the Settings section. */
 export const updateWaiting = (s: UpdateStatus): boolean => s.state === 'available' || s.state === 'downloading' || s.state === 'ready'
 
-/** What the panel shows at the top, or null when there's nothing worth interrupting for. */
-export function updateBanner(s: UpdateStatus): UpdateBanner | null {
-  if (s.state === 'ready') {
-    return { text: `Version ${s.latest} is ready. Restart Screen Snap to finish updating — your settings and recordings are kept.`, action: 'restart', label: 'Restart to update' }
-  }
-  if (s.state === 'available' && s.notifyOnly) {
-    return { text: `Version ${s.latest} is available.`, action: 'open', label: 'Get the update' }
-  }
-  if (s.state === 'available' && s.manualDownload) {
-    return { text: `Version ${s.latest} is available.`, action: 'download', label: 'Update now' }
-  }
-  if (s.state === 'downloading') return { text: `Downloading update ${s.latest}… ${Math.round(s.percent ?? 0)}%`, progress: Math.min(100, Math.max(0, s.percent ?? 0)) }
+/** What the button in Settings → Updates does, or null when there is nothing to click (the progress is in the status line). */
+export function updateButton(s: UpdateStatus): UpdateButton | null {
+  if (s.state === 'ready') return { action: 'restart', label: 'Restart to update' }
+  if (s.state === 'available' && s.notifyOnly) return { action: 'open', label: 'Get the update' }
+  if (s.state === 'available' && s.manualDownload) return { action: 'download', label: 'Update now' }
   return null
 }
 

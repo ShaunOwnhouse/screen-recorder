@@ -745,22 +745,22 @@ async function save(app, editor, name) {
         const l = await line()
         check('Updates: a development copy says plainly that it does not update itself', /doesn’t update itself/.test(l), l)
         check('Updates: "Check now" is switched off when updates are not possible', await main.isDisabled('#update-check'))
-        check('Updates: no update banner is shown for it', await main.isHidden('#update-banner'))
+        check('Updates: nothing to click but Check now (which is switched off)', await main.isHidden('#update-action'))
       } else {
         // The packaged app asks the local feed: same version → up to date
         await main.click('#update-check')
         await main.waitForFunction(() => /up to date/.test(document.getElementById('update-line').textContent), null, { timeout: 30000 })
           .then(() => check('Updates: "Check now" says you are up to date when there is nothing newer', true), async () => check('Updates: "Check now" says you are up to date when there is nothing newer', false, await line()))
-        check('Updates: no banner when up to date', await main.isHidden('#update-banner'))
+        check('Updates: nothing to click but Check now when up to date', (await main.isHidden('#update-action')) && (await main.isVisible('#update-check')))
         // A newer version exists, automatic updates are off → it is announced with a Download button
         await main.evaluate(() => window.api.setSettings({ autoUpdate: false }))
         feedVersion = '99.0.0'
         await main.click('#update-check')
         await main.waitForFunction(() => /99\.0\.0 is available/.test(document.getElementById('update-line').textContent), null, { timeout: 30000 })
           .then(() => check('Updates: a newer version is announced', true), async () => check('Updates: a newer version is announced', false, await line()))
-        check('Updates: the banner offers "Update now"', (await main.isVisible('#update-banner')) && /Update now/.test(await main.textContent('#update-action')), await main.textContent('#update-banner'))
-        check('Updates: the Updates section button is marked while an update is waiting', await main.evaluate(() => document.querySelector('#jump button[data-target=g-updates]').classList.contains('has-update')))
-        check('Updates: no progress bar until it downloads', await main.isHidden('#update-bar'))
+        check('Updates: Settings → Updates offers "Update now" in place of Check now', (await main.isVisible('#update-action')) && /Update now/.test(await main.textContent('#update-action')) && (await main.isHidden('#update-check')), await main.textContent('#update-line'))
+        check('Updates: a green dot on the Settings header and on its Updates button says so', await main.evaluate(() => document.getElementById('settings-toggle').classList.contains('has-update') && document.querySelector('#jump button[data-target=g-updates]').classList.contains('has-update')))
+        check('Updates: there is no banner at the top of the panel', (await main.locator('#update-banner').count()) === 0)
         await shot(main, 'panel-update-available')
         // When the feed can't be reached the app says so quietly (no crash, no scary banner)
         feedServer.close()
@@ -771,6 +771,32 @@ async function save(app, editor, name) {
         await main.waitForFunction(() => /Couldn’t check for updates/.test(document.getElementById('update-line').textContent), null, { timeout: 40000 })
           .then(() => check('Updates: an unreachable update server is reported calmly', true), async () => check('Updates: an unreachable update server is reported calmly', false, await line()))
       }
+      // every state of an update, fed to the panel the way the app does: the status line says it, one button appears only when there is something to click
+      const feedState = async (st) => {
+        await app.evaluate(({ BrowserWindow }, status) => {
+          BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('index.html'))?.webContents.send('update:status', status)
+        }, st)
+        await sleep(250)
+      }
+      const view = () => main.evaluate(() => ({
+        line: document.getElementById('update-line').textContent,
+        action: document.getElementById('update-action').hidden ? '' : document.getElementById('update-action').textContent,
+        check: !document.getElementById('update-check').hidden,
+        dot: document.getElementById('settings-toggle').classList.contains('has-update'),
+        banner: !!document.getElementById('update-banner')
+      }))
+      await feedState({ state: 'available', current: '1.1.0', latest: '1.2.0', manualDownload: true })
+      let v = await view()
+      check('Updates: found (automatic downloads off): "Version 1.2.0 is available." and an Update now button', /1\.2\.0 is available/.test(v.line) && v.action === 'Update now' && !v.check && v.dot, JSON.stringify(v))
+      await feedState({ state: 'downloading', current: '1.1.0', latest: '1.2.0', percent: 42 })
+      v = await view()
+      check('Updates: downloading shows the progress in the status line and no button', /Downloading version 1\.2\.0… 42%/.test(v.line) && v.action === '' && v.dot, JSON.stringify(v))
+      await feedState({ state: 'ready', current: '1.1.0', latest: '1.2.0', percent: 100 })
+      v = await view()
+      check('Updates: ready: "Version 1.2.0 is ready" and a Restart to update button', /1\.2\.0 is ready/.test(v.line) && v.action === 'Restart to update' && v.dot, JSON.stringify(v))
+      await feedState({ state: 'none', current: '1.1.0' })
+      v = await view()
+      check('Updates: up to date: only Check now, no dot, and never a banner at the top', v.action === '' && v.check && !v.dot && !v.banner, JSON.stringify(v))
       await main.click('#update-auto')
       check('Updates: automatic updates can be switched off', (await main.evaluate(() => window.api.getSettings())).autoUpdate === false)
       await main.click('#update-auto')
