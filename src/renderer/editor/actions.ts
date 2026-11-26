@@ -1,5 +1,5 @@
 import {
-  addAudioTrack, addClip, addSound, addVideoTrack, clipEnd, deleteClip, detachSound, duplicateClip, duplicateSound, insertClipPushing, newId, patchTrack,
+  addAudioTrack, addCameraClip, addClip, addSound, addVideoTrack, clipEnd, deleteClip, detachSound, duplicateClip, duplicateSound, insertClipPushing, newId, patchTrack,
   removeTrack, setClipSpeed, setSoundSpeed, splitAt, splitSound, type Clip, type Overlay, type Sound, type Track
 } from '../../shared/project.ts'
 import type { MediaInfo } from '../../shared/types.ts'
@@ -80,7 +80,7 @@ export class Actions {
     this.register(picked)
     const s = this.store
     const total = s.duration
-    const hasVoice = s.project.clips.some((c) => c.kind !== 'image' && c.hasAudio) || !!s.project.camera?.hasAudio
+    const hasVoice = s.project.clips.some((c) => c.kind !== 'image' && c.hasAudio) 
     let last: Sound | null = null
     for (const m of picked) {
       const short = m.duration > 0 && m.duration < total
@@ -122,19 +122,39 @@ export class Actions {
     s.edit(() => r.project, { select: { kind: 'sound', id: r.sound.id } })
   }
 
-  /** Saves one piece (the video without sound, just the sound, or the camera) as its own file. */
-  async saveAsset(what: 'video' | 'audio' | 'camera-video' | 'camera-audio', id: string): Promise<void> {
+  /** Puts the camera recording back on the timeline (on a track of its own, lined up with the screen recording). */
+  addCamera(): void {
+    const s = this.store
+    const m = s.media.get('camera')
+    if (!m) return
+    s.edit((p) => {
+      const r = addCameraClip(p, { media: m.id, name: 'Face camera', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio }, s.cameraOffset, s.aspect)
+      return r ? r.project : null
+    })
+  }
+
+  /** The camera's microphone is the voice (the screen recording keeps only its computer sound) — or the screen's microphone is, and the camera goes silent. */
+  setCameraVoice(id: string, on: boolean): void {
+    const s = this.store
+    const camHasAudio = !!s.media.get('camera')?.hasAudio
+    s.edit((p) => ({
+      ...p,
+      clips: p.clips.map((c) => {
+        if (c.id === id) return { ...c, hasAudio: on && camHasAudio }
+        if (c.kind === 'recording') return { ...c, audioSource: on ? (p.recTracks.pc ? ('pc' as const) : ('none' as const)) : ('mix' as const) }
+        return c
+      })
+    }))
+  }
+
+  /** Saves one piece (the video without sound, or just the sound) as its own file. */
+  async saveAsset(what: 'video' | 'audio', id: string): Promise<void> {
     const s = this.store
     let spec: { media: string; from: number; to: number; what: 'video' | 'audio'; name: string } | null = null
-    if (what === 'video' || what === 'audio') {
-      const c = s.project.clips.find((x) => x.id === id)
-      if (c && c.kind !== 'image') spec = { media: c.media, from: c.in, to: c.out, what, name: c.name }
-      const snd = s.project.sounds.find((x) => x.id === id)
-      if (snd) spec = { media: snd.media, from: snd.offset, to: snd.offset + Math.min(snd.length * snd.speed, Math.max(0.1, snd.duration - snd.offset)), what: 'audio', name: snd.name }
-    } else if (s.project.camera) {
-      const cam = s.project.camera
-      spec = { media: cam.media, from: 0, to: cam.duration, what: what === 'camera-audio' ? 'audio' : 'video', name: 'Face camera' }
-    }
+    const c = s.project.clips.find((x) => x.id === id)
+    if (c && c.kind !== 'image') spec = { media: c.media, from: c.in, to: c.out, what, name: c.name }
+    const snd = s.project.sounds.find((x) => x.id === id)
+    if (snd) spec = { media: snd.media, from: snd.offset, to: snd.offset + Math.min(snd.length * snd.speed, Math.max(0.1, snd.duration - snd.offset)), what: 'audio', name: snd.name }
     if (!spec) return this.onNote('Choose something with sound or video first.')
     const r = await api.saveAsset(spec)
     if (r.error) this.onNote(r.error)

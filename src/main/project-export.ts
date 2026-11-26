@@ -1,6 +1,6 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  cameraPieces, clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFullBox, paintOrder, soundOn, totalDuration, usesCameraSound,
+  clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFloating, isFullBox, paintOrder, soundOn, totalDuration,
   zoomTarget, zoomWeight, type BlurOverlay, type Clip, type EnvPoint, type Fade, type Overlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
@@ -211,6 +211,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`
     )
   }
+  const floating = isFloating
   const canvas = g.label('base')
   g.add(`color=c=black:s=${W}x${H}:r=${fps}:d=${num(T)},format=${wf},setsar=1,settb=AVTB[${canvas}]`)
   let video = canvas
@@ -219,7 +220,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
   for (const tr of paintOrder(p)) {
     if (tr.hidden) continue
     for (const c of p.clips.filter((x) => x.track === tr.id).sort((a, b) => a.start - b.start)) {
-      if (c.start >= T - 0.02) continue
+      if (c.start >= T - 0.02 || floating(c)) continue
       const len = clipLength(c)
       const n = frames(len)
       const filters: string[] = []
@@ -345,61 +346,60 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
     video = nv
   }
 
-  // ---- the face camera: on top of everything, following the recording wherever it is shown ----
-  const camera = p.camera
-  const pieces = cameraPieces(p)
-  if (camera && pieces.length) {
-    const m = mediaOf(camera.media)
-    const D = evenPx(camera.w * W)
-    const bw = camera.border ? Math.max(2, Math.round(D * 0.03)) : 0
-    const full = D + bw * 2
-    const x = clamp(Math.round(camera.x * W), 0, W - full)
-    const y = clamp(Math.round(camera.y * H), 0, H - full)
-    // distance from the shape's edge in units of half the window (negative inside), the same for every colour plane
-    const hx = 'abs((X+0.5)/W-0.5)*2'
-    const hy = 'abs((Y+0.5)/H-0.5)*2'
-    const rr = 0.44
-    const dist =
-      camera.shape === 'circle'
-        ? `(hypot(${hx},${hy})-1)`
-        : camera.shape === 'rounded'
-          ? `(hypot(max(${hx}-${1 - rr},0),max(${hy}-${1 - rr},0))-${rr})`
-          : `(max(${hx},${hy})-1)`
-    const ring = (bw ? `gte(${dist},${num((-2 * bw) / full)})` : '0')
-    const shaped = camera.shape !== 'square'
-    const geqFor = (at: number): string => {
-      const show = envExpr(camera.showEnv, 'T', at)
+  // ---- round / rounded / square windows (the face camera): on top of everything else, front-most track last ----
+  for (const tr of paintOrder(p)) {
+    if (tr.hidden) continue
+    for (const c of p.clips.filter((x) => x.track === tr.id && floating(x)).sort((a, b) => a.start - b.start)) {
+      if (c.start >= T - 0.02) continue
+      const len = clipLength(c)
+      const m = c.kind === 'image' ? null : mediaOf(c.media)
+      const D = evenPx(c.box.w * W)
+      const bw = c.border ? Math.max(2, Math.round(D * 0.03)) : 0
+      const full = D + bw * 2
+      const x = clamp(Math.round(c.box.x * W), 0, Math.max(0, W - full))
+      const y = clamp(Math.round(c.box.y * H), 0, Math.max(0, H - full))
+      // distance from the shape's edge in units of half the window (negative inside), the same for every colour plane
+      const hx = 'abs((X+0.5)/W-0.5)*2'
+      const hy = 'abs((Y+0.5)/H-0.5)*2'
+      const rr = 0.44
+      const dist =
+        c.shape === 'circle'
+          ? `(hypot(${hx},${hy})-1)`
+          : c.shape === 'rounded'
+            ? `(hypot(max(${hx}-${1 - rr},0),max(${hy}-${1 - rr},0))-${rr})`
+            : `(max(${hx},${hy})-1)`
+      const ring = bw ? `gte(${dist},${num((-2 * bw) / full)})` : '0'
+      const shaped = c.shape !== 'square'
+      const show = envExpr(c.showEnv, 'T', 0)
       const base = shaped ? `255*clip(0.5-${dist}*${num(full / 2)},0,1)` : '255'
-      return (
-        `geq=lum='if(${ring},235,lum(X,Y))':cb='if(${ring},128,cb(X,Y))':cr='if(${ring},128,cr(X,Y))'` +
-        `:a='${show ? `(${base})*(${show})` : base}'`
-      )
-    }
-    pieces.forEach((pc, i) => {
-      const len = pc.end - pc.start
-      const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.3)], m.path)
-      const label = g.label('cam')
-      const d = Math.min(FADE_SECONDS, len / 2)
-      const fadeIn = camera.fade && i === 0 && d > 0.02 ? `,fade=t=in:st=0:d=${num(d)}:alpha=1` : ''
-      const fadeOut = camera.fade && i === pieces.length - 1 && d > 0.02 ? `,fade=t=out:st=${num(len - d)}:d=${num(d)}:alpha=1` : ''
+      const geq =
+        `geq=lum='if(${ring},235,lum(X,Y))':cb='if(${ring},128,cb(X,Y))':cr='if(${ring},128,cr(X,Y))'` + `:a='${show ? `(${base})*(${show})` : base}'`
+      const idx = m
+        ? g.file([...(c.in > 0.001 ? ['-ss', num(c.in)] : []), '-t', num(len * c.speed + 0.5)], m.path)
+        : g.file(['-loop', '1', '-framerate', String(fps), '-t', num(len)], mediaOf(c.media).path)
+      clipInput.set(c.id, idx)
+      const label = g.label('win')
+      const d1 = Math.min(c.fadeIn.dur, len / 2)
+      const d2 = Math.min(c.fadeOut.dur, len / 2)
+      const fadeIn = d1 > 0.02 ? `,fade=t=in:st=0:d=${num(d1)}:alpha=1` : ''
+      const fadeOut = d2 > 0.02 ? `,fade=t=out:st=${num(len - d2)}:d=${num(d2)}:alpha=1` : ''
+      const pace = m ? [c.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(c.speed)}`, `fps=${fps}`, 'tpad=stop_mode=clone:stop_duration=1'] : ['setpts=PTS-STARTPTS']
       g.add(
-        `[${idx}:v]${pc.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(pc.speed)}`},fps=${fps},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
-          `format=${alphaFormat},${geqFor(pc.start)}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(pc.start)}/TB[${label}]`
+        `[${idx}:v]${pace.join(',')},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
+          `format=${alphaFormat},${geq}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(c.start)}/TB[${label}]`
       )
       const nv = g.label('vo')
-      g.add(`[${video}][${label}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:enable='between(t,${num(pc.start)},${num(pc.end)})'[${nv}]`)
+      g.add(`[${video}][${label}]overlay=${x}:${y}:eof_action=pass:format=${overlayFormat}:enable='between(t,${num(c.start)},${num(Math.min(T, clipEnd(c)))})'[${nv}]`)
       video = nv
-    })
+    }
   }
 
-  // ---- sound: every piece's own, the camera's voice, the recording's own tracks, then every sound on the audio tracks ----
-  const cameraSound = usesCameraSound(p) && !!o.media[p.camera!.media]?.hasAudio
-  const camSoundPieces = cameraSound ? cameraPieces(p, true) : []
+  // ---- sound: every piece's own (the camera's voice is the sound of its clip), the recording's own tracks, then every sound on the audio tracks ----
   const ownClips = p.clips.filter((c) => clipPlaysOwnSound(p, c) && !!o.media[c.media]?.hasAudio && c.start < T - 0.02 && clipInput.has(c.id))
   // the computer sound or the microphone alone, taken out of the recording
   const trackParts = clipVoiceParts(p).filter((v) => o.media[v.media]?.hasAudio && v.start < T - 0.02)
   const sounds = p.sounds.filter((x) => soundOn(p, x.track) && o.media[x.media]?.hasAudio && o.media[x.media].kind === 'video' && x.start < T - 0.05)
-  const anySound = o.format !== 'gif' && (ownClips.length > 0 || camSoundPieces.length > 0 || trackParts.length > 0 || sounds.length > 0)
+  const anySound = o.format !== 'gif' && (ownClips.length > 0 || trackParts.length > 0 || sounds.length > 0)
   let audio: string | null = null
   if (anySound) {
     const pre = `aresample=${AUDIO_RATE},aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS`
@@ -417,17 +417,6 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
           `,adelay=${ms(c.start)}|${ms(c.start)}[${label}]`
       )
       voiceParts.push(label)
-    }
-    if (camSoundPieces.length) {
-      // the camera's own recording of the person's voice: it plays from the same file as the picture, so they stay together
-      const cam = p.camera!
-      for (const pc of camSoundPieces) {
-        const len = pc.end - pc.start
-        const idx = g.file(['-ss', num(pc.from), '-t', num(len * pc.speed + 0.1)], mediaOf(cam.media).path)
-        const label = g.label('ca')
-        g.add(`[${idx}:a]${[pre, ...tempo(pc.speed), `volume=${num(clamp(cam.volume, 0, 2))}`, `atrim=duration=${num(len)}`, ...levelOver(cam.volEnv, pc.start)].join(',')},adelay=${ms(pc.start)}|${ms(pc.start)}[${label}]`)
-        voiceParts.push(label)
-      }
     }
     for (const v of trackParts) {
       const len = Math.min(v.length, Math.max(0.1, T - v.start))

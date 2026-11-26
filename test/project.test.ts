@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  activeClips, addAudioTrack, addClip, addSound, addVideoTrack, baseVideoTrack, cameraPieces, clipEnd, clipLength, cutOverlays, deleteClip, detachSound,
-  duplicateClip, duplicateSound, insertClipPushing, insertGap, isFree, isPlain, moveClip, moveSound, newCamera, newClipBase, newId, newProject, nearestFree, openGap,
+  activeClips, addAudioTrack, addClip, addSound, addVideoTrack, baseVideoTrack, clipEnd, clipLength, cutOverlays, deleteClip, detachSound,
+  duplicateClip, duplicateSound, insertClipPushing, insertGap, isFree, isPlain, moveClip, moveSound, addCameraClip, clipBoxHeight, isFloating, newClipBase, newId, newProject, nearestFree, openGap,
   overlayAlpha, patchTrack, removeSpan, removeTrack, setClipSpeed, setSoundSpeed, soundEnd, splitAt, totalDuration, trimClip, trimSound, videoTracks,
   envAt, envCut, envDip, envOpen, envPut, envRamp, envRemove, envScale, envShift, envSplit, zoomState, type Clip, type Overlay, type Project, type Sound, type ZoomOverlay
 } from '../src/shared/project.ts'
@@ -262,17 +262,60 @@ test('removing a span is the same as cutting it out of every track', () => {
   assert.equal(q.sounds.length, 2)
 })
 
-test('the camera follows the recording pieces and plays at the same speed', () => {
-  let p = base()
-  p = { ...p, camera: newCamera({ media: 'camera', name: 'camera', duration: 20, width: 1280, height: 720, hasAudio: true }, 0.5, 16 / 9) }
-  const one = cameraPieces(p)
-  assert.equal(one.length, 1)
-  assert.equal(one[0].from, 0.5)
-  const fast = setClipSpeed(p, p.clips[0].id, 2)!
-  assert.equal(cameraPieces(fast)[0].speed, 2)
-  assert.ok(cameraPieces(fast)[0].end - cameraPieces(fast)[0].start < 11)
-  const hidden = patchTrack(p, p.clips[0].track, { hidden: true })
-  assert.equal(cameraPieces(hidden).length, 0)
+const CAM = { media: 'camera', name: 'Face camera', duration: 20, width: 1280, height: 720, hasAudio: true }
+
+test('the camera goes on a track of its own in front of the screen, as a round window, lined up with the recording', () => {
+  const p = base()
+  const r = addCameraClip(p, CAM, 0.5, 16 / 9)!
+  const cam = r.project.clips.find((c) => c.id === r.id)!
+  const rec = r.project.clips.find((c) => c.kind === 'recording')!
+  assert.equal(r.project.tracks[0].name, 'Face cam')
+  assert.equal(r.project.tracks[0].id, cam.track)
+  assert.notEqual(cam.track, rec.track)
+  assert.equal(cam.in, 0.5, 'the camera clock is half a second ahead of the screen')
+  assert.equal(cam.start, 0)
+  assert.ok(isFloating(cam) && cam.shape === 'circle' && cam.border)
+  assert.ok(Math.abs(clipLength(cam) - 19.5) < 1e-9, 'it ends where the camera file does (20 s) — the recording is 20 s long')
+  // a camera that started later than the screen joins a moment late
+  const late = addCameraClip(p, CAM, -2, 16 / 9)!
+  const lc = late.project.clips.find((c) => c.id === late.id)!
+  assert.equal(lc.start, 2)
+  assert.equal(lc.in, 0)
+  // the window is a square in pixels: its height depends on the frame's shape
+  assert.ok(Math.abs(clipBoxHeight(cam, 16 / 9) - cam.box.w * 16 / 9) < 1e-9)
+  assert.ok(cam.box.x + cam.box.w <= 1 && cam.box.y + clipBoxHeight(cam, 16 / 9) <= 1)
+})
+
+test('the camera brings the voice: the screen recording keeps only its computer sound (or none)', () => {
+  const both = { ...base(), recTracks: { pc: true, mic: true } }
+  const r = addCameraClip(both, CAM, 0, 16 / 9)!
+  assert.equal(r.project.clips.find((c) => c.kind === 'recording')!.audioSource, 'pc')
+  const micOnly = { ...base(), recTracks: { pc: false, mic: true } }
+  assert.equal(addCameraClip(micOnly, CAM, 0, 16 / 9)!.project.clips.find((c) => c.kind === 'recording')!.audioSource, 'none')
+  // a camera with no sound leaves the recording's sound alone
+  const silent = addCameraClip(both, { ...CAM, hasAudio: false }, 0, 16 / 9)!
+  assert.equal(silent.project.clips.find((c) => c.kind === 'recording')!.audioSource, undefined)
+})
+
+test('the camera is a clip like any other: it can be split, sped up, trimmed and deleted on its own, and a cut across everything cuts both', () => {
+  const r = addCameraClip(base(), CAM, 0, 16 / 9)!
+  const camId = r.id
+  // splitting just the camera leaves the screen recording whole
+  const split = splitAt(r.project, 8, camId)!.project
+  assert.equal(split.clips.filter((c) => c.media === 'camera').length, 2)
+  assert.equal(split.clips.filter((c) => c.kind === 'recording').length, 1)
+  // speeding the camera up makes only the camera shorter
+  const fast = setClipSpeed(r.project, camId, 2)!
+  assert.ok(clipLength(fast.clips.find((c) => c.id === camId)!) < 10.1)
+  assert.equal(clipLength(fast.clips.find((c) => c.kind === 'recording')!), 20)
+  // deleting the camera leaves the screen
+  const gone = deleteClip(r.project, camId, false)!.project
+  assert.equal(gone.clips.some((c) => c.media === 'camera'), false)
+  // taking a stretch out of the whole timeline takes it out of both
+  const cut = removeSpan(r.project, 4, 8)
+  const lengths = cut.clips.map((c) => clipEnd(c))
+  assert.ok(Math.max(...lengths) < 16.1, JSON.stringify(lengths))
+  assert.equal(cut.clips.filter((c) => c.media === 'camera').length, 2)
 })
 
 test('overlays fade over 0.3 s at each end, and not at all when fading is off', () => {
@@ -361,15 +404,15 @@ test('splitting or trimming a sound keeps its level line lined up with the music
   assert.equal(envAt(fast.sounds[0].volEnv, 5), 0)
 })
 
-test('the camera\'s lines slide with the timeline when time is cut out or opened up, and a split-off sound keeps its line', () => {
-  const cam = newCamera({ media: 'cam', name: 'cam', duration: 20, width: 640, height: 480, hasAudio: true }, 0, 16 / 9)
-  const p: Project = { ...base(), camera: { ...cam, showEnv: [{ t: 0, v: 1 }, { t: 10, v: 1 }, { t: 12, v: 0 }, { t: 16, v: 0 }] } }
-  const cut = removeSpan(p, 2, 6)
-  assert.equal(envAt(cut.camera!.showEnv, 6), 1)
-  assert.equal(envAt(cut.camera!.showEnv, 8), 0, 'the fade-out that started at 10 s now starts at 6 s')
-  const opened = insertGapFor(p, 2, 3)
-  assert.equal(envAt(opened.camera!.showEnv, 13), 1)
-  assert.equal(envAt(opened.camera!.showEnv, 15), 0)
+test('a clip\'s show-over-time line splits and slides with it, and a split-off sound keeps its line', () => {
+  const r = addCameraClip(base(), CAM, 0, 16 / 9)!
+  const camId = r.id
+  const withLine = { ...r.project, clips: r.project.clips.map((c) => (c.id === camId ? { ...c, showEnv: [{ t: 0, v: 1 }, { t: 10, v: 1 }, { t: 12, v: 0 }, { t: 16, v: 0 }] } : c)) }
+  const split = splitAt(withLine, 11, camId)!.project
+  const pieces = split.clips.filter((c) => c.media === 'camera').sort((a, b) => a.start - b.start)
+  assert.equal(envAt(pieces[0].showEnv, 10.5), 1 - 0.25, 'before the split it is going down')
+  assert.equal(envAt(pieces[1].showEnv, 0), 0.5, 'the later piece starts half way down')
+  assert.equal(envAt(pieces[1].showEnv, 2), 0)
   const e = addClip(base(), { ...video(6, 'talk'), volEnv: [{ t: 0, v: 0.5 }] }, 20)
   assert.deepEqual(detachSound(e.project, e.select!)!.sound.volEnv, [{ t: 0, v: 0.5 }])
 })

@@ -1422,24 +1422,10 @@ kbd {
   display: none !important;
 }
 
-.facecam {
-  position: absolute;
-  object-fit: cover;
-  background: #000;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-}
-
 .tl-track.cam {
   height: 40px;
 }
 
-
-.blk.cam-blk {
-  background: #0f766e;
-  top: 5px;
-  bottom: 5px;
-}
 
 .sel-box.k-camera {
   border-radius: 6px;

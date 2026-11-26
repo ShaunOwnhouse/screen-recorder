@@ -1,5 +1,5 @@
 import {
-  activeClips, cameraBox, envAt, cameraPieces, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFullBox, layerOf, overlayAlpha, soundOn, usesCameraSound,
+  activeClips, envAt, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFloating, isFullBox, layerOf, overlayAlpha, soundOn,
   zoomState, trackById, type BlurOverlay, type Clip, type Sound
 } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
@@ -31,7 +31,6 @@ export class Player {
   private nodes = new Map<string, Node>()
   private blurNodes = new Map<string, HTMLElement>()
   private sounds = new Map<string, HTMLAudioElement>()
-  private cam: HTMLVideoElement | null = null
   private last = 0
   private dirty = true
   private tickCount = 0
@@ -128,7 +127,7 @@ export class Player {
     el.dataset.layer = c.id
     const tint = document.createElement('div')
     tint.className = 'layer-tint'
-    this.els.layers.append(el, tint)
+    ;(isFloating(c) ? this.els.pips : this.els.layers).append(el, tint)
     n = { clip: c.id, media: c.kind === 'recording' ? this.recordingUrl : c.media, el, tint, used: 0 }
     this.nodes.set(c.id, n)
     this.trimNodes()
@@ -200,12 +199,14 @@ export class Player {
       if (!n) continue
       n.used = seq
       const el = n.el
+      const home = isFloating(c) ? this.els.pips : this.els.layers
+      if (el.parentElement !== home) home.append(el, n.tint)
       const z = String(layerOf(p, c.track) * 2 + 1)
       el.style.display = live ? '' : 'none'
       el.style.zIndex = z
       const f = this.fadeAt(c, t)
       const dissolve = f.colour === DISSOLVE
-      el.style.opacity = live && dissolve ? String(f.amount) : '1'
+      el.style.opacity = String((live && dissolve ? f.amount : 1) * envAt(c.showEnv, t - c.start))
       this.placeNode(el, n.tint, c, crop)
       n.tint.style.zIndex = String(layerOf(p, c.track) * 2 + 2)
       n.tint.style.display = live && !dissolve && f.amount < 1 ? '' : 'none'
@@ -233,7 +234,6 @@ export class Player {
       }
     }
     this.syncSounds(t)
-    this.syncCamera(t)
   }
 
   private placeNode(el: Node['el'], tint: HTMLElement, c: Clip, crop: { x: number; y: number; width: number; height: number } | null): void {
@@ -248,15 +248,23 @@ export class Player {
       rect = { left: '0', top: '0', width: '100%', height: '100%' }
       st.objectFit = c.card ? 'fill' : 'contain'
     } else {
-      const aspect = (c.width || 16) / (c.height || 9)
+      // a small window: the picture's own shape, or (the face camera) a square showing its middle, round or rounded
+      const square = isFloating(c)
+      const aspect = square ? 1 : (c.width || 16) / (c.height || 9)
       rect = { left: `${c.box.x * 100}%`, top: `${c.box.y * 100}%`, width: `${c.box.w * 100}%`, height: 'auto' }
       st.aspectRatio = String(aspect)
       st.objectFit = 'cover'
     }
     Object.assign(st, rect)
     if (full) st.aspectRatio = ''
-    st.outline = !full && c.border ? '4px solid #fff' : ''
-    Object.assign(tint.style, { ...rect, aspectRatio: full ? '' : String((c.width || 16) / (c.height || 9)) })
+    const floating = !full && isFloating(c)
+    const radius = floating ? (c.shape === 'circle' ? '50%' : c.shape === 'rounded' ? '22%' : '0') : ''
+    st.borderRadius = radius
+    st.boxSizing = 'border-box'
+    // a frame round the window: a thin ring for the shaped ones, an outline for a plain rectangle
+    st.border = floating && c.border ? '3px solid #fff' : ''
+    st.outline = !full && !floating && c.border ? '4px solid #fff' : ''
+    Object.assign(tint.style, { ...rect, aspectRatio: full ? '' : String(floating ? 1 : (c.width || 16) / (c.height || 9)), borderRadius: radius })
   }
 
   private drawCardNode(cv: HTMLCanvasElement, c: Clip): void {
@@ -280,10 +288,9 @@ export class Player {
     const s = this.store
     const p = s.project
     const parts = clipVoiceParts(p)
-    const camVoice = usesCameraSound(p) && cameraPieces(p, true).some((pc) => t >= pc.start && t < pc.end)
     const trackVoice = parts.some((v) => t >= v.start && t < v.start + v.length)
     const ownVoice = activeClips(p, t).some((c) => clipPlaysOwnSound(p, c) && c.volume > 0)
-    const voice = camVoice || trackVoice || ownVoice
+    const voice = trackVoice || ownVoice
     // the computer sound / microphone of the recording, played from their own files like any other sound
     const virtual: Sound[] = parts.map((v, i) => ({
       id: `track:${i}:${v.media}`, track: '', origin: 'split', media: v.media, name: '', duration: 1e9, offset: v.from, start: v.start, length: v.length, speed: v.speed,
@@ -332,62 +339,6 @@ export class Player {
         if (a.paused) void a.play().catch(() => undefined)
       } else if (!a.paused) a.pause()
     }
-  }
-
-  // ---------- the face camera ----------
-
-  private syncCamera(t: number): void {
-    const s = this.store
-    const cam = s.project.camera
-    const info = cam ? s.media.get(cam.media) : null
-    if (!cam || !info) {
-      this.cam?.remove()
-      this.cam = null
-      return
-    }
-    if (!this.cam) {
-      const v = document.createElement('video')
-      v.className = 'facecam'
-      v.playsInline = true
-      v.muted = true
-      v.preload = 'auto'
-      this.els.pips.append(v)
-      this.cam = v
-    }
-    const v = this.cam
-    if (v.dataset.src !== info.url) {
-      v.dataset.src = info.url
-      v.src = info.url
-    }
-    const pieces = cameraPieces(s.project)
-    const voicePieces = cameraPieces(s.project, true)
-    const heard = usesCameraSound(s.project)
-    const piece = (heard ? voicePieces : pieces).find((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
-    const shown = pieces.some((p) => t >= p.start - 1e-6 && t < p.end - 1e-6)
-    v.muted = !heard
-    v.volume = clampNum(cam.volume * envAt(cam.volEnv, t), 0, 1)
-    const box = cameraBox(cam, s.aspect)
-    const first = pieces[0]
-    const last = pieces[pieces.length - 1]
-    let alpha = 1
-    if (cam.fade && piece && first && last) {
-      const d = 0.3
-      alpha = Math.max(0, Math.min(1, piece === first ? (t - first.start) / d : 1, piece === last ? (last.end - t) / d : 1))
-    }
-    alpha *= envAt(cam.showEnv, t)
-    Object.assign(v.style, {
-      display: shown ? '' : 'none', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, opacity: String(alpha),
-      borderRadius: cam.shape === 'circle' ? '50%' : cam.shape === 'rounded' ? '22%' : '0', border: cam.border ? '3px solid #fff' : '0'
-    })
-    if (!piece) {
-      if (!v.paused) v.pause()
-      return
-    }
-    const want = piece.from + (t - piece.start) * piece.speed
-    if (v.playbackRate !== clampNum(piece.speed, 0.25, 4)) v.playbackRate = clampNum(piece.speed, 0.25, 4)
-    if (Math.abs(v.currentTime - want) > (s.playing ? 0.35 * Math.max(1, piece.speed) : 0.04) && !v.seeking) v.currentTime = Math.max(0, want)
-    if (s.playing && v.paused) void v.play().catch(() => undefined)
-    if (!s.playing && !v.paused) v.pause()
   }
 
   // ---------- painting ----------

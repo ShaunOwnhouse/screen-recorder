@@ -1,8 +1,8 @@
-import { activeClips, tidy, totalDuration, type CameraTrack, type Clip, type Overlay, type Project, type Sound } from '../../shared/project.ts'
+import { activeClips, tidy, totalDuration, type Clip, type Overlay, type Project, type Sound } from '../../shared/project.ts'
 import type { Brand, MediaInfo, RecordingMeta } from '../../shared/types.ts'
 
 export type Tool = 'comments' | 'shapes' | 'media' | 'music' | 'titles' | 'cut' | 'crop'
-export type Selection = { kind: 'clip' | 'overlay' | 'sound' | 'camera'; id: string } | null
+export type Selection = { kind: 'clip' | 'overlay' | 'sound'; id: string } | null
 export type Change = 'project' | 'selection' | 'playhead' | 'tool' | 'brand' | 'media' | 'play'
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
@@ -17,6 +17,8 @@ export class Store {
   pxPerSec = 48
   tool: Tool = 'comments'
   cropMode = false
+  /** Camera time = screen recording time + this (the camera may have started a moment after or before the screen). */
+  cameraOffset = 0
   brand: Brand
   readonly media = new Map<string, MediaInfo>()
   private past: Project[] = []
@@ -79,10 +81,6 @@ export class Store {
   /** Changes some fields of one overlay as one undo step (merged with the changes just before it when `merge` matches). */
   patchOverlay(id: string, patch: Record<string, unknown>, merge?: string): void {
     this.edit((p) => ({ ...p, overlays: p.overlays.map((o) => (o.id === id ? ({ ...o, ...patch } as Overlay) : o)) }), { merge })
-  }
-
-  patchCamera(patch: Partial<CameraTrack>, merge?: string): void {
-    this.edit((p) => (p.camera ? { ...p, camera: { ...p.camera, ...patch } } : null), { merge })
   }
 
   patchSound(id: string, patch: Partial<Sound>, merge?: string): void {
@@ -192,9 +190,7 @@ export class Store {
         ? this.project.clips.some((c) => c.id === s.id)
         : s.kind === 'overlay'
           ? this.project.overlays.some((o) => o.id === s.id)
-          : s.kind === 'camera'
-            ? !!this.project.camera?.visible
-            : this.project.sounds.some((x) => x.id === s.id)
+          : this.project.sounds.some((x) => x.id === s.id)
     if (!exists) {
       this.selection = null
       this.emit('selection')

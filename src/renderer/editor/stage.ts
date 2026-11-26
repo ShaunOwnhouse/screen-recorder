@@ -1,4 +1,4 @@
-import { activeClips, cameraBox, cameraPieces, isFullBox, trackById, type Clip, type Overlay, type TextOverlay } from '../../shared/project.ts'
+import { activeClips, clipBoxHeight, isFloating, isFullBox, trackById, type Clip, type Overlay, type TextOverlay } from '../../shared/project.ts'
 import type { Rect } from '../../shared/types.ts'
 import { boundsOf, frameFor } from './draw.ts'
 import type { Player } from './player.ts'
@@ -71,11 +71,13 @@ export class Stage {
   }
 
   /** Pieces shown as small windows over the picture at the playhead, front first (the others fill the whole picture, so a click on them just plays). */
-  private hitClip(fx: number, fy: number): Clip | null {
+  private hitClip(fx: number, fy: number, floating: boolean): Clip | null {
     const s = this.store
-    const list = activeClips(s.project, s.playhead).filter((c) => !isFullBox(c.box) && !c.card && !trackById(s.project, c.track)?.hidden && !trackById(s.project, c.track)?.locked)
+    const list = activeClips(s.project, s.playhead).filter(
+      (c) => !isFullBox(c.box) && !c.card && isFloating(c) === floating && !trackById(s.project, c.track)?.hidden && !trackById(s.project, c.track)?.locked
+    )
     for (const c of list.reverse()) {
-      const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+      const h = clipBoxHeight(c, s.aspect)
       if (fx >= c.box.x && fx <= c.box.x + c.box.w && fy >= c.box.y && fy <= c.box.y + h) return c
     }
     return null
@@ -86,7 +88,7 @@ export class Stage {
     const r = this.rect()
     const x0 = e.clientX
     const y0 = e.clientY
-    const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+    const h = clipBoxHeight(c, s.aspect)
     this.drag = (ev) => {
       s.patchClip(
         c.id,
@@ -103,9 +105,11 @@ export class Stage {
     const r = this.rect()
     const fx = (e.clientX - r.left) / r.width
     const fy = (e.clientY - r.top) / r.height
-    if (this.hitCamera(fx, fy)) {
-      this.store.select({ kind: 'camera', id: 'camera' })
-      this.startMoveCamera(e)
+    // round / rounded / square windows (the face camera) sit on top of everything, so they are picked first
+    const top = this.hitClip(fx, fy, true)
+    if (top) {
+      this.store.select({ kind: 'clip', id: top.id })
+      this.startMoveClip(top, e)
       e.preventDefault()
       return
     }
@@ -116,7 +120,7 @@ export class Stage {
       e.preventDefault()
       return
     }
-    const win = this.hitClip(fx, fy)
+    const win = this.hitClip(fx, fy, false)
     if (win) {
       this.store.select({ kind: 'clip', id: win.id })
       this.startMoveClip(win, e)
@@ -133,32 +137,6 @@ export class Stage {
       if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) this.player.toggle()
     }
     window.addEventListener('pointerup', up)
-  }
-
-  /** Is the point over the face camera (which sits on top of everything)? */
-  private hitCamera(fx: number, fy: number): boolean {
-    const s = this.store
-    const cam = s.project.camera
-    if (!cam || !cam.visible) return false
-    const t = s.playhead
-    if (!cameraPieces(s.project).some((p) => t >= p.start && t < p.end)) return false
-    const b = cameraBox(cam, s.aspect)
-    return fx >= b.x && fx <= b.x + b.w && fy >= b.y && fy <= b.y + b.h
-  }
-
-  private startMoveCamera(e: PointerEvent): void {
-    const s = this.store
-    const cam = s.project.camera!
-    const r = this.rect()
-    const x0 = e.clientX
-    const y0 = e.clientY
-    const h = cam.w * s.aspect
-    this.drag = (ev) => {
-      s.patchCamera(
-        { x: clampNum(cam.x + (ev.clientX - x0) / r.width, 0, 1 - cam.w), y: clampNum(cam.y + (ev.clientY - y0) / r.height, 0, 1 - h) },
-        'camera-move'
-      )
-    }
   }
 
   private startMove(o: Overlay, e: PointerEvent): void {
@@ -192,35 +170,6 @@ export class Stage {
 
   // ---------- selection box ----------
 
-  /** The selection box for the face camera: drag the box to move it, the corner to resize it. */
-  private renderCameraSelection(): boolean {
-    const s = this.store
-    const cam = s.project.camera
-    const host = this.els.sel
-    if (s.selection?.kind !== 'camera' || !cam || !cam.visible || s.cropMode) return false
-    const t = s.playhead
-    if (!cameraPieces(s.project).some((p) => t >= p.start && t < p.end)) return false
-    const b = cameraBox(cam, s.aspect)
-    host.hidden = false
-    host.replaceChildren()
-    host.className = 'sel-box k-camera'
-    Object.assign(host.style, { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` })
-    const g = document.createElement('i')
-    g.className = 'h h-se'
-    g.dataset.grab = '1'
-    g.style.cursor = 'nwse-resize'
-    g.addEventListener('pointerdown', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      const r = this.rect()
-      const x0 = e.clientX
-      const w0 = cam.w
-      this.drag = (ev) => s.patchCamera({ w: clampNum(w0 + (ev.clientX - x0) / r.width, 0.08, Math.min(0.6, 1 - cam.x)) }, 'camera-size')
-    })
-    host.append(g)
-    return true
-  }
-
   /** The selection box for a piece shown as a small window: drag it to move it, the corner to resize it. */
   private renderClipSelection(): boolean {
     const s = this.store
@@ -229,7 +178,7 @@ export class Stage {
     if (!c || isFullBox(c.box) || c.card || s.cropMode) return false
     const t = s.playhead
     if (!activeClips(s.project, t).some((x) => x.id === c.id)) return false
-    const h = c.box.w * s.aspect * ((c.height || 9) / (c.width || 16))
+    const h = clipBoxHeight(c, s.aspect)
     host.hidden = false
     host.replaceChildren()
     host.className = 'sel-box k-camera'
@@ -255,7 +204,6 @@ export class Stage {
     const o = s.selectedOverlay
     const host = this.els.sel
     this.renderCrop()
-    if (this.renderCameraSelection()) return
     if (!o && this.renderClipSelection()) return
     if (!o || s.cropMode || s.playhead < o.start - 1e-6 || s.playhead >= o.end + 1e-6) {
       host.hidden = true

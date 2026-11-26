@@ -150,6 +150,8 @@ export function envSplit(env: EnvPoint[] | undefined, t: number): [EnvPoint[] | 
   return [left, right]
 }
 
+export type ClipShape = 'rect' | 'square' | 'rounded' | 'circle'
+
 /** A piece on a video track: the recording, a video or picture the person added, or a title card. */
 export interface Clip {
   id: string
@@ -177,12 +179,20 @@ export interface Clip {
    * For the recording: which of its sounds to use. The recording holds the computer's sound and the microphone as tracks
    * of their own (as well as a mix of both); 'mix' (the default) plays everything as recorded.
    */
-  audioSource?: 'mix' | 'pc' | 'mic'
+  audioSource?: 'mix' | 'pc' | 'mic' | 'none'
   fadeIn: Fade
   fadeOut: Fade
   /** The piece's own sound over time (see EnvPoint). */
   volEnv?: EnvPoint[]
+  /** How visible the piece is over time (see EnvPoint): fade it out for a while and bring it back. */
+  showEnv?: EnvPoint[]
   box: Box
+  /**
+   * The shape of a piece shown as a small window: 'rect' (the default) keeps the picture's own shape; the others are a square
+   * window showing the middle of the picture (the face camera is a circle). Windows that are not 'rect' sit on top of the
+   * edits (zoom, blur) and the comments, so the person never zooms with the screen.
+   */
+  shape?: ClipShape
   /** A white frame round a piece that is smaller than the picture. */
   border: boolean
 }
@@ -337,51 +347,12 @@ export interface Sound {
 export const MIN_SOUND = 0.1
 export const soundEnd = (s: Sound): number => s.start + s.length
 
-/**
- * The person's own face on camera, recorded together with the screen. It is tied to the recording itself, not to the
- * timeline: wherever a piece of the recording is shown, the camera from the same moment is shown with it, so cutting
- * the recording cuts the camera too.
- */
-export interface CameraTrack {
-  /** The camera file's id (registered with the editor like any other added file). */
-  media: string
-  name: string
-  /** How long the camera file is, seconds. */
-  duration: number
-  width: number
-  height: number
-  /** Camera time = recording time + offset (the camera may have started a moment after, or before, the screen). */
-  offset: number
-  /** The person's own fix for a camera that runs late (voice ahead of the lips), seconds: the camera is shown that much earlier. */
-  nudge: number
-  /** Top-left corner, as fractions of the frame. */
-  x: number
-  y: number
-  /** Width as a fraction of the frame width; the window is square. */
-  w: number
-  shape: 'circle' | 'rounded' | 'square'
-  border: boolean
-  fade: boolean
-  visible: boolean
-  /** Does the camera file have the person's voice recorded with it? */
-  hasAudio: boolean
-  /** Use the camera's own sound (instead of the screen recording's), so voice and lips are one recording. */
-  audio: boolean
-  /** 0–2: how loud the camera's sound is. */
-  volume: number
-  /** How visible the camera is over the timeline (see EnvPoint): fade it out for a while and back. */
-  showEnv?: EnvPoint[]
-  /** The camera's sound over the timeline. */
-  volEnv?: EnvPoint[]
-}
-
 export interface Project {
   /** The rows of the timeline, top to bottom: video tracks (the top one is in front), then audio tracks. */
   tracks: Track[]
   clips: Clip[]
   overlays: Overlay[]
   sounds: Sound[]
-  camera: CameraTrack | null
   /** What the recording holds (not something the person edits). */
   recTracks: RecordingTracks
   /** Speed of the finished video: 1 = as recorded, 2 = twice as fast, 0.5 = half speed. */
@@ -572,14 +543,14 @@ export function trimClip(p: Project, id: string, edge: 'start' | 'end', to: numb
   if (edge === 'start') {
     let start = clamp(to, prevEnd, end - MIN_CLIP)
     if (c.kind === 'image') {
-      next = { ...c, start, in: 0, out: (end - start) * c.speed, volEnv: envShift(c.volEnv, c.start - start) }
+      next = { ...c, start, in: 0, out: (end - start) * c.speed, volEnv: envShift(c.volEnv, c.start - start), showEnv: envShift(c.showEnv, c.start - start) }
     } else {
       let nin = c.in + (start - c.start) * c.speed
       if (nin < 0) {
         start = c.start - c.in / c.speed
         nin = 0
       }
-      next = { ...c, start, in: nin, volEnv: envShift(c.volEnv, c.start - start) }
+      next = { ...c, start, in: nin, volEnv: envShift(c.volEnv, c.start - start), showEnv: envShift(c.showEnv, c.start - start) }
     }
   } else {
     const e = clamp(to, c.start + MIN_CLIP, nextStart)
@@ -596,7 +567,7 @@ export function setClipSpeed(p: Project, id: string, speed: number): Project | n
   const c = p.clips.find((x) => x.id === id)
   if (!c) return null
   const sp = clamp(speed, MIN_SPEED, MAX_SPEED)
-  const next = { ...c, speed: sp, volEnv: envScale(c.volEnv, c.speed / sp) }
+  const next = { ...c, speed: sp, volEnv: envScale(c.volEnv, c.speed / sp), showEnv: envScale(c.showEnv, c.speed / sp) }
   const grow = clipEnd(next) - clipEnd(c)
   let clips = p.clips.map((x) => (x.id === id ? next : x))
   let sounds = p.sounds
@@ -643,9 +614,10 @@ export function duplicateClip(p: Project, id: string): Edit | null {
 export function splitClipAt(c: Clip, t: number): [Clip, Clip] {
   const off = (t - c.start) * c.speed
   const [envA, envB] = envSplit(c.volEnv, t - c.start)
-  const first: Clip = { ...c, out: c.in + off, fadeOut: NO_FADE, volEnv: envA }
+  const [showA, showB] = envSplit(c.showEnv, t - c.start)
+  const first: Clip = { ...c, out: c.in + off, fadeOut: NO_FADE, volEnv: envA, showEnv: showA }
   const second: Clip = {
-    ...c, id: newId('c'), start: t, in: c.kind === 'image' ? 0 : c.in + off, out: c.kind === 'image' ? c.out - c.in - off : c.out, fadeIn: NO_FADE, volEnv: envB
+    ...c, id: newId('c'), start: t, in: c.kind === 'image' ? 0 : c.in + off, out: c.kind === 'image' ? c.out - c.in - off : c.out, fadeIn: NO_FADE, volEnv: envB, showEnv: showB
   }
   return [first, second]
 }
@@ -701,8 +673,7 @@ export function removeSpan(p: Project, a: number, b: number): Project {
     if (s.start >= a - EPS && e <= b + EPS) continue
     sounds.push(s.start >= b - EPS ? { ...s, start: s.start - cut } : s)
   }
-  const camera = split.camera ? { ...split.camera, showEnv: envCut(split.camera.showEnv, a, b), volEnv: envCut(split.camera.volEnv, a, b) } : split.camera
-  return { ...split, clips, sounds, camera, overlays: cutOverlays(p.overlays, a, b) }
+  return { ...split, clips, sounds, overlays: cutOverlays(p.overlays, a, b) }
 }
 
 /** Opens a gap of `len` seconds at `at` on every track: whatever is playing there is split and the later part slides later. */
@@ -712,7 +683,6 @@ export function insertGap(p: Project, at: number, len: number): Project {
     ...split,
     clips: split.clips.map((c) => (c.start >= at - EPS ? { ...c, start: c.start + len } : c)),
     sounds: split.sounds.map((s) => (s.start >= at - EPS ? { ...s, start: s.start + len } : s)),
-    camera: split.camera ? { ...split.camera, showEnv: envOpen(split.camera.showEnv, at, len), volEnv: envOpen(split.camera.volEnv, at, len) } : split.camera,
     overlays: openGap(p.overlays, at, len)
   }
 }
@@ -862,12 +832,13 @@ export const RECORDING_MIC = 'recording-mic'
 
 /**
  * Where a piece's sound comes from. 'own' = from the piece's own file; 'media' = from a track of its own taken out of the
- * recording; 'none' = silent. When the camera's voice is used, a recording keeps only its computer sound.
+ * recording; 'none' = silent.
  */
 export function clipTrack(p: Project, c: Clip): { mode: 'own' | 'media' | 'none'; media?: string } {
   if (c.kind !== 'recording') return { mode: 'own' }
-  const want = usesCameraSound(p) ? 'pc' : (c.audioSource ?? 'mix')
+  const want = c.audioSource ?? 'mix'
   if (want === 'mix') return { mode: 'own' }
+  if (want === 'none') return { mode: 'none' }
   const t = p.recTracks
   if (t.pc && t.mic) return { mode: 'media', media: want === 'pc' ? RECORDING_PC : RECORDING_MIC }
   // only one kind of sound was recorded: the recording's own sound is that one
@@ -939,7 +910,7 @@ export function tidy(p: Project): Project {
 
 /** Is there anything beyond the untouched recording? Decides between moving the file as-is and re-encoding. */
 export function isPlain(p: Project, recordingDuration: number): boolean {
-  if (p.overlays.length || p.sounds.length || p.crop || p.speed !== 1 || (p.camera && (p.camera.visible || (p.camera.audio && p.camera.hasAudio)))) return false
+  if (p.overlays.length || p.sounds.length || p.crop || p.speed !== 1) return false
   if (p.clips.length !== 1) return false
   const c = p.clips[0]
   const t = trackById(p, c.track)
@@ -966,48 +937,11 @@ export function newProject(recording: { duration: number; width: number; height:
     ],
     overlays: [],
     sounds: [],
-    camera: null,
     recTracks: recording.tracks ?? { pc: false, mic: false },
     speed: 1,
     crop: null
   }
 }
-
-export interface CameraPiece {
-  /** Where on the timeline this piece of camera shows. */
-  start: number
-  end: number
-  /** Where in the camera file it starts playing. */
-  from: number
-  /** How fast the camera file plays here (the same as the recording piece it goes with). */
-  speed: number
-}
-
-/**
- * Every stretch of the timeline that has the camera with it: one per piece of the recording that is showing, trimmed to
- * what the camera file really covers. The camera is hidden over added videos, pictures and title cards.
- */
-export function cameraPieces(p: Project, forSound = false): CameraPiece[] {
-  const cam = p.camera
-  if (!cam || (!cam.visible && !forSound)) return []
-  const out: CameraPiece[] = []
-  for (const c of [...p.clips].sort((a, b) => a.start - b.start)) {
-    if (c.kind !== 'recording') continue
-    const tr = trackById(p, c.track)
-    if (!tr || tr.hidden) continue
-    // the camera's own clock for the first moment of this piece
-    let from = c.in + cam.offset + cam.nudge
-    let start = c.start
-    if (from < 0) {
-      start += -from / c.speed // the camera had not started yet: it joins a moment later
-      from = 0
-    }
-    const end = Math.min(clipEnd(c), start + Math.max(0, (cam.duration - from) / c.speed))
-    if (end - start >= 0.05) out.push({ start, end, from, speed: c.speed })
-  }
-  return out
-}
-
 
 /** Takes the span [a, b) out of the timeline: later overlays slide left, ones inside it vanish, ones crossing it shrink. */
 export function cutOverlays(overlays: Overlay[], a: number, b: number): Overlay[] {
@@ -1030,32 +964,68 @@ export function openGap(overlays: Overlay[], at: number, len: number): Overlay[]
 }
 
 
-/** Does the project take its voice from the camera's own recording rather than from the screen recording? */
-export const usesCameraSound = (p: Project): boolean => !!p.camera && p.camera.hasAudio && p.camera.audio
-
-/** The face camera's window as fractions of the frame (it is square in pixels, so its height depends on the frame's shape). */
-export function cameraBox(cam: CameraTrack, aspect: number): { x: number; y: number; w: number; h: number } {
-  return { x: cam.x, y: cam.y, w: cam.w, h: cam.w * aspect }
-}
-
 export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
-/** Where the camera goes to sit in a corner of the frame, a small margin in. */
-export function cameraCorner(cam: CameraTrack, aspect: number, corner: Corner): { x: number; y: number } {
+/** A small window that is not a plain rectangle (the face camera): it is drawn on top of the edits and comments. */
+export const isFloating = (c: Clip): boolean => !!c.shape && c.shape !== 'rect' && !isFullBox(c.box) && !c.card
+
+/** The height of a small window as a fraction of the frame (shaped windows are square in pixels, the others keep the picture's shape). */
+export function clipBoxHeight(c: Clip, aspect: number): number {
+  return c.shape && c.shape !== 'rect' ? c.box.w * aspect : c.box.w * aspect * ((c.height || 9) / (c.width || 16))
+}
+
+/** Where a small window goes to sit in a corner of the frame, a small margin in. */
+export function windowCorner(c: Clip, aspect: number, corner: Corner): { x: number; y: number } {
   const m = 0.025
-  const h = cam.w * aspect
+  const h = clipBoxHeight(c, aspect)
   return {
-    x: corner.endsWith('left') ? m : 1 - cam.w - m,
+    x: corner.endsWith('left') ? m : 1 - c.box.w - m,
     y: corner.startsWith('top') ? m * aspect : 1 - h - m * aspect
   }
 }
 
-/** The camera as it first appears: round, in the bottom right corner. */
-export function newCamera(file: { media: string; name: string; duration: number; width: number; height: number; hasAudio?: boolean }, offset: number, aspect: number): CameraTrack {
-  const hasAudio = !!file.hasAudio
-  const cam: CameraTrack = {
-    media: file.media, name: file.name, duration: file.duration, width: file.width, height: file.height,
-    offset, nudge: 0, x: 0, y: 0, w: 0.22, shape: 'circle', border: true, fade: true, visible: true, hasAudio, audio: hasAudio, volume: 1
+/** What the editor knows about the camera recording that was made together with the screen. */
+export interface CameraSource {
+  media: string
+  name: string
+  duration: number
+  width: number
+  height: number
+  hasAudio: boolean
+}
+
+/** The track the face camera sits on. */
+export const CAMERA_TRACK_NAME = 'Face cam'
+
+/**
+ * Puts the camera recording on a video track of its own, in front of the screen, as a round window in the bottom right corner.
+ * It starts and ends where the screen recording and the camera file both have picture. From then on it is a piece like any other:
+ * it can be moved, trimmed, split, copied, sped up, faded, turned down or deleted on its own. `offset`: camera time = recording time + offset.
+ * The camera's voice is used instead of the recording's microphone (the recording keeps its computer sound).
+ */
+export function addCameraClip(p: Project, cam: CameraSource, offset: number, aspect: number): { project: Project; id: string } | null {
+  const rec = p.clips.filter((c) => c.kind === 'recording').sort((a, b) => a.start - b.start)[0]
+  if (!rec) return null
+  let from = rec.in + offset
+  let start = rec.start
+  if (from < 0) {
+    start += -from / rec.speed
+    from = 0
   }
-  return { ...cam, ...cameraCorner(cam, aspect, 'bottom-right') }
+  const end = Math.min(clipEnd(rec), start + Math.max(0, (cam.duration - from) / rec.speed))
+  if (end - start < 0.05) return null
+  const added = addVideoTrack(p)
+  const track = { ...added.track, name: CAMERA_TRACK_NAME }
+  const fade: Fade = { dur: FADE_SECONDS, color: DISSOLVE }
+  const clip: Clip = {
+    ...newClipBase(), id: newId('c'), track: track.id, start, kind: 'video', media: cam.media, name: cam.name, in: from, out: from + (end - start) * rec.speed,
+    speed: rec.speed, hasAudio: cam.hasAudio, volume: 1, width: cam.width, height: cam.height, fadeIn: fade, fadeOut: fade, border: true, shape: 'circle',
+    box: { x: 0, y: 0, w: 0.22 }
+  }
+  clip.box = { ...clip.box, ...windowCorner(clip, aspect, 'bottom-right') }
+  // the camera brings the voice; the screen recording keeps its computer sound (or none, when that was all it held)
+  const hasPc = p.recTracks.pc
+  const clips = p.clips.map((c) => (c.kind === 'recording' && cam.hasAudio ? { ...c, audioSource: hasPc ? ('pc' as const) : ('none' as const) } : c))
+  const tracks = added.project.tracks.map((t) => (t.id === track.id ? track : t))
+  return { project: { ...added.project, tracks, clips: [...clips, clip] }, id: clip.id }
 }

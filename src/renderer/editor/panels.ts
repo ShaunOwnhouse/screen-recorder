@@ -1,4 +1,4 @@
-import { cameraCorner, clipLength, DISSOLVE, isFullBox, MAX_SPEED, MIN_SPEED, usesCameraSound, type CameraTrack, type Fade, type Clip, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { clipLength, DISSOLVE, isFloating, isFullBox, MAX_SPEED, MIN_SPEED, moveClip, windowCorner, type Fade, type Clip, type ClipShape, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -115,13 +115,13 @@ export class Panels {
           button('▣  Add as picture-in-picture', () => void a.addPip(), 'ghost wide', { id: 'add-pip' }),
           tip('Shows it in a small window over the video instead — handy for a logo or a second view.')
         )
-        if (s.project.camera) {
-          const cam = s.project.camera
+        if (s.media.has('camera')) {
+          const onTimeline = s.project.clips.some((c) => c.media === 'camera')
           kids.push(
             h('h2', { class: 'drawer-sub', text: 'Your face camera' }),
-            cam.visible
-              ? tip('It was recorded with the screen and is on the video. Click it on the video (or its bar in the timeline) to change it.')
-              : button('Show my face camera again', () => s.patchCamera({ visible: true }), 'ghost wide', { id: 'show-camera' })
+            onTimeline
+              ? tip('It was recorded with the screen and has a row of its own in the timeline (Face cam). Click it on the video or in the timeline to move, trim, split, speed up, fade or delete it on its own.')
+              : button('Put my face camera back', () => a.addCamera(), 'ghost wide', { id: 'show-camera' })
           )
         }
         if (added.length) {
@@ -229,7 +229,6 @@ export class Panels {
     if (o) kids.push(...this.overlayProps(o))
     else if (c) kids.push(...this.clipProps(c))
     else if (s.selectedSound) kids.push(...this.soundProps(s.selectedSound))
-    else if (sel?.kind === 'camera' && s.project.camera) kids.push(...this.cameraProps(s.project.camera))
     else {
       kids.push(
         h('div', { class: 'psec empty' },
@@ -354,8 +353,10 @@ export class Panels {
     const s = this.store
     const patch = (p: Partial<Clip>, merge?: string): void => s.patchClip(c.id, p, merge ?? `c:${c.id}:${Object.keys(p)[0]}`)
     const track = s.project.tracks.find((t) => t.id === c.track)
+    /** The piece as it is now (the panel is not rebuilt while a control in it is being used, so `c` can be a step behind). */
+    const live = (): Clip => s.project.clips.find((x) => x.id === c.id) ?? c
     const out: HTMLElement[] = [
-      h('h2', { class: 'props-title', text: c.card ? 'Title card' : c.kind === 'image' ? 'Picture' : c.kind === 'recording' ? 'Recording' : 'Video' }),
+      h('h2', { class: 'props-title', text: c.card ? 'Title card' : c.kind === 'image' ? 'Picture' : c.kind === 'recording' ? 'Screen recording' : c.media === 'camera' ? 'Face camera' : 'Video' }),
       h('p', { class: 'muted file-name', text: `${c.name}${track ? ` · ${track.name}` : ''}` })
     ]
     if (c.card) out.push(...this.cardProps(c, c.card))
@@ -378,11 +379,17 @@ export class Panels {
     }
     if (c.kind === 'recording' && c.hasAudio) {
       const t = s.project.recTracks
-      if (usesCameraSound(s.project)) {
-        out.push(h('p', { class: 'tip good', text: t.pc ? 'Your voice comes from the webcam’s microphone, so the microphone recorded with the screen is off. The computer’s sound is kept.' : 'Your voice comes from the webcam’s microphone, so the sound recorded with the screen is off.' }))
-      } else if (t.pc && t.mic) {
-        out.push(section('Sound from the recording', select([['mix', 'Everything, as recorded'], ['pc', 'Computer sound only'], ['mic', 'My microphone only']], c.audioSource ?? 'mix', (v) => patch({ audioSource: v as Clip['audioSource'] }), 'prop-audio-source')))
-        out.push(h('p', { class: 'tip', text: 'The computer’s sound (a video you played) and your microphone were recorded as two tracks, so you can keep just one — or use “Separate the sound” to work with it on its own.' }))
+      const camVoice = s.project.clips.some((x) => x.media === 'camera' && x.hasAudio)
+      if (t.pc || t.mic) {
+        const options: Array<[string, string]> = [['mix', 'Everything, as recorded']]
+        if (t.pc && t.mic) options.push(['pc', 'Computer sound only'], ['mic', 'My microphone only'])
+        else if (t.pc) options.push(['pc', 'Computer sound only'])
+        else options.push(['mic', 'My microphone only'])
+        options.push(['none', 'No sound from the recording'])
+        out.push(section('Sound from the recording', select(options, c.audioSource ?? 'mix', (v) => patch({ audioSource: v as Clip['audioSource'] }), 'prop-audio-source')))
+        out.push(h('p', { class: 'tip', text: camVoice && (c.audioSource ?? 'mix') !== 'mix'
+          ? 'Your voice comes from the webcam’s microphone, so the microphone recorded with the screen is off. Pick “Everything” to use it again.'
+          : 'The computer’s sound (a video you played) and your microphone were recorded as separate tracks, so you can keep just one — or use “Separate the sound” to work with it on its own.' }))
       }
     }
     // fade from / to a colour at the start and end of the piece
@@ -393,10 +400,57 @@ export class Panels {
     // where it sits in the picture
     if (!c.card) {
       const full = isFullBox(c.box)
+      const shapes: Array<[ClipShape, string, string]> = [['rect', 'Rectangle', '3px'], ['circle', 'Circle', '50%'], ['rounded', 'Rounded', '22%'], ['square', 'Square', '0']]
+      const shapeRow = h('div', { class: 'shapes', id: 'prop-shape' })
+      for (const [id, label, radius] of shapes) {
+        shapeRow.append(h('button', { type: 'button', class: `shape${(c.shape ?? 'rect') === id ? ' on' : ''}`, 'data-shape': id, onClick: () => patchShape(id) }, h('i', { style: `border-radius:${radius}` }), label))
+      }
+      const patchShape = (id: ClipShape): void => {
+        s.edit((p) => {
+          const k = p.clips.find((x) => x.id === c.id)
+          if (!k) return null
+          const next = { ...k, shape: id }
+          // a square window is as wide as the old one and keeps clear of the edges
+          const w = Math.min(k.box.w, 0.6)
+          const at = { ...next, box: { ...next.box, w } }
+          const h = id === 'rect' ? 0 : w * s.aspect
+          return { ...p, clips: p.clips.map((x) => (x.id === c.id ? { ...at, box: { ...at.box, x: Math.min(at.box.x, 1 - w), y: Math.min(at.box.y, Math.max(0, 1 - (id === 'rect' ? at.box.w * s.aspect * ((k.height || 9) / (k.width || 16)) : h))) } } : x)) }
+        })
+      }
+      const corners: Array<[Corner, string]> = [['top-left', 'Top left'], ['top-right', 'Top right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']]
       out.push(
         section('Size in the picture', select([['full', 'Whole picture'], ['small', 'Small window']], full ? 'full' : 'small', (v) => patch(v === 'full' ? { box: { x: 0, y: 0, w: 1 }, border: false } : { box: { x: 0.66, y: 0.06, w: 0.28 }, border: true }), 'prop-box-mode')),
-        ...(full ? [] : [section('Window width', range(c.box.w, 0.08, 0.95, 0.01, (v) => patch({ box: { ...c.box, w: v, x: Math.min(c.box.x, 1 - v) } }, `bw:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-box-w')), toggleSection(toggle('White frame', c.border, (on) => patch({ border: on }), 'prop-box-border')), h('p', { class: 'tip', text: 'Drag the window on the video to move it, and its corner to resize it.' })])
+        ...(full
+          ? []
+          : [
+              section('Window shape', shapeRow),
+              section('Window width', range(c.box.w, 0.08, 0.95, 0.01, (v) => patch({ box: { ...live().box, w: v, x: Math.min(live().box.x, 1 - v) } }, `bw:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-box-w')),
+              section('Where', select([['', 'Move to a corner…'], ...corners], '', (v) => {
+                if (v) patch({ box: { ...live().box, ...windowCorner(live(), s.aspect, v as Corner) } })
+              }, 'prop-box-corner')),
+              toggleSection(toggle('White frame', c.border, (on) => patch({ border: on }), 'prop-box-border')),
+              h('p', { class: 'tip', text: isFloating(c) ? 'Drag the window on the video to move it, and its corner to resize it. It stays on top of the video, comments and zooms.' : 'Drag the window on the video to move it, and its corner to resize it.' })
+            ])
       )
+    }
+    // when it starts: type it exactly, or drag the bar (a camera that runs a little late can be moved a hair earlier)
+    out.push(
+      section('Starts at', number(c.start, 0, 36000, 0.05, (v) => s.edit((p) => moveClip(p, c.id, c.track, Math.max(0, v))), 'prop-start')),
+      levelEditor(s, {
+        title: 'Show over time', low: 'hidden', id: 'lvl-clip-show', line: () => s.project.clips.find((x) => x.id === c.id)?.showEnv,
+        span: () => { const k = s.project.clips.find((x) => x.id === c.id); return { origin: k?.start ?? 0, length: k ? clipLength(k) : 1 } },
+        set: (env, merge) => s.patchClip(c.id, { showEnv: env }, merge),
+        tip: 'Make this piece disappear for a while and come back — the camera, a small window or a whole video. Put the playhead where it should go, then click “＋ Dip here” or “Fade out from here”.'
+      })
+    )
+    if (c.media === 'camera') {
+      const camHasAudio = !!s.media.get('camera')?.hasAudio
+      if (camHasAudio) {
+        out.push(
+          toggleSection(toggle('Use this camera’s microphone for my voice', c.hasAudio, (on) => this.actions.setCameraVoice(c.id, on), 'prop-cam-voice')),
+          h('p', { class: 'tip good', text: c.hasAudio ? 'Your voice is taken from the webcam’s own recording, so it always matches your lips. The computer’s sound is kept.' : 'The camera is silent; your voice is the microphone recorded with the screen.' })
+        )
+      } else out.push(h('p', { class: 'tip', text: 'This camera recording has no sound of its own.' }))
     }
     if (c.kind !== 'image' && c.hasAudio) {
       out.push(
@@ -436,56 +490,6 @@ export class Panels {
       section('Words', this.swatches(card.color, (col) => patch({ color: col }), { id: 'prop-card-color' })),
       section('Font', this.fontSelect(card.font, (f) => patch({ font: f }), 'prop-card-font')),
       section('Align', select([['center', 'Centre'], ['left', 'Left']], card.align, (v) => patch({ align: v as TitleCard['align'] }))),
-    ]
-  }
-
-  private cameraProps(cam: CameraTrack): HTMLElement[] {
-    const s = this.store
-    const patch = (p: Partial<CameraTrack>, merge?: string): void => s.patchCamera(p, merge ?? `cam:${Object.keys(p)[0]}`)
-    const shapes: Array<[CameraTrack['shape'], string, string]> = [['circle', 'Circle', '50%'], ['rounded', 'Rounded', '22%'], ['square', 'Square', '0']]
-    const row = h('div', { class: 'shapes', id: 'prop-cam-shape' })
-    for (const [id, label, radius] of shapes) {
-      row.append(h('button', { type: 'button', class: `shape${cam.shape === id ? ' on' : ''}`, 'data-shape': id, onClick: () => patch({ shape: id }) }, h('i', { style: `border-radius:${radius}` }), label))
-    }
-    const corners: Array<[Corner, string]> = [['top-left', 'Top left'], ['top-right', 'Top right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']]
-    const sec = (v: number): string => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)} s`
-    return [
-      h('h2', { class: 'props-title', text: 'Face camera' }),
-      section('Shape', row),
-      section('Size', range(cam.w, 0.08, 0.6, 0.01, (v) => patch({ w: v, x: Math.min(cam.x, 1 - v), y: Math.min(cam.y, 1 - v * s.aspect) }, 'cam:size'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-size')),
-      section('Where', select([['', 'Move to a corner…'], ...corners], '', (v) => {
-        if (v) patch(cameraCorner(cam, s.aspect, v as Corner))
-      }, 'prop-cam-corner')),
-      toggleSection(toggle('White border', cam.border, (on) => patch({ border: on }), 'prop-cam-border')),
-      section('Fix lip-sync', range(cam.nudge, -1, 1, 0.01, (v) => patch({ nudge: v }, 'cam:nudge'), sec, 'prop-cam-nudge')),
-      h('p', { class: 'tip good', text: 'Webcams are often a little late. If your voice is slightly ahead of your lips, move this up; if behind, down.' }),
-      toggleSection(toggle('Fade in and out', cam.fade, (on) => patch({ fade: on }), 'prop-cam-fade')),
-      levelEditor(s, {
-        title: 'Show the camera over time', low: 'hidden', id: 'lvl-cam-show', line: () => s.project.camera?.showEnv,
-        span: () => ({ origin: 0, length: s.duration }),
-        set: (env, merge) => s.patchCamera({ showEnv: env }, merge),
-        tip: 'Make the camera disappear for a while and come back: move the playhead to where it should go, then click “＋ Dip here” or “Fade out from here”. Only the picture fades; your voice carries on.'
-      }),
-      ...(cam.hasAudio
-        ? [
-            section('Your voice comes from', select([['camera', 'The webcam’s microphone (voice and lips together)'], ['screen', 'The microphone recorded with the screen']], cam.audio ? 'camera' : 'screen', (v) => patch({ audio: v === 'camera' }), 'prop-cam-audio')),
-            h('p', { class: 'tip good', text: cam.audio ? 'Your voice is taken from the webcam’s own recording, so it always matches your lips. Sound the computer played while recording is kept.' : 'Your voice is the microphone recorded with the screen. If it doesn’t match your lips, switch to the webcam’s microphone.' }),
-            ...(cam.audio
-              ? [
-                  section('Webcam sound volume', range(cam.volume, 0, 2, 0.05, (v) => patch({ volume: v }, 'cam:vol'), (v) => `${Math.round(v * 100)}%`, 'prop-cam-volume')),
-                  levelEditor(s, {
-                    title: 'Webcam sound over time', low: 'silent', id: 'lvl-cam-voice', line: () => s.project.camera?.volEnv,
-                    span: () => ({ origin: 0, length: s.duration }),
-                    set: (env, merge) => s.patchCamera({ volEnv: env }, merge)
-                  })
-                ]
-              : [])
-          ]
-        : [h('p', { class: 'tip', text: 'This camera recording has no sound of its own.' })]),
-      h('div', { class: 'psec actions' },
-        button('Save camera video…', () => void this.actions.saveAsset('camera-video', 'camera'), 'ghost', { id: 'prop-cam-save-video' }),
-        ...(cam.hasAudio ? [button('Save camera sound…', () => void this.actions.saveAsset('camera-audio', 'camera'), 'ghost', { id: 'prop-cam-save-audio' })] : [])),
-      h('div', { class: 'psec actions' }, button('Hide the camera', () => { patch({ visible: false }); s.select(null) }, 'danger-ghost', { id: 'prop-cam-hide' }))
     ]
   }
 

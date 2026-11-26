@@ -1,6 +1,6 @@
 import { levelLine } from './level.ts'
 import {
-  audioTracks, cameraPieces, clipEnd, clipLength, moveClip, moveSound, soundEnd, trackById, trimClip, trimSound, videoTracks, type Clip, type Overlay, type Sound, type Track
+  audioTracks, clipEnd, clipLength, moveClip, moveSound, soundEnd, trackById, trimClip, trimSound, videoTracks, type Clip, type Overlay, type Sound, type Track
 } from '../../shared/project.ts'
 import { clampNum, fmtTime, type Store } from './store.ts'
 
@@ -42,7 +42,6 @@ interface Deps {
 
 const VIDEO_H = 56
 const AUDIO_H = 46
-const CAM_H = 40
 const SNAP_PX = 8
 
 const SVG: Record<string, string> = {
@@ -255,31 +254,6 @@ export class Timeline {
       rows.push(r)
     })
 
-    // the face camera: one bar for each stretch of the timeline that has it
-    const cam = p.camera
-    const showCam = !!cam && cam.visible
-    if (showCam) {
-      labels.push(this.label('Face cam', CAM_H, 'label-cam'))
-      const r = row('cam', CAM_H)
-      r.replaceChildren(
-        ...cameraPieces(p).map((pc) => {
-          const b = document.createElement('div')
-          b.className = `blk cam-blk${s.selection?.kind === 'camera' ? ' sel' : ''}`
-          b.dataset.camera = '1'
-          b.style.left = `${this.x(pc.start)}px`
-          b.style.width = `${Math.max(8, this.x(pc.end - pc.start))}px`
-          const t = document.createElement('span')
-          t.className = 'blk-label'
-          t.textContent = 'Face camera'
-          const shown = levelLine(cam.showEnv, 0, pc.start, pc.end, s.pxPerSec, CAM_H - 10)
-          const heard = cam.audio ? levelLine(cam.volEnv, 0, pc.start, pc.end, s.pxPerSec, CAM_H - 10, 'lvl-tl voice') : null
-          b.append(...(shown ? [shown] : []), ...(heard ? [heard] : []), t)
-          return b
-        })
-      )
-      rows.push(r)
-    }
-
     // comments and shapes in as few rows as will fit
     const lanes: number[] = []
     const laneOf = new Map<string, number>()
@@ -372,8 +346,10 @@ export class Timeline {
       f.style.width = `${this.x(Math.min(c.fadeOut.dur, len / 2))}px`
       b.append(f)
     }
-    const line = c.hasAudio && c.kind !== 'image' ? levelLine(c.volEnv, c.start, c.start, clipEnd(c), s.pxPerSec, VIDEO_H - 10) : null
-    if (line) b.append(line)
+    // yellow: how visible it is over time; with both, the sound's line is blue and dashed
+    const show = levelLine(c.showEnv, c.start, c.start, clipEnd(c), s.pxPerSec, VIDEO_H - 10)
+    const heard = c.hasAudio && c.kind !== 'image' ? levelLine(c.volEnv, c.start, c.start, clipEnd(c), s.pxPerSec, VIDEO_H - 10, show ? 'lvl-tl voice' : 'lvl-tl') : null
+    b.append(...(show ? [show] : []), ...(heard ? [heard] : []))
     b.append(label, handle('l', 'start'), handle('r', 'end'))
     return b
   }
@@ -561,12 +537,6 @@ export class Timeline {
           apply(start, start + len)
         }
       }
-      e.preventDefault()
-      return
-    }
-
-    if (blk?.dataset.camera) {
-      s.select({ kind: 'camera', id: 'camera' })
       e.preventDefault()
       return
     }

@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, patchTrack, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
+import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, patchTrack, removeSpan, type ClipShape, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -380,15 +380,19 @@ function makeCamera(dir: string): string {
   return path
 }
 
-function withCamera(dir: string, shape: 'circle' | 'rounded' | 'square', over: Partial<NonNullable<Project['camera']>> = {}): Setup {
+/** The screen recording plus a camera clip on a track of its own in front: a 30% wide window at (0.6, 0.5), the camera file's first 4 s. */
+function withCamera(dir: string, shape: ClipShape, over: Partial<Clip> = {}): Setup {
   const s = recordingSetup(dir, 4)
   s.media.camera = { path: makeCamera(dir), kind: 'video', hasAudio: false, duration: 4, width: 640, height: 480 }
-  s.project.camera = {
-    media: 'camera', name: 'camera.mp4', duration: 4, width: 640, height: 480, offset: 0, nudge: 0, x: 0.6, y: 0.5, w: 0.3, shape, border: false, fade: false,
-    visible: true, hasAudio: false, audio: false, volume: 1, ...over
+  const added = addVideoTrack(s.project)
+  const clip: Clip = {
+    ...newClipBase(), id: newId('c'), track: added.track.id, start: 0, kind: 'video', media: 'camera', name: 'camera.mp4', in: 0, out: 4, hasAudio: false, volume: 1,
+    width: 640, height: 480, shape, border: false, box: { x: 0.6, y: 0.5, w: 0.3 }, ...over
   }
+  s.project = { ...added.project, clips: [...added.project.clips, clip] }
   return s
 }
+const cameraOf = (s: Setup): Clip => s.project.clips.find((c) => c.media === 'camera')!
 
 test('the face camera sits in its corner, round, and is not square', { timeout: 120000 }, inTemp((dir) => {
   const s = withCamera(dir, 'circle')
@@ -405,28 +409,27 @@ test('the camera shows the matching moment (red first, blue after 2 s) and keeps
   assert.ok(near(frame(out.file, 3).at(480, 276), [0x10, 0x20, 0xe0], 30))
 }))
 
-test('cutting the recording cuts the camera with it', { timeout: 120000 }, inTemp((dir) => {
+test('cutting a stretch out of the whole timeline cuts the camera with the screen', { timeout: 120000 }, inTemp((dir) => {
   const s = withCamera(dir, 'square')
-  const c = s.project.clips[0]
-  // keep 0–1 s and 2.5–4 s of the recording: the second piece starts at timeline 1 s and should show camera time 2.5 s (blue)
-  sequence(s.project, [{ ...c, out: 1 }, { ...c, id: newId('c'), in: 2.5, out: 4 }])
+  // take 1–2.5 s out of everything: what was at 2.5 s (blue on the camera) now comes right after the first second
+  s.project = removeSpan(s.project, 1, 2.5)
   const out = exportIt(dir, s)
   assert.ok(Math.abs(seconds(out.file) - 2.5) < 0.2)
   assert.ok(near(frame(out.file, 0.5).at(480, 276), [0xe0, 0x10, 0x10], 30), 'first piece: red')
   assert.ok(near(frame(out.file, 1.5).at(480, 276), [0x10, 0x20, 0xe0], 30), 'second piece: the camera from the same moment (blue), not red')
 }))
 
-test('the camera is not shown over added pictures, and the lip-sync nudge moves it earlier', { timeout: 120000 }, inTemp((dir) => {
-  const s = withCamera(dir, 'square', { nudge: 0.5 })
-  const pic = makePng(dir, 'pic.png', '0x808080', 300, 300)
-  s.media.pic = { path: pic, kind: 'image', hasAudio: false, duration: 0, width: 300, height: 300 }
-  const rec = s.project.clips[0]
-  sequence(s.project, [{ ...rec, out: 2 }, { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic', in: 0, out: 1, hasAudio: false, width: 300, height: 300 }])
-  const out = exportIt(dir, s)
-  // nudge 0.5: at timeline 1.7 the camera is at 2.2 s → already blue
-  assert.ok(near(frame(out.file, 1.7).at(480, 276), [0x10, 0x20, 0xe0], 30), `nudged ${frame(out.file, 1.7).at(480, 276)}`)
-  // over the picture (2–3 s) the camera is gone
-  assert.ok(!near(frame(out.file, 2.5).at(480, 276), [0x10, 0x20, 0xe0], 40) && !near(frame(out.file, 2.5).at(480, 276), [0xe0, 0x10, 0x10], 40))
+test('the camera is a piece of its own: it can start later or earlier than the screen and shows only where it is', { timeout: 120000 }, inTemp((dir) => {
+  // starts half a second into the camera file (a camera that ran ahead of the screen) …
+  const early = withCamera(dir, 'square', { in: 0.5, out: 4 })
+  const a = exportIt(dir, early)
+  assert.ok(near(frame(a.file, 1.7).at(480, 276), [0x10, 0x20, 0xe0], 30), `at 1.7 s the camera is at 2.2 s → blue: ${frame(a.file, 1.7).at(480, 276)}`)
+  // … or joins one second late: nothing before it
+  const late = withCamera(dir, 'square', { start: 1, in: 0, out: 3 })
+  const b = exportIt(dir, late)
+  assert.ok(near(frame(b.file, 0.5).at(480, 276), [0x20, 0xa0, 0x40], 20), 'before it starts the screen shows')
+  assert.ok(near(frame(b.file, 1.5).at(480, 276), [0xe0, 0x10, 0x10], 30), '0.5 s into the camera: red')
+  assert.ok(near(frame(b.file, 3.5).at(480, 276), [0x10, 0x20, 0xe0], 30), '2.5 s into the camera: blue')
 }))
 
 test('a border rings the camera in white, and a hidden camera leaves no trace', { timeout: 120000 }, inTemp((dir) => {
@@ -434,7 +437,9 @@ test('a border rings the camera in white, and a hidden camera leaves no trace', 
   // the window is 192 + 2×6 px; its left edge ring is white at (384 + 2, 276)
   const ring = frame(bordered.file, 0.5).at(386, 276)
   assert.ok(ring[0] > 200 && ring[1] > 200 && ring[2] > 200, `ring ${ring}`)
-  const hidden = exportIt(dir, withCamera(dir, 'circle', { visible: false }))
+  const hide = withCamera(dir, 'circle')
+  hide.project = patchTrack(hide.project, cameraOf(hide).track, { hidden: true })
+  const hidden = exportIt(dir, hide)
   assert.ok(near(frame(hidden.file, 0.5).at(480, 276), [0x20, 0xa0, 0x40], 20))
 }))
 
@@ -455,8 +460,9 @@ function loud(file: string, from: number, len: number): number {
 
 test('the camera\'s own voice replaces the screen recording\'s sound and stays with its picture', { timeout: 120000 }, inTemp((dir) => {
   // the screen recording has a loud tone; the camera has a different, shorter-lived one
-  const s = withCamera(dir, 'circle', { hasAudio: true, audio: false })
+  const s = withCamera(dir, 'circle', { hasAudio: false })
   s.media.camera = { ...s.media.camera, path: makeVideo(dir, 'cam2.mp4', 4, { tone: 880 }), hasAudio: true }
+  // the clip is silent for now (its sound is off): only the screen's sound is heard
   const screenOnly = exportIt(dir, s)
   assert.ok(loud(screenOnly.file, 0.5, 2) > -30, 'the screen sound is heard')
   const freq = (file: string): number => {
@@ -473,7 +479,8 @@ test('the camera\'s own voice replaces the screen recording\'s sound and stays w
     return crossings / 2
   }
   assert.ok(Math.abs(freq(screenOnly.file) - 440) < 60, `screen pitch ${freq(screenOnly.file)}`)
-  s.project.camera!.audio = true
+  // now the camera is the voice: its sound is on and the screen recording keeps none of its own
+  s.project = { ...s.project, clips: s.project.clips.map((c) => (c.kind === 'recording' ? { ...c, audioSource: 'none' as const } : c.media === 'camera' ? { ...c, hasAudio: true } : c)) }
   const camVoice = exportIt(dir, s)
   assert.ok(Math.abs(freq(camVoice.file) - 880) < 90, `camera pitch ${freq(camVoice.file)}`)
   assert.ok(Math.abs(seconds(camVoice.file) - 4) < 0.2)
@@ -545,10 +552,10 @@ test('a recording can use its computer sound alone, its microphone alone, or the
 }))
 
 test('using the webcam\'s voice keeps the computer sound and drops only the recorded microphone', { timeout: 120000 }, inTemp((dir) => {
-  const s = withCamera(dir, 'circle', { hasAudio: true, audio: true })
+  const s = withCamera(dir, 'circle', { hasAudio: true })
   const two = twoTrackSetup(dir)
   s.media = { ...two.media, camera: { path: makeVideo(dir, 'cam3.mp4', 4, { tone: 1320 }), kind: 'video', hasAudio: true, duration: 4, width: 640, height: 480 } }
-  s.project.recTracks = { pc: true, mic: true }
+  s.project = { ...s.project, recTracks: { pc: true, mic: true }, clips: s.project.clips.map((c) => (c.kind === 'recording' ? { ...c, audioSource: 'pc' as const } : c)) }
   const out = exportIt(dir, s)
   // both the computer's 440 Hz and the webcam's 1320 Hz are heard; the microphone's 880 Hz is not
   const r = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-t', '3', '-i', out.file, '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', '-'], { maxBuffer: 64 * 1024 * 1024 })
@@ -609,8 +616,9 @@ test('the face camera can fade away for a stretch and come back, and its voice c
   const mid = frame(out.file, 1.4).at(480, 276)
   assert.ok(mid[0] < 0xe0 - 8 && mid[0] > 0x20 + 8, `half way through the fade it is half there: ${mid}`)
   // the voice from the camera follows its own line (in timeline seconds), not the picture's
-  const v = withCamera(dir, 'circle', { hasAudio: true, audio: true, volEnv: [{ t: 0, v: 1 }, { t: 1.5, v: 1 }, { t: 1.8, v: 0 }, { t: 3, v: 0 }] })
+  const v = withCamera(dir, 'circle', { hasAudio: true, volEnv: [{ t: 0, v: 1 }, { t: 1.5, v: 1 }, { t: 1.8, v: 0 }, { t: 3, v: 0 }] })
   v.media.camera = { ...v.media.camera, path: makeVideo(dir, 'cam3.mp4', 4, { tone: 880, source: 'color=c=0xe01010', size: [480, 480] }), hasAudio: true }
+  v.project = { ...v.project, clips: v.project.clips.map((c) => (c.kind === 'recording' ? { ...c, audioSource: 'none' as const } : c)) }
   const voiced = exportIt(dir, v)
   assert.ok(loud(voiced.file, 0.2, 1) > -28, 'heard at first')
   assert.ok(loud(voiced.file, 2.2, 0.8) < -40, 'then silent while the line is down')

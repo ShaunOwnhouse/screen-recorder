@@ -1,4 +1,4 @@
-import { isDrawn, isPlain, newCamera, newProject, SPEEDS, type Clip, type Overlay } from '../shared/project.ts'
+import { addCameraClip, isDrawn, isPlain, newProject, SPEEDS, type Clip, type Overlay } from '../shared/project.ts'
 import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
 import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts'
 import { Actions } from './editor/actions.ts'
@@ -75,7 +75,7 @@ function updateTools(): void {
   ;($('redo') as HTMLButtonElement).disabled = !store.canRedo
   const sel = store.selection
   ;($('delete-sel') as HTMLButtonElement).disabled = !sel
-  ;($('duplicate-sel') as HTMLButtonElement).disabled = !sel || sel.kind === 'camera'
+  ;($('duplicate-sel') as HTMLButtonElement).disabled = !sel
   ;($('split') as HTMLButtonElement).disabled = !store.project.clips.some((c, i, all) => {
     void c
     void i
@@ -352,12 +352,15 @@ async function init(): Promise<void> {
   }
   src = loaded.source
   const m = src.meta
-  const initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, tracks: src.tracks })
+  let initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, tracks: src.tracks })
+  // the camera recording is a piece of its own, on its own track in front of the screen
   if (src.camera) {
     const c = src.camera.info
-    initial.camera = newCamera({ media: c.id, name: c.name, duration: c.duration, width: c.width, height: c.height, hasAudio: c.hasAudio }, src.camera.offset, m.width / m.height)
+    const added = addCameraClip(initial, { media: c.id, name: 'Face camera', duration: c.duration, width: c.width, height: c.height, hasAudio: c.hasAudio }, src.camera.offset, m.width / m.height)
+    if (added) initial = added.project
   }
   store = new Store(initial, m, src.brand)
+  store.cameraOffset = src.camera?.offset ?? 0
   if (src.camera) store.media.set(src.camera.info.id, src.camera.info)
   for (const t of src.trackFiles) store.media.set(t.id, t)
   store.media.set('recording', { id: 'recording', name: 'Recording', kind: 'video', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, url: src.url })
