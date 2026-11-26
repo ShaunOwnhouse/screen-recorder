@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process'
+import { appendFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 /**
  * While an update installs, the app is closed and the installer works without any window of its own, so for up to a minute
@@ -53,19 +56,29 @@ export function updatingScript(processName = 'Screen Snap'): string {
   ].join('\n')
 }
 
-/** Windows only; never gets in the way of the update itself. */
+/**
+ * Windows only; never gets in the way of the update itself. It is started through `start`, so it is not a child of the app that
+ * is about to close (nothing that tidies up after the app's exit can take it down with it).
+ */
 export function showUpdatingWindow(): void {
   if (process.platform !== 'win32') return
+  const note = (text: string): void => {
+    try {
+      appendFileSync(join(tmpdir(), 'screen-snap-updating-spawn.log'), `${new Date().toISOString()} ${text}\n`)
+    } catch {
+      /* only a trace for finding problems */
+    }
+  }
   try {
     const encoded = Buffer.from(updatingScript(), 'utf16le').toString('base64')
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
-      detached: true,
-      stdio: 'ignore'
-      // not windowsHide: that would hide the window this script opens too (-WindowStyle Hidden already hides the console)
-    })
-    child.on('error', () => undefined)
+    const line = `"start "" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ${encoded}"`
+    // not windowsHide for the window itself (it would hide the window the script opens); it is only cmd's own console that is hidden here
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', line], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true })
+    child.on('error', (err) => note(`error: ${err}`))
+    child.on('exit', (code) => note(`cmd exited: ${code}`))
+    note(`started, cmd pid ${child.pid}, ${encoded.length} characters`)
     child.unref()
-  } catch {
-    /* the update goes ahead without it */
+  } catch (err) {
+    note(`failed: ${err}`)
   }
 }

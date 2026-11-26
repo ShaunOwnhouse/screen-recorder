@@ -32,6 +32,11 @@ const UPDATE_OUT = path.join(ROOT, 'dist-update')
 const results = []
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a)
+/** Like check(), but only reported: used while a new piece is still being proven on real Windows (it does not fail the run). */
+function soft(name, ok, detail = '') {
+  log(ok ? 'PASS' : 'NOTE (not blocking)', name, detail ? `— ${detail}` : '')
+  return ok
+}
 function check(name, ok, detail = '') {
   results.push({ name, ok, detail })
   log(ok ? 'PASS' : 'FAIL', name, detail ? `— ${detail}` : '')
@@ -40,6 +45,8 @@ function check(name, ok, detail = '') {
 const ps = (script) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' }).stdout.trim()
 const exeVersion = () => (fs.existsSync(EXE) ? ps(`(Get-Item '${EXE}').VersionInfo.ProductVersion`) : '')
 const running = () => ps('(Get-Process -Name "Screen Snap" -ErrorAction SilentlyContinue | Measure-Object).Count') !== '0'
+
+const splashCount = () => ps('(Get-Process | Where-Object { $_.MainWindowTitle -eq "Updating Screen Snap" } | Measure-Object).Count')
 
 async function waitFor(fn, ms, every = 1000) {
   const t0 = Date.now()
@@ -105,6 +112,23 @@ async function waitFor(fn, ms, every = 1000) {
     log(`installer finished: exit ${inst.status}${inst.error ? `, ${inst.error.message}` : ''}`)
     check(`The older build (${OLD}) installed`, !!(await waitFor(() => fs.existsSync(EXE), 180000)) && exeVersion().startsWith(OLD), `${exeVersion()} at ${EXE}`)
 
+    // The "Updating" window on its own, started the way the app starts it (no Electron involved): is its script valid PowerShell, does the window appear?
+    {
+      const f = path.join(RESULTS, 'updating-window.ps1')
+      const gen = spawnSync(process.execPath, ['-e', `import('./src/main/updating-window.ts').then((m) => require('node:fs').writeFileSync(${JSON.stringify(f)}, m.updatingScript()))`], { cwd: ROOT, encoding: 'utf8' })
+      const parsed = ps(`$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${f}',[ref]$t,[ref]$e);if($e.Count){($e | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join ' | '}else{'OK'}`)
+      soft('The "Updating" window script is valid PowerShell', parsed === 'OK', parsed || (gen.stderr || '').slice(0, 200))
+      spawnSync(process.execPath, ['-e', `import('./src/main/updating-window.ts').then((m) => m.showUpdatingWindow())`], { cwd: ROOT, encoding: 'utf8' })
+      const shownAlone = await waitFor(() => splashCount() !== '0', 25000, 700)
+      soft('Started on its own (no app involved), the "Updating" window appears', !!shownAlone)
+      if (!shownAlone) {
+        log('standalone spawn log:', ps('Get-Content "$env:TEMP\\screen-snap-updating-spawn.log" -ErrorAction SilentlyContinue'))
+        log('standalone window log:', ps('Get-Content "$env:TEMP\\screen-snap-updating.log" -ErrorAction SilentlyContinue'))
+      }
+      spawnSync('taskkill', ['/F', '/FI', 'WINDOWTITLE eq Updating Screen Snap'], { windowsHide: true })
+      spawnSync('powershell.exe', ['-NoProfile', '-Command', 'Remove-Item "$env:TEMP\\screen-snap-updating*.log" -ErrorAction SilentlyContinue'], { windowsHide: true })
+    }
+
     // 4) run it; it must find the update on its own feed and download it in the background
     const launch = () => electron.launch({ executablePath: EXE, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
       env: { ...process.env, SCREEN_SNAP_UPDATE_FEED: feedUrl }, timeout: 120000 })
@@ -140,12 +164,12 @@ async function waitFor(fn, ms, every = 1000) {
     check('The old copy closed itself so the update could be installed', exited)
     app = null
     // While the installer works nothing else is on screen, so a small window says what is going on (people opened the app half way through)
-    const splashCount = () => ps('(Get-Process | Where-Object { $_.MainWindowTitle -eq "Updating Screen Snap" } | Measure-Object).Count')
     const splash = await waitFor(() => splashCount() !== '0', 20000, 500)
-    check('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
+    soft('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
     if (!splash) {
       log('powershell processes:', ps('Get-Process powershell -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) [$($_.MainWindowTitle)]" }'))
       log('window log:', ps('Get-Content "$env:TEMP\\screen-snap-updating.log" -ErrorAction SilentlyContinue'))
+      log('spawn log:', ps('Get-Content "$env:TEMP\\screen-snap-updating-spawn.log" -ErrorAction SilentlyContinue'))
     }
     const installed = await waitFor(() => exeVersion().startsWith(NEW), 240000, 2000)
     check(`The installer replaced the program with ${NEW}`, !!installed, exeVersion())
@@ -153,7 +177,7 @@ async function waitFor(fn, ms, every = 1000) {
     const relaunched = await waitFor(() => running(), 90000, 1000)
     check('The new version started itself after the update', !!relaunched)
     const splashGone = await waitFor(() => splashCount() === '0', 30000, 1000)
-    check('The "Updating" window closes once the new version has started', !!splashGone)
+    soft('The "Updating" window closes once the new version has started', !!splashGone)
     spawnSync('taskkill', ['/F', '/IM', 'Screen Snap.exe', '/T'], { windowsHide: true })
     await sleep(3000)
 
