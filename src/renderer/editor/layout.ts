@@ -51,7 +51,8 @@ function drag(grip: HTMLElement, onMove: (e: PointerEvent, start: { x: number; y
   })
 }
 
-export function initLayout(onChange: () => void): void {
+export function initLayout(onChange: () => void): () => void {
+  let refit: () => void = () => undefined
   const root = document.querySelector<HTMLElement>('.editor')!
   const work = document.querySelector<HTMLElement>('.work')!
   const saved = load()
@@ -59,15 +60,28 @@ export function initLayout(onChange: () => void): void {
   // the timeline starts with room for every row (it is taller on a tall window); the person can drag it anyway. It keeps its
   // share of the window, so a window that is maximised or moved to another screen gets a timeline that suits it.
   const share = (): number => saved.tlFrac ?? (saved.tl ? saved.tl / Math.max(400, window.innerHeight) : 0)
-  const fitTimeline = (): void => {
-    const h = share() ? window.innerHeight * share() : clamp(window.innerHeight * 0.42, 300, 500)
-    set('--tl-h', clamp(h, 140, Math.max(140, window.innerHeight - 300)))
+  const tlTools = document.querySelector<HTMLElement>('.tl-tools')!
+  const tlLabels = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('#timeline .tl-label')]
+  /** The height the timeline needs to show every row (and nothing more). */
+  const natural = (): number => tlTools.offsetHeight + 6 + tlLabels().reduce((a, l) => a + l.offsetHeight, 0) + 2 + 16
+  const cap = (): number => Math.max(150, Math.min(window.innerHeight * 0.46, window.innerHeight - 300))
+  let applied = 0
+  const fitTimeline = (): boolean => {
+    // Until the person drags the bar themselves, the timeline is just tall enough for its rows, so the picture gets the rest.
+    const h = share() ? window.innerHeight * share() : tlLabels().length ? natural() : clamp(window.innerHeight * 0.36, 220, 420)
+    const next = Math.round(clamp(h, 150, cap()))
+    if (Math.abs(next - applied) < 2) return false
+    applied = next
+    set('--tl-h', next)
+    return true
   }
   fitTimeline()
   window.addEventListener('resize', () => {
-    fitTimeline()
-    onChange()
+    if (fitTimeline()) onChange()
   })
+  refit = () => {
+    if (!share() && fitTimeline()) onChange()
+  }
   if (saved.drawer) set('--drawer-w', saved.drawer)
   if (saved.props) set('--props-w', saved.props)
   work.classList.toggle('no-drawer', !!saved.noDrawer)
@@ -80,6 +94,7 @@ export function initLayout(onChange: () => void): void {
     (e, s) => {
       const h = clamp(tl0 - (e.clientY - s.y), 140, window.innerHeight - 260)
       set('--tl-h', h)
+      applied = Math.round(h)
       saved.tlFrac = h / Math.max(400, window.innerHeight)
       delete saved.tl
       onChange()
@@ -101,7 +116,7 @@ export function initLayout(onChange: () => void): void {
   drag(
     gd,
     (e, s) => {
-      const w = clamp(d0 + (e.clientX - s.x), 160, 520)
+      const w = clamp(d0 + (e.clientX - s.x), 200, 520)
       work.classList.remove('no-drawer')
       saved.noDrawer = false
       set('--drawer-w', w)
@@ -138,4 +153,5 @@ export function initLayout(onChange: () => void): void {
     save(saved)
     onChange()
   })
+  return () => refit()
 }

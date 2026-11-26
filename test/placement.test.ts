@@ -44,10 +44,24 @@ test('region on the second screen: bar stays on that screen and clear of the reg
   assert.ok(inside(barRect(p), second))
 })
 
-test('region that nearly fills a screen: the bar goes to the other screen', () => {
+test('region that nearly fills a screen: the bar still goes on THAT screen (top centre), never the other one', () => {
   const region = { x: 1925, y: 5, width: 2550, height: 1430 }
   const p = barPlacement(second, region, both)
-  assert.equal(p.displayId, 1)
+  assert.equal(p.displayId, 2)
+  assert.ok(inside(barRect(p), second), JSON.stringify(p))
+  assert.equal(p.x, Math.round(1920 + (2560 - BAR_WIDTH) / 2))
+})
+
+test('a big region on the second screen while the app is on the main screen: the timer is on the second screen', () => {
+  for (const region of [
+    { x: 1940, y: 10, width: 2520, height: 1380 },
+    { x: 2000, y: 0, width: 2480, height: 1440 },
+    { x: 1920, y: 30, width: 2560, height: 1410 }
+  ]) {
+    const p = barPlacement(second, region, both)
+    assert.equal(p.displayId, 2, JSON.stringify(region))
+    assert.ok(inside(barRect(p), second))
+  }
 })
 
 test('fallback if the bar shows up in the capture: other screen, or none when there is only one', () => {

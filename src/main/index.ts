@@ -488,6 +488,16 @@ function showBar(target: Target): void {
   const win = bar
   win.once('ready-to-show', () => {
     win.showInactive()
+    // With screens of different scaling Windows can put a new window on the wrong screen (the one the app is on):
+    // once it is shown, put it exactly where it was meant to go, on the screen being recorded.
+    const want = { x: place.x, y: place.y, width: BAR_WIDTH, height: BAR_HEIGHT }
+    const settle = (): void => {
+      if (win.isDestroyed()) return
+      const b = win.getBounds()
+      if (Math.abs(b.x - want.x) > 2 || Math.abs(b.y - want.y) > 2 || b.width !== want.width || b.height !== want.height) win.setBounds(want)
+    }
+    settle()
+    setTimeout(settle, 250)
     // Re-apply once the window is really on screen, and again shortly after: on Windows the flag was found
     // switched off when set only at creation.
     win.setContentProtection(true)

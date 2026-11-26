@@ -30,7 +30,8 @@ const topCentre = (d: PlaceDisplay): Placement => ({
  * Where the timer bar goes: ON THE SCREEN BEING RECORDED, so it is right where the person is looking.
  * Whole screen → top centre of that screen (the capture exclusion hides it from the video; the app also
  * checks that at runtime and moves it away if it ever shows up). Region → the first spot on that screen
- * that doesn't touch the selected area, so it's never in the video at all.
+ * that doesn't touch the selected area, so it's never in the video at all; if there is none (the area fills the screen)
+ * it goes top centre of that same screen, like a whole screen. It never moves to a different screen just for lack of room.
  */
 export function barPlacement(home: PlaceDisplay, recorded: Rect, all: PlaceDisplay[]): Placement {
   const whole = recorded.width >= home.bounds.width - 2 && recorded.height >= home.bounds.height - 2
@@ -48,9 +49,10 @@ export function barPlacement(home: PlaceDisplay, recorded: Rect, all: PlaceDispl
   ]
   const free = candidates.find((c) => !overlaps({ x: c.x, y: c.y, width: BAR_WIDTH, height: BAR_HEIGHT }, recorded, 8))
   if (free) return { displayId: home.id, ...free }
-  // The region fills the screen: the only spot that isn't in the video is another screen.
-  const other = all.find((d) => d.id !== home.id)
-  return other ? topCentre(other) : { displayId: home.id, ...candidates[0] }
+  // The region (nearly) fills the screen: the timer still goes on THIS screen, where the person is looking, as for a
+  // whole screen. The capture exclusion keeps it out of the video, and the runtime check moves it away if it ever shows.
+  void all
+  return topCentre(home)
 }
 
 /** Fallback if the bar turns out to show up in the capture: another screen, if there is one. */

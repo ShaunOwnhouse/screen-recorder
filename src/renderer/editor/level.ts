@@ -36,9 +36,11 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
   let recording = false
   let lastRel = -1
   let sliding = false
+  let drag = -1
   const slider = h('input', { type: 'range', min: 0, max: 1, step: 0.01, value: 1, id: `${spec.id}-level` })
   const sliderVal = h('span', { class: 'range-val', text: '100%' })
 
+  let root!: HTMLElement
   const rel = (): number => {
     const { origin, length } = spec.span()
     return clampNum(store.playhead - origin, 0, length)
@@ -72,7 +74,9 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
     kids.push(svgEl('line', { class: 'lvl-head', x1: g.x(here), x2: g.x(here), y1: 2, y2: H - 2 }))
     pts.forEach((p, i) => {
       if (p.t > g.length + 1e-6) return
-      kids.push(svgEl('circle', { class: 'lvl-pt', cx: g.x(p.t), cy: g.y(p.v), r: 6, 'data-i': i }))
+      kids.push(svgEl('circle', { class: `lvl-pt${i === drag ? ' on' : ''}`, cx: g.x(p.t), cy: g.y(p.v), r: 6, 'data-i': i }))
+      // a bigger invisible target around each point, so it is easy to catch with the mouse
+      kids.push(svgEl('circle', { class: 'lvl-hit', cx: g.x(p.t), cy: g.y(p.v), r: 14, 'data-i': i }))
     })
     svg.replaceChildren(...kids)
     const now = envAt(env, here)
@@ -83,7 +87,6 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
   }
 
   // ---- drag points around, click to add one, double-click to remove ----
-  let drag = -1
   const localPoint = (e: PointerEvent): { x: number; y: number } => {
     const r = svg.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
@@ -101,6 +104,7 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
       write(next)
       drag = next.findIndex((p) => Math.abs(p.t - t) < 0.05)
     }
+    root.dataset.busy = '1'
     svg.setPointerCapture(e.pointerId)
     e.preventDefault()
   })
@@ -118,6 +122,9 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
   const stop = (): void => {
     if (drag >= 0) store.endMerge()
     drag = -1
+    delete root.dataset.busy
+    // not at once: replacing the dot under the pointer before the click has finished would stop the click (and double-click) happening
+    setTimeout(draw, 0)
   }
   svg.addEventListener('pointerup', stop)
   svg.addEventListener('pointercancel', stop)
@@ -169,12 +176,13 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
     write(envPut(env, t, v))
     lastRel = t
   }
-  slider.addEventListener('pointerdown', () => { sliding = true; lastRel = -1 })
+  slider.addEventListener('pointerdown', () => { sliding = true; lastRel = -1; root.dataset.busy = '1' })
   slider.addEventListener('input', () => { if (recording) put(false) })
   slider.addEventListener('change', () => {
     if (recording) put(true)
     sliding = false
     lastRel = -1
+    delete root.dataset.busy
     store.endMerge()
   })
   const rec = toggle('● Record while playing', false, (on) => {
@@ -183,7 +191,7 @@ export function levelEditor(store: Store, spec: LevelSpec): HTMLElement {
     if (on) draw()
   }, `${spec.id}-rec`)
 
-  const root = h('div', { class: 'psec lvl', id: spec.id },
+  root = h('div', { class: 'psec lvl', id: spec.id },
     h('h3', { text: spec.title }),
     svg,
     buttons,

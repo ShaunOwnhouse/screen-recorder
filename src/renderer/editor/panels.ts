@@ -216,7 +216,7 @@ export class Panels {
     const host = this.els.props
     const sel = s.selection
     const sig = sel ? `${sel.kind}:${sel.id}` : 'none'
-    const editing = host.contains(document.activeElement) && document.activeElement !== host
+    const editing = (host.contains(document.activeElement) && document.activeElement !== host) || !!host.querySelector('[data-busy]')
     if (!force && editing && sig === this.sig) {
       this.fillCropLabel()
       return

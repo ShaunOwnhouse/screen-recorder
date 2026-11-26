@@ -306,10 +306,14 @@ async function record(app, main, label, { seconds, region, checkAffinity, pauses
   const bar = await waitForWindow(app, 'bar.html')
   const t0 = Date.now()
   let recording = false
+  const barTexts = []
   while (Date.now() - t0 < 45000) {
+    const tx = await bar.textContent('#text', { timeout: 500 }).catch(() => null)
+    if (tx && barTexts[barTexts.length - 1] !== tx) barTexts.push(tx)
     if (await bar.isVisible('#stop').catch(() => false)) { recording = true; break }
     await sleep(100)
   }
+  check(`${label}: the timer is shown the moment capture starts, with no "Recording…" word first`, !barTexts.some((t) => /Recording/i.test(t)) && barTexts.some((t) => /^\d\d:\d\d$/.test(t)), barTexts.join(' | '))
   if (!check(`${label}: recording started (first frame captured)`, recording, `${((Date.now() - t0) / 1000).toFixed(1)}s after pressing Record`)) {
     const st = await main.evaluate(() => window.api.getStatus()).catch(() => ({}))
     throw new Error(`recording never started: ${JSON.stringify(st)}`)

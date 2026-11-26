@@ -17,8 +17,24 @@ function formatTime(seconds: number): string {
   return h ? `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}` : `${pad(Math.floor(s / 60))}:${pad(s % 60)}`
 }
 
+// The moment the countdown ends capture is already starting (it takes a few seconds before the first picture arrives), and the
+// recording is timed from that moment. So the timer is shown straight away, counting from zero, instead of a word.
+let startedLocal = 0
+let startTimer: number | null = null
+let latest: RecordingStatus | null = null
+
 function render(s: RecordingStatus): void {
-  bar.className = `bar ${s.state}`
+  latest = s
+  const starting = s.state === 'countdown' && s.countdown === 0
+  if (starting && !startedLocal) {
+    startedLocal = Date.now()
+    startTimer = window.setInterval(() => latest && render(latest), 250)
+  } else if (!starting && startedLocal) {
+    startedLocal = 0
+    if (startTimer !== null) window.clearInterval(startTimer)
+    startTimer = null
+  }
+  bar.className = `bar ${starting ? 'recording' : s.state}`
   const live = s.state === 'recording' || s.state === 'paused'
   stop.hidden = !live
   pause.hidden = !live
@@ -34,7 +50,7 @@ function render(s: RecordingStatus): void {
         ? 'Getting ready…'
         : s.countdown
           ? `Starting in ${s.countdown}…`
-          : 'Recording…'
+          : formatTime((Date.now() - startedLocal) / 1000)
       : s.state === 'recording'
         ? formatTime(s.elapsed)
         : s.state === 'paused'

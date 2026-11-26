@@ -407,7 +407,11 @@ async function init(): Promise<void> {
   })
   window.addEventListener('resize', layoutFrame)
   new ResizeObserver(layoutFrame).observe(stage)
-  initLayout(layoutFrame)
+  const refitTimeline = initLayout(layoutFrame)
+  store.on((what) => {
+    if (what === 'project') requestAnimationFrame(refitTimeline)
+  })
+  requestAnimationFrame(refitTimeline)
   window.editor.onBelowScreen((px) => {
     document.querySelector<HTMLElement>('.editor')!.style.setProperty('--below', `${px}px`)
     layoutFrame()

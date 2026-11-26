@@ -51,6 +51,7 @@ async function editorSuite(c) {
   for (const [w, h] of [[1920, 1040], [1366, 728], [1100, 640], [1100, 580]]) {
     await place({ x: 0, y: 0, width: w, height: h })
     const f = await fit()
+    if (w === 1366) await shot(editor, `editor-${w}x${h}`)
     check(`${tag}: a ${w}×${h} window keeps its whole save row in view (nothing pushed below the screen)`, f.saveBtn <= f.innerH - f.below + 1 && f.docH <= f.innerH + 1 && f.onScreen <= f.availH + 14, JSON.stringify(f))
   }
   // a window hanging below the usable screen (under the taskbar) is told so and keeps its save row in view
@@ -295,9 +296,22 @@ async function editorSuite(c) {
   await editor.mouse.up()
   env = await musEnv()
   check(`${tag}: dragging a point up makes the music louder there`, env[2].v > 0.85, JSON.stringify(env[2]))
-  await editor.locator('#lvl-sound-graph circle.lvl-pt >> nth=2').dblclick()
+  await editor.locator('#lvl-sound-graph circle.lvl-hit >> nth=2').dblclick()
   env = await musEnv()
-  check(`${tag}: double-clicking a point takes it away`, env.length === 4)
+  check(`${tag}: double-clicking a point takes it away`, env.length === 4, JSON.stringify(env))
+  // the way a person really does it: nothing in the side panel has focus, and the mouse moves in many small steps
+  await editor.evaluate(() => { document.activeElement?.blur?.(); window.__lvlGraph = document.querySelector('#lvl-sound-graph') })
+  const before2 = (await musEnv())[2]
+  const hit = await editor.locator('#lvl-sound-graph circle.lvl-hit >> nth=2').boundingBox()
+  const hx = hit.x + hit.width / 2
+  const hy = hit.y + hit.height / 2
+  await editor.mouse.move(hx, hy)
+  await editor.mouse.down()
+  for (let i = 1; i <= 14; i++) await editor.mouse.move(hx - i * 3, hy + i * 2)
+  await editor.mouse.up()
+  const after2 = (await musEnv())[2]
+  const sameGraph = await editor.evaluate(() => window.__lvlGraph === document.querySelector('#lvl-sound-graph'))
+  check(`${tag}: a point can be dragged in one go with the mouse (both along and down), the graph staying put under it`, after2.t < before2.t - 0.3 && after2.v < before2.v - 0.1 && sameGraph, JSON.stringify({ before2, after2, sameGraph }))
   await editor.click('#lvl-sound-out')
   env = await musEnv()
   check(`${tag}: "Fade out from here" glides down and stays down`, env[env.length - 1].v === 0 && env.filter((p) => p.v < 0.05).length >= 1, JSON.stringify(env))
