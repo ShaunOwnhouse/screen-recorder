@@ -407,10 +407,11 @@ kbd {
 .busy {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(5, 6, 9, 0.93);
+  backdrop-filter: blur(8px);
   display: grid;
   place-items: center;
-  z-index: 10;
+  z-index: 1000;
 }
 
 .busy-card {
@@ -1308,10 +1309,11 @@ kbd {
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(5, 6, 9, 0.9);
+  backdrop-filter: blur(8px);
   display: grid;
   place-items: center;
-  z-index: 200;
+  z-index: 1000;
 }
 
 .modal[hidden] {
@@ -1503,11 +1505,12 @@ kbd {
 .pv {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(5, 6, 9, 0.82);
+  background: rgba(5, 6, 9, 0.94);
+  backdrop-filter: blur(8px);
 }
 
 .pv-box {
@@ -1731,4 +1734,78 @@ button.accent {
   .rail-btn span {
     display: none;
   }
+}
+
+/* ---------- parts that fold away to give the picture more room ---------- */
+.fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.fold:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.fold .chev {
+  display: inline-block;
+  font-size: 13px;
+  transition: transform 0.15s;
+}
+
+.fold[aria-expanded='false'] .chev {
+  transform: rotate(-90deg);
+}
+
+.save-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.save-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.save-closed .save-body {
+  display: none;
+}
+
+.save-closed .save {
+  padding-top: 6px;
+  gap: 6px;
+}
+
+.tl-closed #timeline {
+  display: none;
+}
+
+.tl-closed #grip-timeline {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.editor.tl-closed {
+  grid-template-rows: auto minmax(140px, 1fr) 8px auto auto;
 }

@@ -60,6 +60,63 @@ async function editorSuite(c) {
   check(`${tag}: a window hanging below the screen is told so, and its save row stays on screen`, hang.below > 100 && hang.onScreen <= hang.availH + 14, JSON.stringify(hang))
   await place(orig)
 
+  // ---- windows over the editor cover all of it; the timeline and the file-name area fold away ----
+  {
+    // nothing of the editor (selected bars, the selection box, the playhead, the camera window) may show over the preview or the saving window
+    const covered = await editor.evaluate(() => {
+      const st = window.__editor.store
+      if (st.project.clips[0]) st.select({ kind: 'clip', id: st.project.clips[0].id })
+      const out = {}
+      for (const id of ['busy', 'pv']) {
+        const el = document.getElementById(id)
+        if (!el) continue
+        const wasHidden = el.hidden
+        el.hidden = false
+        const spots = [['tl', '#timeline'], ['head', '.tl-head'], ['stage', '#stage'], ['sel', '.blk.sel']]
+        out[id] = spots.map(([n, q]) => {
+          const t = document.querySelector(q)
+          if (!t) return [n, 'absent']
+          const r = t.getBoundingClientRect()
+          const top = document.elementFromPoint(r.left + Math.min(40, r.width / 2), r.top + Math.min(20, r.height / 2))
+          return [n, !!top && el.contains(top)]
+        })
+        el.hidden = wasHidden
+      }
+      st.select(null)
+      return out
+    })
+    const bad = Object.entries(covered).flatMap(([id, list]) => list.filter(([, v]) => v === false).map(([n]) => `${id}:${n}`))
+    check(`${tag}: the preview and the saving window cover the whole editor (no bar, box or playhead shows over them)`, bad.length === 0, JSON.stringify(covered))
+    // fold away the timeline: more room for the picture, and back
+    const stageH = () => editor.evaluate(() => Math.round(document.getElementById('stage').getBoundingClientRect().height))
+    const h0 = await stageH()
+    await editor.click('#tl-fold')
+    await sleep(300)
+    const h1 = await stageH()
+    check(`${tag}: the Timeline can be folded away, giving the picture more room`, h1 > h0 + 60 && !(await editor.isVisible('#timeline')) && (await editor.isVisible('#split')) && (await editor.getAttribute('#tl-fold', 'aria-expanded')) === 'false', `${h0} → ${h1}`)
+    await editor.click('#tl-fold')
+    await sleep(300)
+    check(`${tag}: and opened again`, (await editor.isVisible('#timeline')) && Math.abs((await stageH()) - h0) < 12, `${await stageH()} vs ${h0}`)
+    // fold away the file-name area: the Save buttons stay
+    const h2 = await stageH()
+    await editor.click('#save-fold')
+    await sleep(300)
+    const h3 = await stageH()
+    check(`${tag}: the File name area can be folded away; Save stays at hand`, h3 > h2 + 30 && !(await editor.isVisible('#name')) && (await editor.isVisible('#save')) && (await editor.isVisible('#save-as')) && /\.mp4$/.test((await editor.textContent('#save-summary')) ?? ''), `${h2} → ${h3} · ${await editor.textContent('#save-summary')}`)
+    await editor.click('#save-fold')
+    await sleep(300)
+    check(`${tag}: and opened again (the file name is there)`, (await editor.isVisible('#name')) && (await editor.isVisible('#format')), `${await stageH()}`)
+    // both folded: the picture gets almost all of the window
+    await editor.click('#tl-fold')
+    await editor.click('#save-fold')
+    await sleep(300)
+    await shot(editor, 'editor-folded')
+    check(`${tag}: with both folded the picture is much bigger, and Save, Split and Undo are still at hand`, (await stageH()) > h0 + 150 && (await editor.isVisible('#save')) && (await editor.isVisible('#split')) && (await editor.isVisible('#undo')), `${await stageH()} vs ${h0}`)
+    await editor.click('#tl-fold')
+    await editor.click('#save-fold')
+    await sleep(300)
+  }
+
   // ---- the screen ----
   check(`${tag}: has the seven tools on the left`, (await editor.locator('.rail-btn').count()) === 7, (await editor.locator('.rail-btn').allTextContents()).join(', '))
   check(`${tag}: the timeline has Video, Comments and Audio rows`, /Video/.test(await editor.textContent('#label-video')) && /Comments/.test(await editor.textContent('#label-over')) && /Audio/.test(await editor.textContent('#label-music')))

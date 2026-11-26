@@ -70,6 +70,7 @@
 
       <section class="tl-wrap">
         <div class="tl-tools">
+          <button id="tl-fold" type="button" class="fold" aria-expanded="true" title="Hide the timeline to give the picture more room, or show it again"><span class="chev" aria-hidden="true">▾</span> Timeline</button>
           <button id="split" type="button" class="ghost" title="Cut the piece at the playhead (S)">✂ Split here <kbd>S</kbd></button>
           <button id="delete-sel" type="button" class="ghost" title="Delete the selected piece, comment or sound (Delete)">Delete <kbd>Del</kbd></button>
           <button id="duplicate-sel" type="button" class="ghost" title="Make a copy of the selected piece, comment or sound (Ctrl+D)">Duplicate <kbd>Ctrl+D</kbd></button>
@@ -92,6 +93,15 @@
           <button id="saved-keep" type="button" class="primary" title="Close this message and carry on editing (you can save again)">Keep editing</button>
           <button id="saved-finish" type="button" class="ghost" title="Done with this recording: the saved video stays, the recording is removed">Finish</button>
         </div>
+        <div class="save-head">
+          <button id="save-fold" type="button" class="fold" aria-expanded="true" title="Hide the file name and format to give the picture more room, or show them again"><span class="chev" aria-hidden="true">▾</span> File name &amp; save</button>
+          <span id="save-summary" class="save-summary muted"></span>
+          <div class="save-actions">
+            <button id="save-as" type="button" class="ghost">Save as…</button>
+            <button id="save" type="button" class="primary">Save</button>
+          </div>
+        </div>
+        <div class="save-body">
         <div class="save-row">
           <label class="name-field">
             <span class="label">File name</span>
@@ -108,10 +118,6 @@
             <span class="label">Speed</span>
             <select id="speed" aria-label="Speed of the saved video" title="Speed up or slow down the whole finished video, sound included"></select>
           </label>
-          <div class="save-actions">
-            <button id="save-as" type="button" class="ghost">Save as…</button>
-            <button id="save" type="button" class="primary">Save</button>
-          </div>
         </div>
         <div id="format-notice" class="notice" role="status" hidden>
           <span class="ic" aria-hidden="true">⚠</span>
@@ -124,6 +130,7 @@
             <span>Make it play everywhere (recommended) <span class="muted">— this is a Studio 4:4:4 recording, which Windows Media Player, phones and the web can’t open. Untick to keep the 4:4:4 file for VLC or a video editor.</span></span>
           </label>
           <div class="dest muted" id="dest"></div>
+        </div>
         </div>
       </footer>
 

@@ -3,6 +3,9 @@
 const KEY = 'screen-snap-editor-layout'
 
 interface Saved {
+  /** The timeline / the file-name area is folded away (both are open by default). */
+  tlClosed?: boolean
+  saveClosed?: boolean
   /** The timeline's share of the window height (a pixel height is converted when it is first read). */
   tlFrac?: number
   tl?: number
@@ -67,6 +70,7 @@ export function initLayout(onChange: () => void): () => void {
   const cap = (): number => Math.max(150, Math.min(window.innerHeight * 0.46, window.innerHeight - 300))
   let applied = 0
   const fitTimeline = (): boolean => {
+    if (root.classList.contains('tl-closed')) return false
     // Until the person drags the bar themselves, the timeline is just tall enough for its rows, so the picture gets the rest.
     const h = share() ? window.innerHeight * share() : tlLabels().length ? natural() : clamp(window.innerHeight * 0.36, 220, 420)
     const next = Math.round(clamp(h, 150, cap()))
@@ -153,5 +157,38 @@ export function initLayout(onChange: () => void): () => void {
     save(saved)
     onChange()
   })
+  // the timeline and the file-name area can be folded away (▾ / ▸) to give the picture the room; both start open
+  const nameEl = document.getElementById('name') as HTMLInputElement
+  const extEl = document.getElementById('ext')!
+  const summary = document.getElementById('save-summary')!
+  const writeSummary = (): void => {
+    summary.textContent = root.classList.contains('save-closed') ? `${nameEl.value}${extEl.textContent ?? ''}` : ''
+  }
+  const fold = (btnId: string, cls: string, key: 'tlClosed' | 'saveClosed', after: () => void): void => {
+    const btn = document.getElementById(btnId)!
+    const apply = (closed: boolean): void => {
+      root.classList.toggle(cls, closed)
+      btn.setAttribute('aria-expanded', String(!closed))
+    }
+    apply(!!saved[key])
+    btn.addEventListener('click', () => {
+      const closed = !root.classList.contains(cls)
+      apply(closed)
+      saved[key] = closed
+      save(saved)
+      after()
+      onChange()
+    })
+  }
+  fold('tl-fold', 'tl-closed', 'tlClosed', () => {
+    if (!root.classList.contains('tl-closed')) {
+      applied = 0
+      fitTimeline()
+    }
+  })
+  fold('save-fold', 'save-closed', 'saveClosed', writeSummary)
+  nameEl.addEventListener('input', writeSummary)
+  document.getElementById('format')?.addEventListener('change', () => setTimeout(writeSummary, 0))
+  writeSummary()
   return () => refit()
 }
