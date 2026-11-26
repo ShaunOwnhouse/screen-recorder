@@ -89,7 +89,7 @@ On first recording, macOS asks for **Screen & System Audio Recording** permissio
 
 ## Updates
 
-The installed app **updates itself**. A few seconds after it starts (and every few hours after that) it looks for a newer version; if there is one it downloads it quietly in the background and shows a green banner, **Restart to update**. The update also installs when you simply close the app. Your settings and any unsaved recordings are kept, and the app never restarts in the middle of a recording. **Settings → Updates** has a **Check now** button and a switch to turn automatic downloads off.
+The installed app **updates itself**. A few seconds after it starts (and every few hours after that) it looks for a newer version; if there is one it downloads it quietly in the background and shows a green banner with a progress bar, then **Restart to update**; with automatic downloads switched off the banner offers **Update now** instead and shows the progress once you click it. Windows also shows a notice once per version (click it to open Screen Snap), and the **Updates** section button in Settings gets a green dot while an update is waiting. The update also installs when you simply close the app. Your settings and any unsaved recordings are kept, and the app never restarts in the middle of a recording or while you are editing a video. **Settings → Updates** shows the status, has a small **Check now** link and a switch to turn automatic downloads off.
 
 - Install the **Setup** file once. After that you never download an installer again. The *Portable* file can't update itself.
 - **macOS** can only replace itself once the app is code-signed (see below). Until then a Mac is told "Version X is available" with a button to the download page.

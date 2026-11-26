@@ -1707,14 +1707,15 @@ button.accent {
     gap: 2px;
   }
   .rail-btn {
-    padding: 3px 2px;
-    gap: 1px;
-    font-size: 10px;
+    padding: 2px 2px;
+    gap: 0;
+    font-size: 9.5px;
+    line-height: 1.25;
     border-radius: 8px;
   }
   .rail-btn svg {
-    width: 17px;
-    height: 17px;
+    width: 15px;
+    height: 15px;
   }
   .drawer,
   .props {
@@ -1808,4 +1809,76 @@ button.accent {
 
 .editor.tl-closed {
   grid-template-rows: auto minmax(140px, 1fr) 8px auto auto;
+}
+
+/* ---------- the left panel, a little smaller (so the picture and the timeline get the room) ---------- */
+.drawer {
+  padding: 9px;
+  gap: 7px;
+}
+.drawer .drawer-title {
+  font-size: 10.5px;
+}
+.drawer .primary.wide {
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.drawer .tiles {
+  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  gap: 6px;
+}
+.drawer .tile {
+  min-height: 0;
+  height: 52px;
+  padding: 6px 2px 5px;
+  gap: 4px;
+  border-radius: 8px;
+}
+.drawer .tile-label {
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.drawer .prev-bubble,
+.drawer .prev-note,
+.drawer .prev-text,
+.drawer .prev-card {
+  font-size: 10.5px;
+  padding: 2px 8px;
+}
+.drawer .prev-text {
+  font-size: 13px;
+  padding: 0;
+}
+.drawer .prev-arrow {
+  font-size: 16px;
+}
+.drawer .prev-box {
+  width: 24px;
+  height: 15px;
+  border-width: 2px;
+}
+.drawer .prev-step {
+  width: 19px;
+  height: 19px;
+  font-size: 10.5px;
+}
+.drawer .tip {
+  font-size: 11px;
+  line-height: 1.4;
+}
+.drawer .wide {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.drawer .drawer-sub {
+  margin-top: 4px;
+  font-size: 10px;
+}
+@media (max-height: 820px) {
+  .drawer {
+    padding: 8px;
+    gap: 6px;
+  }
 }

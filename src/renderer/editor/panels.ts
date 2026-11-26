@@ -64,8 +64,9 @@ export class Panels {
 
   // ---------- drawer ----------
 
-  private tile(id: string, label: string, preview: HTMLElement | string, onClick: () => void): HTMLElement {
-    return h('button', { type: 'button', class: 'tile', id, onClick }, typeof preview === 'string' ? h('span', { class: 'tile-prev', text: preview }) : preview, h('span', { class: 'tile-label', text: label }))
+  private tile(id: string, label: string, preview: HTMLElement | string, onClick: () => void, short?: string): HTMLElement {
+    // the label on the tile is the short form; the full name shows when the pointer rests on it
+    return h('button', { type: 'button', class: 'tile', id, title: label, 'aria-label': label, onClick }, typeof preview === 'string' ? h('span', { class: 'tile-prev', text: preview }) : preview, h('span', { class: 'tile-label', text: short ?? label.split(' ')[0] }))
   }
 
   private renderDrawer(): void {
@@ -93,8 +94,8 @@ export class Panels {
           heading('Shapes'),
           h('div', { class: 'tiles' },
             this.tile('add-arrow', 'Arrow', h('span', { class: 'prev-arrow', text: '➜' }), () => a.addOverlay('arrow')),
-            this.tile('add-box', 'Highlight box', h('span', { class: 'prev-box' }), () => a.addOverlay('box')),
-            this.tile('add-step', 'Numbered step', h('span', { class: 'prev-step', text: '1' }), () => a.addOverlay('step'))
+            this.tile('add-box', 'Highlight box', h('span', { class: 'prev-box' }), () => a.addOverlay('box'), 'Box'),
+            this.tile('add-step', 'Numbered step', h('span', { class: 'prev-step', text: '1' }), () => a.addOverlay('step'), 'Step')
           ),
           h('h2', { class: 'drawer-sub', text: 'Handy for screen recordings' }),
           h('div', { class: 'wide-list' },
@@ -152,7 +153,7 @@ export class Panels {
         kids.push(
           heading('Title cards'),
           tip('A title card is a full-screen page with your words on it, for the start or end of the video, or to introduce a part. It goes in at the playhead.'),
-          h('div', { class: 'tiles' }, ...CARD_STYLES.map((c) => this.tile(`add-title-${c.id}`, c.label, h('span', { class: `prev-card ${c.id}`, text: 'Title' }), () => a.addTitle(c.id))))
+          h('div', { class: 'tiles' }, ...CARD_STYLES.map((c) => this.tile(`add-title-${c.id}`, c.label, h('span', { class: `prev-card ${c.id}`, text: 'Title' }), () => a.addTitle(c.id), c.id === 'brand' ? 'Brand' : undefined)))
         )
         break
       case 'cut':
