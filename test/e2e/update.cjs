@@ -117,10 +117,10 @@ async function waitFor(fn, ms, every = 1000) {
       const f = path.join(RESULTS, 'updating-window.ps1')
       const gen = spawnSync(process.execPath, ['-e', `import('./src/main/updating-window.ts').then((m) => require('node:fs').writeFileSync(${JSON.stringify(f)}, m.updatingScript()))`], { cwd: ROOT, encoding: 'utf8' })
       const parsed = ps(`$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${f}',[ref]$t,[ref]$e);if($e.Count){($e | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join ' | '}else{'OK'}`)
-      soft('The "Updating" window script is valid PowerShell', parsed === 'OK', parsed || (gen.stderr || '').slice(0, 200))
+      check('The "Updating" window script is valid PowerShell', parsed === 'OK', parsed || (gen.stderr || '').slice(0, 200))
       spawnSync(process.execPath, ['-e', `import('./src/main/updating-window.ts').then((m) => m.showUpdatingWindow())`], { cwd: ROOT, encoding: 'utf8' })
       const shownAlone = await waitFor(() => splashCount() !== '0', 25000, 700)
-      soft('Started on its own (no app involved), the "Updating" window appears', !!shownAlone)
+      check('Started on its own (no app involved), the "Updating" window appears', !!shownAlone)
       if (!shownAlone) {
         log('standalone spawn log:', ps('Get-Content "$env:TEMP\\screen-snap-updating-spawn.log" -ErrorAction SilentlyContinue'))
         log('standalone window log:', ps('Get-Content "$env:TEMP\\screen-snap-updating.log" -ErrorAction SilentlyContinue'))
@@ -165,7 +165,7 @@ async function waitFor(fn, ms, every = 1000) {
     app = null
     // While the installer works nothing else is on screen, so a small window says what is going on (people opened the app half way through)
     const splash = await waitFor(() => splashCount() !== '0', 20000, 500)
-    soft('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
+    check('A small "Updating Screen Snap" window is on screen while the update installs', !!splash, splash ? '' : 'no such window')
     if (!splash) {
       log('powershell processes:', ps('Get-Process powershell -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) [$($_.MainWindowTitle)]" }'))
       log('window log:', ps('Get-Content "$env:TEMP\\screen-snap-updating.log" -ErrorAction SilentlyContinue'))
@@ -177,7 +177,7 @@ async function waitFor(fn, ms, every = 1000) {
     const relaunched = await waitFor(() => running(), 90000, 1000)
     check('The new version started itself after the update', !!relaunched)
     const splashGone = await waitFor(() => splashCount() === '0', 30000, 1000)
-    soft('The "Updating" window closes once the new version has started', !!splashGone)
+    check('The "Updating" window closes once the new version has started', !!splashGone)
     spawnSync('taskkill', ['/F', '/IM', 'Screen Snap.exe', '/T'], { windowsHide: true })
     await sleep(3000)
 
