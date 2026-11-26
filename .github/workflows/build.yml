@@ -131,6 +131,17 @@ jobs:
         shell: bash
         run: node test/e2e/update.cjs "dist/Screen-Snap-Setup-$APP_VERSION.exe"
 
+      # The same update test, but the newer build is hosted on GitHub itself (one fixed release, "update-test") and downloaded through
+      # GitHub's real download links, redirects and partial downloads included — the way installed copies get their updates.
+      # It cannot hold up a release while it is being proven; a failure shows in this step.
+      - name: Update test through GitHub's real download links
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node test/e2e/update.cjs "dist/Screen-Snap-Setup-$APP_VERSION.exe" --github
+
       # Only reached when the end-to-end test above passed. Publishes the installers the test just ran.
       - name: Publish the Windows build to the Latest build release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -152,6 +163,14 @@ jobs:
 
           **Windows:** the exact installers attached here were run through an end-to-end test on a real Windows machine (record, review, edit, save in every format, screenshots, shortcuts): $CHECKS checks passed. The same run also proved the self-update: it installed an older build, found this newer one, downloaded it, restarted into it and kept its settings.
           **macOS:** the \`.dmg\` files are built but not yet tested on a Mac."
+
+      # Reads the update feed the way an installed copy does (the real download address, redirects and all) and checks the installer
+      # that was just published is complete and exactly what latest.yml says, so a broken feed is noticed at once.
+      - name: Check the published update feed
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        shell: bash
+        run: node scripts/check-feed.cjs "$UPDATE_FEED_URL" "$APP_VERSION"
 
       - name: Upload end-to-end results
         if: always()

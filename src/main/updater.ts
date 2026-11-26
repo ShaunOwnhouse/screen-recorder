@@ -6,6 +6,8 @@ import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-update
 import { friendlyUpdateError, type UpdateStatus } from '../shared/updates.ts'
 
 const LOCAL_FEED = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/
+/** The tests can also read the "newer build" from one fixed GitHub release (to try GitHub's real download links). */
+const TEST_FEED = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/releases\/download\/update-test\/?$/
 const FIRST_CHECK_MS = 20_000
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 
@@ -42,7 +44,7 @@ export class Updater extends EventEmitter {
   constructor(private readonly deps: Deps) {
     super()
     const feed = process.env.SCREEN_SNAP_UPDATE_FEED
-    const override = feed && LOCAL_FEED.test(feed) ? feed : null // for tests only: a feed on this very computer
+    const override = feed && (LOCAL_FEED.test(feed) || TEST_FEED.test(feed)) ? feed : null // for tests only: a feed on this very computer, or the fixed test release
     // macOS only lets signed apps replace themselves; until the app is signed an update is announced and installed by hand.
     this.notifyOnly = process.platform === 'darwin' && !this.meta.signedBuild
     this.unsupported = override
