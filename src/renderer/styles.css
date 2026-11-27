@@ -1120,6 +1120,48 @@ button.has-update::after {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* about three rows; more scroll inside the list, so the panel doesn't grow past the screen */
+  max-height: 188px;
+  overflow-y: auto;
+}
+
+.projects-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.card-fold .chev {
+  display: inline-block;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.card-fold[aria-expanded='false'] .chev {
+  transform: rotate(-90deg);
+}
+
+.card-fold .count {
+  margin-left: 4px;
+  padding: 0 7px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0;
 }
 
 .prow {

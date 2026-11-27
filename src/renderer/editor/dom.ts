@@ -60,3 +60,37 @@ export function number(value: number, min: number, max: number, step: number, on
   })
   return el
 }
+
+const FOLD_KEY = 'screen-snap-editor-folds'
+
+function foldChoices(): Record<string, boolean> {
+  try {
+    const j = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') as Record<string, boolean>
+    return j && typeof j === 'object' ? j : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * A section of the settings panel that folds away to save room (the panel stays short on a small screen). A title line with the
+ * current choice on its right opens and closes it; the choice is remembered, so it stays the way the person left it.
+ */
+export function foldSection(id: string, title: string, summary: string, openByDefault: boolean, ...children: Child[]): { root: HTMLElement; setSummary: (text: string) => void } {
+  const saved = foldChoices()[id]
+  let open = typeof saved === 'boolean' ? saved : openByDefault
+  const sum = h('span', { class: 'fold-sum', text: summary })
+  const head = h('button', { type: 'button', class: 'fold-head', id: `${id}-fold`, 'aria-expanded': String(open) }, h('span', { class: 'chev', 'aria-hidden': 'true', text: '▾' }), h('span', { class: 'fold-title', text: title }), sum)
+  const body = h('div', { class: 'fold-body', hidden: !open }, ...children)
+  head.addEventListener('click', () => {
+    open = !open
+    head.setAttribute('aria-expanded', String(open))
+    body.hidden = !open
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify({ ...foldChoices(), [id]: open }))
+    } catch {
+      // not remembered, still works
+    }
+  })
+  return { root: h('div', { class: 'psec fold-sec', id: `${id}-section` }, head, body), setSummary: (text) => void (sum.textContent = text) }
+}

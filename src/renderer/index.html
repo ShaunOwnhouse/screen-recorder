@@ -39,9 +39,13 @@
       </section>
 
       <section id="projects" class="card projects" hidden>
-        <span class="label">Saved projects</span>
-        <div id="project-list" class="project-list"></div>
-        <p class="hint">Open one to carry on editing: every cut, comment, sound and effect is still there.</p>
+        <button id="projects-fold" type="button" class="card-fold" aria-expanded="true" title="Fold the list away to give the panel more room">
+          <span class="label">Saved projects <span id="projects-count" class="count"></span></span><span class="chev" aria-hidden="true">▾</span>
+        </button>
+        <div id="projects-body" class="projects-body">
+          <div id="project-list" class="project-list"></div>
+          <p class="hint">Open one to carry on editing: every cut, comment, sound and effect is still there.</p>
+        </div>
       </section>
 
 

@@ -1164,6 +1164,12 @@ async function save(app, editor, name) {
       check('Projects: the home panel lists it by name, with its date, length and size', rows.length === 1 && /My project/.test(rows[0]) && /MB|GB/.test(rows[0]) && /\d:\d\d/.test(rows[0]), rows.join(' / '))
       check('Projects: the list has a small picture of the video', (await main.locator('#project-list img.thumb').count()) === 1)
       await shot(main, 'panel-projects')
+      check('Projects: the card shows how many there are, and its list can be folded away to save room', (await main.textContent('#projects-count')).trim() === '1' && (await main.getAttribute('#projects-fold', 'aria-expanded')) === 'true')
+      await main.click('#projects-fold')
+      check('Projects: clicking the title folds the list away', (await main.evaluate(() => document.getElementById('projects-body').hidden)) && (await main.getAttribute('#projects-fold', 'aria-expanded')) === 'false')
+      check('Projects: the panel is shorter with it folded', (await main.evaluate(() => document.getElementById('projects').getBoundingClientRect().height)) < 70)
+      await main.click('#projects-fold')
+      check('Projects: and clicking again opens it', await main.isVisible('#project-list .prow .open'))
       // reopen: everything as it was left
       await main.click('#project-list .prow .open')
       const again = await waitForWindow(app, 'editor.html', 30000)

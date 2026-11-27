@@ -16,6 +16,9 @@ const el = {
   pendingName: $('pending-name'),
   projects: $('projects'),
   projectList: $('project-list'),
+  projectsFold: $('projects-fold'),
+  projectsBody: $('projects-body'),
+  projectsCount: $('projects-count'),
   keepProjects: $<HTMLInputElement>('keep-projects'),
   keepHint: $('keep-hint'),
   idleView: $('idle-view'),
@@ -746,8 +749,16 @@ async function loadProjects(): Promise<void> {
       return row
     })
   )
+  el.projectsCount.textContent = String(list.length)
   const total = list.reduce((n, p) => n + p.sizeBytes, 0)
   el.keepHint.textContent = list.length ? `${fmtSize(total)} of disk for ${list.length} project${list.length === 1 ? '' : 's'}` : 'Uses disk space: a recording can be large. Delete any time from the list.'
+}
+
+/** The list can be folded away (the choice is remembered): a long list would push the rest of the panel off a small screen. */
+function setProjectsOpen(open: boolean): void {
+  el.projectsFold.setAttribute('aria-expanded', String(open))
+  el.projectsBody.hidden = !open
+  prefSet('projectsOpen', open ? '1' : '0')
 }
 
 /** A short note in the panel's warning strip. */
@@ -762,6 +773,8 @@ function showHint(text: string): void {
 async function init(): Promise<void> {
   bind()
   setSettingsOpen(prefGet('settingsOpen') === '1')
+  setProjectsOpen(prefGet('projectsOpen') !== '0')
+  el.projectsFold.addEventListener('click', () => setProjectsOpen(el.projectsBody.hidden))
   tab = prefGet('tab') === 'shot' ? 'shot' : 'record'
   settings = await api.getSettings()
   renderSettings()

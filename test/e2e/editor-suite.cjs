@@ -10,6 +10,12 @@ async function editorSuite(c) {
   const store = (fn, arg) => editor.evaluate(fn, arg)
   const tag = 'Editor'
   const approx = (a, b, tol) => Math.abs(a - b) <= tol
+  /** Opens a folded section of the settings panel (they start closed to keep the panel short). */
+  const openFold = async (id) => {
+    const head = editor.locator(`#${id}-fold`)
+    await head.waitFor({ timeout: 5000 })
+    if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click()
+  }
 
   // ---- media to add ----
   const media = path.join(userData, 'extra-media')
@@ -157,11 +163,16 @@ async function editorSuite(c) {
   {
     const clipId = (await state()).clips[0].id
     await editor.click(`.blk.clip[data-clip="${clipId}"]`)
-    await editor.waitForSelector('#look-presets', { timeout: 5000 })
+    await editor.waitForSelector('#look-fold', { timeout: 5000 })
+    check(`${tag}: the Look and Freeze frame sections start folded away, to keep the panel short`, (await editor.getAttribute('#look-fold', 'aria-expanded')) === 'false' && (await editor.getAttribute('#freeze-fold', 'aria-expanded')) === 'false' && !(await editor.isVisible('#look-presets')), '')
+    check(`${tag}: a folded section still says its state on its title line`, /Original/.test(await editor.textContent('#look-fold')) && /2 s/.test(await editor.textContent('#freeze-fold')), (await editor.textContent('#look-fold')).trim())
+    await openFold('look')
+    check(`${tag}: clicking the title opens the section`, await editor.isVisible('#look-presets'))
     const lookOf = () => store((id) => window.__editor.store.project.clips.find((k) => k.id === id)?.look ?? null, clipId)
     check(`${tag}: a piece has a Look section with ready-made looks and four sliders`, (await editor.locator('#look-presets .look').count()) === 6 && (await editor.locator('#look-section input[type=range]').count()) === 4)
     check(`${tag}: a piece starts with no look, and "Original" is the one chosen`, (await lookOf()) === null && (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'original')
     await editor.click('#look-presets [data-look="bw"]')
+    check(`${tag}: the title line follows the chosen look`, /Black & white/.test(await editor.textContent('#look-fold')), (await editor.textContent('#look-fold')).trim())
     let look = await lookOf()
     check(`${tag}: Black & white takes the colour out`, !!look && look.saturation === 0, JSON.stringify(look))
     check(`${tag}: the chosen look is highlighted`, (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'bw')
@@ -184,10 +195,19 @@ async function editorSuite(c) {
     await editor.click('#undo')
     look = await lookOf()
     check(`${tag}: Undo takes the slider change back`, !!look && look.brightness === 0 && look.saturation === 0, JSON.stringify(look))
+    check(`${tag}: after a slider the title line says Custom`, /Custom/.test(await editor.textContent('#look-fold')))
     await editor.click('#look-reset')
     check(`${tag}: Reset look puts the colours back as recorded`, (await lookOf()) === null && (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'original')
     await sleep(300)
     check(`${tag}: and the preview filter is gone`, (await editor.evaluate((id) => document.querySelector(`#layers [data-layer="${id}"]`)?.style.filter ?? 'x', clipId)) === '')
+    // the open section stays open when the panel is rebuilt (another piece picked, then this one again)
+    await editor.click('#undo').catch(() => undefined)
+    await store(() => window.__editor.store.select(null))
+    await store((id) => window.__editor.store.select({ kind: 'clip', id }), clipId)
+    await editor.waitForSelector('#look-fold', { timeout: 5000 })
+    check(`${tag}: a section left open stays open when the panel is rebuilt`, (await editor.getAttribute('#look-fold', 'aria-expanded')) === 'true' && (await editor.isVisible('#look-presets')))
+    await editor.click('#look-fold')
+    check(`${tag}: clicking the title again folds it away`, !(await editor.isVisible('#look-presets')))
   }
 
   // ---- freeze frame: hold the picture at the playhead ----
@@ -223,6 +243,7 @@ async function editorSuite(c) {
     // from the piece's own settings, with a longer hold
     await seekTo(editor, before.duration * 0.4)
     await editor.click(`.blk.clip[data-clip="${before.clips[0].id}"]`)
+    await openFold('freeze')
     await editor.waitForSelector('#prop-freeze', { timeout: 5000 })
     await editor.evaluate(() => {
       const i = document.getElementById('freeze-hold')

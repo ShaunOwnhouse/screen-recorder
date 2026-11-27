@@ -2,7 +2,7 @@ import { cleanLook, clipLength, DISSOLVE, MAX_FREEZE, MIN_FREEZE, isFloating, is
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
-import { button, h, number, range, section, select, toggle } from './dom.ts'
+import { button, foldSection, h, number, range, section, select, toggle } from './dom.ts'
 import { luminance } from './draw.ts'
 import { levelEditor } from './level.ts'
 import { overlayLabel } from './timeline.ts'
@@ -340,17 +340,18 @@ export class Panels {
     return out
   }
 
-  /** Freeze frame: hold the picture at the playhead for a few seconds. */
+  /** Freeze frame: hold the picture at the playhead for a few seconds (a section that folds away, closed to start with: the toolbar has the button too). */
   private freezeSection(): HTMLElement {
-    const out = h('div', { class: 'psec', id: 'freeze-section' }, h('h3', { text: 'Freeze frame' }))
-    const slider = range(this.actions.freezeHold, MIN_FREEZE, Math.min(MAX_FREEZE, 10), 0.5, (v) => { this.actions.freezeHold = v }, (v) => `${Number(v.toFixed(1))} s`, 'freeze-hold')
-    out.append(
+    const hold = (v: number): string => `${Number(v.toFixed(1))} s`
+    const slider = range(this.actions.freezeHold, MIN_FREEZE, Math.min(MAX_FREEZE, 10), 0.5, (v) => { this.actions.freezeHold = v; fold.setSummary(hold(v)) }, hold, 'freeze-hold')
+    const fold = foldSection(
+      'freeze', 'Freeze frame', hold(this.actions.freezeHold), false,
       button('❄ Freeze frame here', () => void this.actions.freeze(), 'ghost freeze', { id: 'prop-freeze', title: 'Hold the picture at the playhead (S cuts, this holds)' }),
       h('span', { class: 'tip', text: 'holds the picture at the playhead for:' }),
       slider,
       h('p', { class: 'tip', text: 'Cuts the video at the playhead and adds a still picture of that exact moment. Everything after it moves later. Make the still longer or shorter by dragging its edge on the timeline.' })
     )
-    return out
+    return fold.root
   }
 
   /** Colour and brightness: a few ready-made looks and four sliders. The preview and the saved video use the same maths. */
@@ -359,6 +360,12 @@ export class Panels {
     const live = (): Clip => s.project.clips.find((x) => x.id === c.id) ?? c
     const cur = (): Look => cleanLook(live().look)
     const set = (look: Look, merge?: string): void => s.patchClip(c.id, { look: isNeutralLook(look) ? undefined : look }, merge ?? `lk:${c.id}`)
+    /** What the title line says: the look's name, or Custom when it was adjusted by hand. */
+    const summary = (): string => {
+      const id = lookPresetId(live().look)
+      return id ? (LOOK_PRESETS.find((q) => q.id === id)?.name ?? '') : 'Custom'
+    }
+    let setSummary: (text: string) => void = () => undefined
     const chips = h('div', { class: 'looks', id: 'look-presets' })
     for (const p of LOOK_PRESETS) {
       chips.append(h('button', { type: 'button', class: `look ${p.id}`, 'data-look': p.id, onClick: () => { set(p.look, `lkp:${c.id}:${Date.now()}`); refresh() } }, h('i'), p.name))
@@ -380,6 +387,7 @@ export class Panels {
     const refresh = (sliders = true): void => {
       const id = lookPresetId(live().look)
       for (const b of chips.querySelectorAll<HTMLElement>('.look')) b.classList.toggle('on', b.dataset.look === id)
+      setSummary(summary())
       if (!sliders) return
       for (const [key, x] of inputs) {
         x.input.value = String(cur()[key])
@@ -387,13 +395,14 @@ export class Panels {
       }
     }
     refresh(false)
-    return h('div', { class: 'psec', id: 'look-section' },
-      h('h3', { text: 'Look' }),
+    const fold = foldSection('look', 'Look', summary(), false,
       chips,
       ...sliders,
       h('div', { class: 'look-foot' },
         h('span', { class: 'tip', text: 'Colour and brightness of this piece. What you see here is what gets saved.' }),
         button('Reset look', () => { s.patchClip(c.id, { look: undefined }, `lkp:${c.id}:${Date.now()}`); refresh() }, 'ghost small', { id: 'look-reset' })))
+    setSummary = fold.setSummary
+    return fold.root
   }
 
   /** Fade in or out: how long, and into what: black, white, a brand colour, or see-through (the track behind shows). */

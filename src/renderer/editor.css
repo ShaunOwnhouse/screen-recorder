@@ -1955,3 +1955,60 @@ button.accent {
   border-color: #38bdf8;
   color: #7dd3fc;
 }
+
+/* ---------- sections of the settings panel that fold away ---------- */
+.fold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.fold-head:hover {
+  color: var(--text);
+}
+
+.fold-head .chev {
+  display: inline-block;
+  font-size: 13px;
+  transition: transform 0.15s;
+}
+
+.fold-head[aria-expanded='false'] .chev {
+  transform: rotate(-90deg);
+}
+
+.fold-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fold-sum {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+
+.fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fold-body[hidden] {
+  display: none;
+}
