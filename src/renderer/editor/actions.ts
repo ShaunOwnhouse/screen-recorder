@@ -1,6 +1,6 @@
 import {
-  addAudioTrack, addCameraClip, addClip, addSound, addVideoTrack, clipEnd, deleteClip, detachSound, duplicateClip, duplicateSound, insertClipPushing, newId, patchTrack,
-  removeTrack, setClipSpeed, setSoundSpeed, splitAt, splitSound, type Clip, type Overlay, type Sound, type Track
+  activeClips, addAudioTrack, addCameraClip, addClip, addSound, addVideoTrack, clipEnd, deleteClip, detachSound, duplicateClip, duplicateSound, freezeFrame, insertClipPushing, newId, patchTrack,
+  isFloating, removeTrack, setClipSpeed, setSoundSpeed, splitAt, splitSound, trackById, type Clip, type Overlay, type Sound, type Track
 } from '../../shared/project.ts'
 import type { MediaInfo } from '../../shared/types.ts'
 import { CARD_STYLES, newCardClip, newClipFrom, newOverlay, newPipClip, type NewKind } from './defaults.ts'
@@ -203,6 +203,35 @@ export class Actions {
     const e = splitAt(s.project, t, sel)
     if (!e) return this.onNote('Move the playhead into a piece first — you can’t cut right at an edge.')
     s.edit(() => e.project, { select: e.select ? { kind: 'clip', id: e.select } : s.selection })
+  }
+
+  /** How long the next freeze frame holds, in seconds (set in the piece's settings, used by every freeze button). */
+  freezeHold = 2
+
+  /**
+   * Freezes the picture at the playhead for `hold` seconds: takes a still of that exact moment and puts it between the two halves
+   * of the piece (everything after moves later). It is the selected piece when that is showing at the playhead, otherwise the
+   * piece in front of the screen (not a small window) that is playing there.
+   */
+  async freeze(hold = this.freezeHold): Promise<void> {
+    const s = this.store
+    const p = s.project
+    const t = s.snap(s.playhead)
+    const usable = (c: Clip): boolean => {
+      const tr = trackById(p, c.track)
+      return c.kind !== 'image' && !c.card && t > c.start + 0.1 && t < clipEnd(c) - 0.1 && !!tr && !tr.locked && !tr.hidden
+    }
+    const showing = activeClips(p, t).filter(usable).reverse()
+    const c = s.selectedClip && usable(s.selectedClip) ? s.selectedClip : (showing.find((k) => !isFloating(k)) ?? showing[0])
+    if (!c) return this.onNote('Move the playhead onto the video first (not right at the start or end of a piece), then freeze.')
+    const source = c.in + (t - c.start) * c.speed
+    const got = await api.grabFrame({ media: c.kind === 'recording' ? 'recording' : c.media, time: source, crop: c.kind === 'recording' ? p.crop : null })
+    if ('error' in got) return this.onNote(got.error)
+    this.register([got])
+    const e = freezeFrame(s.project, c.id, t, { media: got.id, name: got.name, width: got.width, height: got.height }, hold)
+    if (!e) return this.onNote('That piece can’t be frozen here.')
+    s.edit(() => e.project, { select: e.select ? { kind: 'clip', id: e.select } : s.selection })
+    this.onReveal(t)
   }
 
   /** Deletes whatever is selected. A piece of video closes the gap on every track, unless `ripple` is off (then it leaves a gap). */

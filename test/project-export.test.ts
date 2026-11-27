@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, LOOK_PRESETS, lookMatrix, patchTrack, removeSpan, type ClipShape, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
+import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, freezeFrame, LOOK_PRESETS, lookMatrix, patchTrack, removeSpan, type ClipShape, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -684,4 +684,33 @@ test('a look also colours a small window, and a round one', { timeout: 120000 },
   assert.ok(f.at(Math.round(W * 0.2), Math.round(H * 0.2))[0] > 0x80 + 30, `the small window is brighter: ${f.at(Math.round(W * 0.2), Math.round(H * 0.2))}`)
   assert.ok(f.at(Math.round(W * 0.8), Math.round(H * 0.5 + W * 0.15))[0] > 0x80 + 30, 'the round window is brighter')
   assert.ok(near(f.at(300, 300), [0x20, 0xa0, 0x40], 16), 'the screen behind is untouched')
+}))
+
+// ---------- freeze frame ----------
+
+test('a freeze frame holds one picture for the time asked, then the video carries on from the same moment', { timeout: 180000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 4, { source: 'testsrc2', tone: null })
+  const still = join(dir, 'still.png')
+  run(['-ss', '1', '-i', s.media.recording.path, '-frames:v', '1', '-vf', 'format=rgb24', still])
+  s.media.freeze = { path: still, kind: 'image', hasAudio: false, duration: 0, width: W, height: H }
+  const e = freezeFrame(s.project, s.project.clips[0].id, 1, { media: 'freeze', name: 'Frame', width: W, height: H }, 2)!
+  s.project = e.project
+  const out = exportIt(dir, s)
+  assert.ok(Math.abs(seconds(out.file) - 6) < 0.25, `${seconds(out.file)}`)
+  const diff = (a: Buffer, b: Buffer): number => {
+    let sum = 0
+    for (let i = 0; i < a.length; i += 7) sum += Math.abs(a[i] - b[i])
+    return sum / Math.ceil(a.length / 7)
+  }
+  const early = frame(out.file, 0.4)
+  const heldA = frame(out.file, 1.4)
+  const heldB = frame(out.file, 2.7)
+  const after = frame(out.file, 4.2)
+  assert.ok(diff(heldA.data, heldB.data) < 4, `the held picture does not change (${diff(heldA.data, heldB.data).toFixed(1)})`)
+  assert.ok(diff(early.data, heldA.data) > 6, `the picture before it was moving (${diff(early.data, heldA.data).toFixed(1)})`)
+  assert.ok(diff(heldB.data, after.data) > 6, `and it moves on afterwards (${diff(heldB.data, after.data).toFixed(1)})`)
+  // the second half continues from where the still was taken: output 3.0 s is source 1.0 s again
+  const resume = frame(out.file, 3.2)
+  const source = frame(s.media.recording.path, 1.2)
+  assert.ok(diff(resume.data, source.data) < 12, `the video resumes from the held moment (${diff(resume.data, source.data).toFixed(1)})`)
 }))

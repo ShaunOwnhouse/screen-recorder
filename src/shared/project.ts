@@ -748,6 +748,46 @@ export function splitAt(p: Project, t: number, selectedClip?: string): Edit | nu
   return { project: next, select: fresh?.id }
 }
 
+// ---------- freeze frame ----------
+
+export const MIN_FREEZE = 0.5
+export const MAX_FREEZE = 30
+
+/** A still picture taken from a piece (what the freeze frame shows). */
+export interface Still {
+  /** Id of the picture file the editor registered for it. */
+  media: string
+  name: string
+  width: number
+  height: number
+}
+
+/**
+ * Holds the picture at time `at` for `hold` seconds: the piece is cut there and a still of that moment is put between the two halves,
+ * on the same track and in the same place in the picture. Everything after that moment (pieces on every track, comments, sounds that
+ * belong to the pictures) slides later by `hold`. Music playing across the moment carries on without a break. Null when `at` isn't
+ * inside the piece, the piece is a picture, or its track is locked.
+ */
+export function freezeFrame(p: Project, clipId: string, at: number, still: Still, hold = 2): Edit | null {
+  const c = p.clips.find((x) => x.id === clipId)
+  if (!c || c.kind === 'image' || c.card) return null
+  const track = trackById(p, c.track)
+  if (!track || track.locked) return null
+  if (at <= c.start + MIN_CLIP || at >= clipEnd(c) - MIN_CLIP) return null
+  const len = clamp(hold, MIN_FREEZE, MAX_FREEZE)
+  const clips: Clip[] = p.clips
+    .flatMap((k) => (at > k.start + MIN_CLIP / 2 && at < clipEnd(k) - MIN_CLIP / 2 ? splitClipAt(k, at) : [k]))
+    .map((k) => (k.start >= at - EPS ? { ...k, start: k.start + len } : k))
+  const sounds: Sound[] = p.sounds
+    .flatMap((x) => (x.origin !== 'music' && at > x.start + MIN_SOUND / 2 && at < soundEnd(x) - MIN_SOUND / 2 ? splitSoundAt(x, at) : [x]))
+    .map((x) => (x.start >= at - EPS ? { ...x, start: x.start + len } : x))
+  const piece: Clip = {
+    ...newClipBase(), id: newId('c'), track: c.track, start: at, kind: 'image', media: still.media, name: still.name, in: 0, out: len, hasAudio: false, volume: 1,
+    width: still.width, height: still.height, box: c.box, border: c.border, shape: c.shape, look: c.look
+  }
+  return { project: { ...p, clips: [...clips, piece], sounds, overlays: openGap(p.overlays, at, len) }, select: piece.id }
+}
+
 /** Takes the span [a, b) out of the whole timeline: everything inside it goes, everything after it slides earlier. */
 export function removeSpan(p: Project, a: number, b: number): Project {
   const cut = b - a

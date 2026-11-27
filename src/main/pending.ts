@@ -18,6 +18,8 @@ export const joinListFor = (file: string): string => file.replace(/\.mp4$/i, '.p
 export const cameraRawFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.webm')
 export const cameraFileFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.mp4')
 export const cameraInfoFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.json')
+/** Pictures and other files that belong to one recording's edit (freeze-frame pictures, copies of files added to it). */
+export const mediaDirFor = (file: string): string => file.replace(/\.mp4$/i, '.media')
 /** The computer sound / microphone of a recording taken out as files of their own, for the editor. */
 export const trackFileFor = (file: string, kind: 'pc' | 'mic'): string => file.replace(/\.mp4$/i, `.${kind}.m4a`)
 
@@ -57,6 +59,7 @@ export function removePending(file: string): void {
   for (const p of [file, proxyPathFor(file), joinListFor(file), cameraRawFor(file), cameraFileFor(file), cameraInfoFor(file), trackFileFor(file, 'pc'), trackFileFor(file, 'mic'), ...segmentsOf(file)]) {
     retryBusy(() => rmSync(p, { force: true }))
   }
+  retryBusy(() => rmSync(mediaDirFor(file), { recursive: true, force: true }))
 }
 
 /** Every piece of a recording that is still around, in order. */

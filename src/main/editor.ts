@@ -6,13 +6,13 @@ import { buildCopyArgs, buildProxyArgs, TRACK_NAMES } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
 import { ProgressParser, parseMediaInfo } from './parse.ts'
-import { cameraFileFor, cameraInfoFor, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
-import { buildProjectArgs, type ExportMedia, type ExportPicture } from './project-export.ts'
+import { cameraFileFor, cameraInfoFor, mediaDirFor, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
+import { buildProjectArgs, cropPixels, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
 import { isPlain, type Project } from '../shared/project.ts'
 import type { AssetSave, EditorLoad } from '../shared/api.ts'
 import { videoFormat } from '../shared/formats.ts'
-import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, PreviewRequest, RecordingMeta, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
+import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, PreviewRequest, RecordingMeta, Rect, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
 
 const VIDEO_EXT = ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'mpg', 'mpeg']
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
@@ -108,6 +108,7 @@ export class EditorController {
     ipcMain.handle('editor:pick-media', (e, kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.pickMedia(kind) : []))
     ipcMain.handle('editor:add-media', (e, paths: string[], kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.addMedia(paths, kind) : []))
     ipcMain.handle('editor:save-asset', (e, spec: AssetSave) => (this.owns(e.sender) ? this.saveAsset(spec) : { error: 'Not available.' }))
+    ipcMain.handle('editor:grab-frame', (e, spec: { media: string; time: number; crop: Rect | null }) => (this.owns(e.sender) ? this.grabFrame(spec) : { error: 'Not available.' }))
     ipcMain.handle('editor:waveform', (e, id: string, buckets: number) => (this.owns(e.sender) ? this.waveform(id, buckets) : []))
     ipcMain.handle('editor:strip', (e, id: string, count: number) => (this.owns(e.sender) ? this.strip(id, count) : ''))
     ipcMain.handle('editor:save-brand', (e, brand: Brand) => (this.owns(e.sender) ? this.deps.saveBrand(brand) : brand))
@@ -530,6 +531,30 @@ export class EditorController {
       out.push(full)
     }
     return out
+  }
+
+  /**
+   * A picture of one moment of a video (for a freeze frame), kept with the recording's other files and registered like any added
+   * picture. The recording's crop is applied so the still matches what the video shows.
+   */
+  private async grabFrame(spec: { media: string; time: number; crop: Rect | null }): Promise<MediaInfo | { error: string }> {
+    const src = this.pathOf(spec.media)
+    if (!this.file || !src || !existsSync(src) || !Number.isFinite(spec.time)) return { error: 'That picture is no longer available.' }
+    const meta = spec.media === 'recording' && spec.crop ? await probeMedia(src) : null
+    const crop = meta ? cropPixels(spec.crop, meta.width, meta.height) : null
+    const id = `m${++this.counter}`
+    const dir = mediaDirFor(this.file)
+    mkdirSync(dir, { recursive: true })
+    const out = join(dir, `freeze-${id}.png`)
+    const vf = [...(crop ? [`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`] : []), 'format=rgb24'].join(',')
+    await runFfmpeg(['-hide_banner', '-loglevel', 'error', '-y', '-ss', String(Math.max(0, spec.time)), '-i', src, '-frames:v', '1', '-vf', vf, out])
+    if (!existsSync(out) || statSync(out).size < 100) return { error: 'Couldn’t take a picture of that moment.' }
+    const { stderr } = await runFfmpeg(['-hide_banner', '-i', out])
+    const v = parseMediaInfo(stderr)
+    if (!v) return { error: 'Couldn’t take a picture of that moment.' }
+    const full: MediaInfo = { id, name: `Frame at ${Math.floor(spec.time / 60)}:${String(Math.floor(spec.time % 60)).padStart(2, '0')}.png`, kind: 'image', duration: 0, width: v.width, height: v.height, hasAudio: false, url: addedMediaUrl(id) }
+    this.added.set(id, { info: full, path: out })
+    return full
   }
 
   /** Saves a stretch of one file as a file of its own: just its picture, or just its sound. */

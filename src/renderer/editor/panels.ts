@@ -1,4 +1,4 @@
-import { cleanLook, clipLength, DISSOLVE, isFloating, isFullBox, isNeutralLook, LOOK_PRESETS, LOOK_RANGE, lookPresetId, MAX_SPEED, MIN_SPEED, moveClip, windowCorner, type Fade, type Clip, type ClipShape, type Corner, type Look, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { cleanLook, clipLength, DISSOLVE, MAX_FREEZE, MIN_FREEZE, isFloating, isFullBox, isNeutralLook, LOOK_PRESETS, LOOK_RANGE, lookPresetId, MAX_SPEED, MIN_SPEED, moveClip, windowCorner, type Fade, type Clip, type ClipShape, type Corner, type Look, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -161,6 +161,7 @@ export class Panels {
           heading('Cut'),
           tip('Move the playhead to where you want to cut, then press Split. Click a piece and press Delete to take it out — what is after it moves up to close the gap. Drag the ends of a piece to trim it.'),
           button('✂  Split at the playhead  (S)', () => a.split(), 'primary wide', { id: 'cut-split' }),
+          button('❄  Freeze frame here', () => void a.freeze(), 'ghost wide', { id: 'cut-freeze', title: 'Hold the picture at the playhead for a few seconds (set how long in the settings of a piece)' }),
           button('Delete the selected piece  (Del)', () => a.deleteSelected(), 'ghost wide', { id: 'cut-delete' })
         )
         break
@@ -339,6 +340,19 @@ export class Panels {
     return out
   }
 
+  /** Freeze frame: hold the picture at the playhead for a few seconds. */
+  private freezeSection(): HTMLElement {
+    const out = h('div', { class: 'psec', id: 'freeze-section' }, h('h3', { text: 'Freeze frame' }))
+    const slider = range(this.actions.freezeHold, MIN_FREEZE, Math.min(MAX_FREEZE, 10), 0.5, (v) => { this.actions.freezeHold = v }, (v) => `${Number(v.toFixed(1))} s`, 'freeze-hold')
+    out.append(
+      button('❄ Freeze frame here', () => void this.actions.freeze(), 'ghost freeze', { id: 'prop-freeze', title: 'Hold the picture at the playhead (S cuts, this holds)' }),
+      h('span', { class: 'tip', text: 'holds the picture at the playhead for:' }),
+      slider,
+      h('p', { class: 'tip', text: 'Cuts the video at the playhead and adds a still picture of that exact moment. Everything after it moves later. Make the still longer or shorter by dragging its edge on the timeline.' })
+    )
+    return out
+  }
+
   /** Colour and brightness: a few ready-made looks and four sliders. The preview and the saved video use the same maths. */
   private lookSection(c: Clip): HTMLElement {
     const s = this.store
@@ -507,6 +521,7 @@ export class Panels {
       h('div', { class: 'psec actions' },
         button('Split at playhead', () => this.actions.split(), 'ghost', { id: 'prop-split' }),
         button('Duplicate', () => this.actions.duplicate(), 'ghost', { id: 'prop-clip-duplicate', title: 'Put a copy on the track above, ready to slide wherever you like' })),
+      ...(c.kind !== 'image' && !c.card ? [this.freezeSection()] : []),
       h('div', { class: 'psec actions' },
         button('Delete', () => this.actions.deleteSelected(true), 'danger-ghost', { id: 'prop-delete', title: 'Remove it and close the gap on every track' }),
         button('Delete, leave a gap', () => this.actions.deleteSelected(false), 'danger-ghost', { id: 'prop-delete-gap', title: 'Remove it and leave an empty space where it was' }))

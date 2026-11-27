@@ -4,7 +4,7 @@ import {
   activeClips, addAudioTrack, addClip, addSound, addVideoTrack, baseVideoTrack, clipEnd, clipLength, cutOverlays, deleteClip, detachSound,
   duplicateClip, duplicateSound, insertClipPushing, insertGap, isFree, isPlain, moveClip, moveSound, addCameraClip, clipBoxHeight, isFloating, newClipBase, newId, newProject, nearestFree, openGap,
   overlayAlpha, patchTrack, removeSpan, removeTrack, setClipSpeed, setSoundSpeed, soundEnd, splitAt, totalDuration, trimClip, trimSound, videoTracks,
-  envAt, envCut, envDip, envOpen, envPut, envRamp, envRemove, envScale, envShift, envSplit, zoomState, type Clip, type Overlay, type Project, type Sound, type ZoomOverlay
+  envAt, envCut, envDip, envOpen, envPut, envRamp, envRemove, envScale, envShift, envSplit, freezeFrame, isNeutralLook, cleanLook, lookMatrix, lookPresetId, LOOK_PRESETS, NO_LOOK, zoomState, type Clip, type Overlay, type Project, type Sound, type ZoomOverlay
 } from '../src/shared/project.ts'
 
 const splitSoundPieces = (p: Project, id: string, at: number): [Sound, Sound] => {
@@ -422,4 +422,91 @@ test('a clip\'s show-over-time line splits and slides with it, and a split-off s
   assert.equal(envAt(pieces[1].showEnv, 2), 0)
   const e = addClip(base(), { ...video(6, 'talk'), volEnv: [{ t: 0, v: 0.5 }] }, 20)
   assert.deepEqual(detachSound(e.project, e.select!)!.sound.volEnv, [{ t: 0, v: 0.5 }])
+})
+
+// ---------- freeze frame ----------
+
+const STILL = { media: 'm9', name: 'Frame at 0:08.png', width: 1920, height: 1080 }
+
+test('a freeze frame cuts the piece, holds a still for the time asked, and moves everything after it later', () => {
+  let p = base()
+  p = { ...p, overlays: [text(2, 4), text(9, 12), text(14, 16)] }
+  const id = p.clips[0].id
+  const e = freezeFrame(p, id, 8, STILL, 3)!
+  const clips = [...e.project.clips].sort((a, b) => a.start - b.start)
+  assert.equal(clips.length, 3)
+  assert.deepEqual(clips.map((c) => [c.kind, c.start, clipEnd(c)]), [['recording', 0, 8], ['image', 8, 11], ['recording', 11, 23]])
+  assert.equal(clips[1].media, 'm9')
+  assert.equal(clips[1].track, p.clips[0].track, 'on the same track')
+  assert.equal(clips[2].in, 8, 'the second half carries on from where the picture was held')
+  assert.equal(e.select, clips[1].id)
+  assert.equal(totalDuration(e.project), 23)
+  // comments: one before is untouched, one across the moment is stretched, one after moves later
+  assert.deepEqual(times(e.project), [[2, 4], [9 + 3, 12 + 3], [14 + 3, 16 + 3]])
+})
+
+test('a freeze frame in a sped-up piece holds the right moment, and keeps the piece\'s window, shape and look', () => {
+  let p = base()
+  const cam = addCameraClip(p, CAM, 0, 16 / 9)!
+  p = cam.project
+  const c = p.clips.find((x) => x.id === cam.id)!
+  const look = { brightness: 0.1, contrast: 1, saturation: 0, warmth: 0 }
+  p = { ...p, clips: p.clips.map((x) => (x.id === cam.id ? { ...x, look } : x)) }
+  const e = freezeFrame(p, cam.id, 5, STILL, 2)!
+  const still = e.project.clips.find((x) => x.kind === 'image')!
+  assert.equal(still.track, c.track)
+  assert.deepEqual(still.box, c.box)
+  assert.equal(still.shape, 'circle')
+  assert.deepEqual(still.look, look)
+  assert.equal(isFloating(still), true)
+})
+
+test('a freeze frame leaves music playing across it, splits and moves what belongs to the pictures, and refuses where it makes no sense', () => {
+  let p = base()
+  const bed = addSound(p, song(0, 20)).sound
+  p = addSound(addSound(p, song(0, 20)).project, { ...song(0, 20), id: 'voice', origin: 'split' }).project
+  const music = p.sounds.find((x) => x.origin === 'music')!
+  const split = p.sounds.find((x) => x.id === 'voice')!
+  const e = freezeFrame(p, p.clips[0].id, 8, STILL, 2)!
+  const musicAfter = e.project.sounds.filter((x) => x.origin === 'music')
+  assert.equal(musicAfter.length, p.sounds.filter((x) => x.origin === 'music').length, 'no music was cut')
+  assert.ok(musicAfter.every((x) => x.start === 0 && x.length === 20))
+  assert.equal(e.project.sounds.filter((x) => x.origin === 'split').length, 2, 'the sound that goes with the picture is cut')
+  const later = e.project.sounds.filter((x) => x.origin === 'split' && x.start > 8)
+  assert.equal(later[0].start, 10, 'and its second half moves later by the hold')
+  assert.ok(bed && music && split)
+  // refusals: the very start, the very end, a picture, a locked track
+  const id = p.clips[0].id
+  assert.equal(freezeFrame(p, id, 0, STILL), null)
+  assert.equal(freezeFrame(p, id, 20, STILL), null)
+  const locked = patchTrack(p, p.clips[0].track, { locked: true })
+  assert.equal(freezeFrame(locked, id, 8, STILL), null)
+  const frozen = freezeFrame(p, id, 8, STILL)!.project
+  assert.equal(freezeFrame(frozen, frozen.clips.find((c) => c.kind === 'image')!.id, 9, STILL), null, 'a still can\'t be frozen again')
+  // the hold is kept between half a second and thirty
+  assert.equal(totalDuration(freezeFrame(p, id, 8, STILL, 0)!.project), 20.5)
+  assert.equal(totalDuration(freezeFrame(p, id, 8, STILL, 500)!.project), 50)
+})
+
+// ---------- colour look ----------
+
+test('a look is neutral until something changes, is held inside its ranges, and the presets are told apart', () => {
+  assert.equal(isNeutralLook(undefined), true)
+  assert.equal(isNeutralLook(NO_LOOK), true)
+  assert.equal(isNeutralLook({ ...NO_LOOK, warmth: 0.2 }), false)
+  assert.deepEqual(cleanLook({ brightness: 9, contrast: -4, saturation: Number.NaN }), { brightness: 0.5, contrast: 0.5, saturation: 1, warmth: 0 })
+  assert.equal(lookPresetId(undefined), 'original')
+  for (const q of LOOK_PRESETS) assert.equal(lookPresetId(q.look), q.id)
+  assert.equal(lookPresetId({ ...NO_LOOK, brightness: 0.13 }), null)
+})
+
+test('the look matrix leaves a neutral picture alone, turns black and white grey, and warms towards red', () => {
+  const id = lookMatrix(NO_LOOK)
+  const expected = [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]
+  id.forEach((v, i) => assert.ok(Math.abs(v - expected[i]) < 1e-9, `${i}: ${v}`))
+  const bw = lookMatrix({ ...NO_LOOK, saturation: 0 })
+  // every output channel is the same mix of red, green and blue
+  assert.ok([0, 1, 2].every((j) => Math.abs(bw[j] - bw[5 + j]) < 1e-9 && Math.abs(bw[j] - bw[10 + j]) < 1e-9))
+  const warm = lookMatrix({ ...NO_LOOK, warmth: 1 })
+  assert.ok(warm[4] > 0 && warm[14] < 0, 'red up, blue down')
 })

@@ -190,6 +190,58 @@ async function editorSuite(c) {
     check(`${tag}: and the preview filter is gone`, (await editor.evaluate((id) => document.querySelector(`#layers [data-layer="${id}"]`)?.style.filter ?? 'x', clipId)) === '')
   }
 
+  // ---- freeze frame: hold the picture at the playhead ----
+  {
+    const before = await state()
+    const freezeShape = (after, at, secs) => {
+      const clips = [...after.clips].sort((a, b) => a.start - b.start)
+      const still = clips[1]
+      return {
+        clips,
+        still,
+        ok: clips.length === before.clips.length + 2 && clips.map((k) => k.kind).join() === 'recording,image,recording' && !!still && approx(still.start, at, 0.1) && approx(still.out - still.in, secs, 0.01) && approx(after.duration, before.duration + secs, 0.2),
+        text: `${clips.map((k) => `${k.kind}@${k.start.toFixed(2)}`).join(' ')}; ${before.duration.toFixed(2)} → ${after.duration.toFixed(2)}`
+      }
+    }
+    // with nothing selected: the toolbar button freezes the piece that is playing at the playhead
+    await seekTo(editor, before.duration * 0.4)
+    const at = await store(() => window.__editor.store.playhead)
+    check(`${tag}: nothing is selected after clicking the timeline`, (await store(() => window.__editor.store.selection)) === null)
+    await editor.click('#freeze')
+    await editor.waitForFunction((n) => window.__editor.store.project.clips.length === n, before.clips.length + 2, { timeout: 15000 }).catch(() => undefined)
+    let after = await state()
+    let f = freezeShape(after, at, 2)
+    check(`${tag}: Freeze frame cuts the piece and puts a 2 second still between the halves, everything after moves later`, f.ok, f.text)
+    check(`${tag}: the picture of the held moment was kept with the recording's files`, fs.readdirSync(path.join(userData, 'pending')).filter((n) => /\.media$/.test(n)).some((d) => fs.readdirSync(path.join(userData, 'pending', d)).some((n) => /^freeze-.*\.png$/.test(n))))
+    await seekTo(editor, (f.still?.start ?? at) + 1)
+    await sleep(500)
+    check(`${tag}: the preview shows the still while it is held`, (await editor.locator('#layers img').count()) >= 1)
+    check(`${tag}: the still is a piece of its own on the timeline`, !!f.still && (await editor.locator(`.blk.clip[data-clip="${f.still.id}"]`).count()) === 1)
+    await editor.click('#undo')
+    let back = await state()
+    check(`${tag}: Undo takes the freeze frame away`, back.clips.length === before.clips.length && approx(back.duration, before.duration, 0.05), `${back.clips.length} pieces, ${back.duration.toFixed(2)}s`)
+    // from the piece's own settings, with a longer hold
+    await seekTo(editor, before.duration * 0.4)
+    await editor.click(`.blk.clip[data-clip="${before.clips[0].id}"]`)
+    await editor.waitForSelector('#prop-freeze', { timeout: 5000 })
+    await editor.evaluate(() => {
+      const i = document.getElementById('freeze-hold')
+      i.value = '4'
+      i.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await editor.click('#prop-freeze')
+    await editor.waitForFunction((n) => window.__editor.store.project.clips.length === n, before.clips.length + 2, { timeout: 15000 }).catch(() => undefined)
+    after = await state()
+    f = freezeShape(after, at, 4)
+    check(`${tag}: from a piece's settings the hold can be longer (4 s)`, f.ok, f.text)
+    await editor.click('#undo')
+    back = await state()
+    check(`${tag}: and that can be undone too`, back.clips.length === before.clips.length && approx(back.duration, before.duration, 0.05))
+    await editor.evaluate(() => {
+      document.getElementById('freeze-hold') && (document.getElementById('freeze-hold').value = '2')
+    })
+  }
+
   // ---- a comment ----
   await seekTo(editor, D * 0.15)
   await editor.click('#tool-comments')

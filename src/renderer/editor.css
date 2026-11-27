@@ -1948,3 +1948,10 @@ button.accent {
   margin: 0;
   flex: 1;
 }
+
+/* ---------- freeze frame ---------- */
+#freeze-section .freeze {
+  align-self: flex-start;
+  border-color: #38bdf8;
+  color: #7dd3fc;
+}

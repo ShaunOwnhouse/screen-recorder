@@ -340,7 +340,7 @@ function showLoadError(message: string): void {
   stageMsg.append(text, actionsEl)
   stageMsg.classList.add('interactive')
   stageMsg.hidden = false
-  for (const id of ['save', 'save-as', 'play', 'split', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar', 'duplicate-sel', 'preview-final']) ($(id) as HTMLButtonElement).disabled = true
+  for (const id of ['save', 'save-as', 'play', 'split', 'freeze', 'delete-sel', 'undo', 'redo', 'add-media-bar', 'add-music-bar', 'duplicate-sel', 'preview-final']) ($(id) as HTMLButtonElement).disabled = true
   nameInput.disabled = true
 }
 
@@ -422,6 +422,7 @@ async function init(): Promise<void> {
 
   $('play').addEventListener('click', () => player.toggle())
   $('split').addEventListener('click', () => actions.split())
+  $('freeze').addEventListener('click', () => void actions.freeze())
   $('delete-sel').addEventListener('click', () => actions.deleteSelected())
   $('undo').addEventListener('click', () => {
     store.undo()

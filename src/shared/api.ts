@@ -62,6 +62,8 @@ export interface EditorApi {
   addMedia(paths: string[], kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]>
   /** Saves one piece (a stretch of a file: its picture alone or its sound alone) as a file of its own. */
   saveAsset(spec: AssetSave): Promise<{ path?: string; error?: string }>
+  /** A picture of one moment of a video (`time` seconds into the file; the recording's crop is applied), registered like an added picture. */
+  grabFrame(spec: { media: string; time: number; crop: Rect | null }): Promise<MediaInfo | { error: string }>
   /** The real location of a dropped file. */
   pathFor(file: File): string
   /** Loudness along an audio (or video) file, 0–1 per bucket, for drawing a waveform. */
