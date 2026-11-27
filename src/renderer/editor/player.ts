@@ -1,6 +1,6 @@
 import {
-  activeClips, envAt, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFloating, isFullBox, layerOf, overlayAlpha, soundOn,
-  zoomState, trackById, type BlurOverlay, type Clip, type Sound
+  activeClips, cleanLook, envAt, clipEnd, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, isDrawn, isFloating, isFullBox, isNeutralLook, layerOf, lookMatrix,
+  overlayAlpha, soundOn, zoomState, trackById, type BlurOverlay, type Clip, type Sound
 } from '../../shared/project.ts'
 import { drawCard, drawOverlay, frameFor } from './draw.ts'
 import { clampNum, type Store } from './store.ts'
@@ -38,6 +38,9 @@ export class Player {
   recordingUrl = ''
   onRecordingError: (() => void) | null = null
   private drawnKey = ''
+  /** The colour filters (one per piece with a look), as SVG the pictures point at. */
+  private lookDefs: SVGDefsElement | null = null
+  private readonly lookNodes = new Map<string, SVGFEColorMatrixElement>()
 
   constructor(
     private readonly store: Store,
@@ -179,6 +182,7 @@ export class Player {
     const t = s.playhead
     const ids = new Set(p.clips.map((c) => c.id))
     for (const id of [...this.nodes.keys()]) if (!ids.has(id)) this.dropNode(id)
+    for (const [id, m] of [...this.lookNodes]) if (!ids.has(id)) { m.parentElement?.remove(); this.lookNodes.delete(id) }
 
     const seq = ++this.tickCount
     const crop = s.cropMode ? null : p.crop
@@ -208,6 +212,7 @@ export class Player {
       const dissolve = f.colour === DISSOLVE
       el.style.opacity = String((live && dissolve ? f.amount : 1) * envAt(c.showEnv, t - c.start))
       this.placeNode(el, n.tint, c, crop)
+      this.applyLook(el, c)
       n.tint.style.zIndex = String(layerOf(p, c.track) * 2 + 2)
       n.tint.style.display = live && !dissolve && f.amount < 1 ? '' : 'none'
       if (!dissolve) {
@@ -234,6 +239,47 @@ export class Player {
       }
     }
     this.syncSounds(t)
+  }
+
+  /** Colour and brightness of a piece: the same colour matrix the export's filters amount to (see `lookMatrix`). */
+  private applyLook(el: Node['el'], c: Clip): void {
+    if (isNeutralLook(c.look)) {
+      if (el.style.filter) el.style.filter = ''
+      return
+    }
+    if (!this.lookDefs) {
+      const NS = 'http://www.w3.org/2000/svg'
+      const svg = document.createElementNS(NS, 'svg')
+      svg.setAttribute('width', '0')
+      svg.setAttribute('height', '0')
+      svg.setAttribute('aria-hidden', 'true')
+      svg.style.position = 'absolute'
+      this.lookDefs = document.createElementNS(NS, 'defs')
+      svg.append(this.lookDefs)
+      this.els.frame.append(svg)
+    }
+    const id = `look-${c.id}`
+    let m = this.lookNodes.get(c.id)
+    if (!m) {
+      const NS = 'http://www.w3.org/2000/svg'
+      const f = document.createElementNS(NS, 'filter')
+      f.id = id
+      // the maths is done on the colours as stored (not converted to linear light first), like the export
+      f.setAttribute('color-interpolation-filters', 'sRGB')
+      f.setAttribute('x', '0')
+      f.setAttribute('y', '0')
+      f.setAttribute('width', '100%')
+      f.setAttribute('height', '100%')
+      m = document.createElementNS(NS, 'feColorMatrix')
+      m.setAttribute('type', 'matrix')
+      f.append(m)
+      this.lookDefs.append(f)
+      this.lookNodes.set(c.id, m)
+    }
+    const values = lookMatrix(cleanLook(c.look)).map((n) => n.toFixed(4)).join(' ')
+    if (m.getAttribute('values') !== values) m.setAttribute('values', values)
+    const want = `url(#${id})`
+    if (el.style.filter !== want) el.style.filter = want
   }
 
   private placeNode(el: Node['el'], tint: HTMLElement, c: Clip, crop: { x: number; y: number; width: number; height: number } | null): void {

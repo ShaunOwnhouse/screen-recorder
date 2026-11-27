@@ -153,6 +153,43 @@ async function editorSuite(c) {
   s = await state()
   const D = s.duration
 
+  // ---- colour look: presets, sliders, the preview follows, undo, reset ----
+  {
+    const clipId = (await state()).clips[0].id
+    await editor.click(`.blk.clip[data-clip="${clipId}"]`)
+    await editor.waitForSelector('#look-presets', { timeout: 5000 })
+    const lookOf = () => store((id) => window.__editor.store.project.clips.find((k) => k.id === id)?.look ?? null, clipId)
+    check(`${tag}: a piece has a Look section with ready-made looks and four sliders`, (await editor.locator('#look-presets .look').count()) === 6 && (await editor.locator('#look-section input[type=range]').count()) === 4)
+    check(`${tag}: a piece starts with no look, and "Original" is the one chosen`, (await lookOf()) === null && (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'original')
+    await editor.click('#look-presets [data-look="bw"]')
+    let look = await lookOf()
+    check(`${tag}: Black & white takes the colour out`, !!look && look.saturation === 0, JSON.stringify(look))
+    check(`${tag}: the chosen look is highlighted`, (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'bw')
+    await sleep(500)
+    const shown = await editor.evaluate((id) => {
+      const el = document.querySelector(`#layers [data-layer="${id}"]`)
+      const f = document.getElementById(`look-${id}`)
+      return { filter: el?.style.filter ?? '', values: f?.querySelector('feColorMatrix')?.getAttribute('values') ?? '' }
+    }, clipId)
+    check(`${tag}: the preview shows it (a colour filter on the picture)`, shown.filter.includes(`look-${clipId}`) && shown.values.split(/\s+/).length === 20, JSON.stringify(shown))
+    // a slider changes one value and moves the chosen look off the presets
+    await editor.evaluate(() => {
+      const i = document.getElementById('look-brightness')
+      i.value = '0.2'
+      i.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    look = await lookOf()
+    check(`${tag}: the brightness slider changes the look`, !!look && Math.abs(look.brightness - 0.2) < 0.01 && look.saturation === 0, JSON.stringify(look))
+    check(`${tag}: after a slider no preset is highlighted`, (await editor.locator('#look-presets .look.on').count()) === 0)
+    await editor.click('#undo')
+    look = await lookOf()
+    check(`${tag}: Undo takes the slider change back`, !!look && look.brightness === 0 && look.saturation === 0, JSON.stringify(look))
+    await editor.click('#look-reset')
+    check(`${tag}: Reset look puts the colours back as recorded`, (await lookOf()) === null && (await editor.locator('#look-presets .look.on').getAttribute('data-look')) === 'original')
+    await sleep(300)
+    check(`${tag}: and the preview filter is gone`, (await editor.evaluate((id) => document.querySelector(`#layers [data-layer="${id}"]`)?.style.filter ?? 'x', clipId)) === '')
+  }
+
   // ---- a comment ----
   await seekTo(editor, D * 0.15)
   await editor.click('#tool-comments')

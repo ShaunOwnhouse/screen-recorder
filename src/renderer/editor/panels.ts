@@ -1,4 +1,4 @@
-import { clipLength, DISSOLVE, isFloating, isFullBox, MAX_SPEED, MIN_SPEED, moveClip, windowCorner, type Fade, type Clip, type ClipShape, type Corner, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
+import { cleanLook, clipLength, DISSOLVE, isFloating, isFullBox, isNeutralLook, LOOK_PRESETS, LOOK_RANGE, lookPresetId, MAX_SPEED, MIN_SPEED, moveClip, windowCorner, type Fade, type Clip, type ClipShape, type Corner, type Look, type Overlay, type Sound, type TextOverlay, type TitleCard } from '../../shared/project.ts'
 import type { Actions } from './actions.ts'
 import { openBrandKit } from './brand.ts'
 import { CARD_STYLES, SYSTEM_FONTS } from './defaults.ts'
@@ -339,6 +339,49 @@ export class Panels {
     return out
   }
 
+  /** Colour and brightness: a few ready-made looks and four sliders. The preview and the saved video use the same maths. */
+  private lookSection(c: Clip): HTMLElement {
+    const s = this.store
+    const live = (): Clip => s.project.clips.find((x) => x.id === c.id) ?? c
+    const cur = (): Look => cleanLook(live().look)
+    const set = (look: Look, merge?: string): void => s.patchClip(c.id, { look: isNeutralLook(look) ? undefined : look }, merge ?? `lk:${c.id}`)
+    const chips = h('div', { class: 'looks', id: 'look-presets' })
+    for (const p of LOOK_PRESETS) {
+      chips.append(h('button', { type: 'button', class: `look ${p.id}`, 'data-look': p.id, onClick: () => { set(p.look, `lkp:${c.id}:${Date.now()}`); refresh() } }, h('i'), p.name))
+    }
+    const rows: Array<{ key: keyof Look; label: string; fmt: (v: number) => string; step: number }> = [
+      { key: 'brightness', label: 'Brightness', step: 0.01, fmt: (v) => `${v > 0.004 ? '+' : ''}${Math.round(v * 100)}` },
+      { key: 'contrast', label: 'Contrast', step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
+      { key: 'saturation', label: 'Colour', step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
+      { key: 'warmth', label: 'Warmth', step: 0.05, fmt: (v) => (Math.abs(v) < 0.025 ? 'Neutral' : `${v > 0 ? 'Warmer' : 'Cooler'} ${Math.round(Math.abs(v) * 100)}`) }
+    ]
+    const inputs = new Map<keyof Look, { input: HTMLInputElement; out: HTMLElement; fmt: (v: number) => string }>()
+    const sliders = rows.map((r) => {
+      const [lo, hi] = LOOK_RANGE[r.key]
+      const row = range(cur()[r.key], lo, hi, r.step, (v) => { set({ ...cur(), [r.key]: v }); refresh(false) }, r.fmt, `look-${r.key}`)
+      inputs.set(r.key, { input: row.querySelector('input')!, out: row.querySelector('.range-val')!, fmt: r.fmt })
+      return h('div', { class: 'look-row' }, h('span', { class: 'look-label', text: r.label }), row)
+    })
+    /** Brings the chips and the sliders in line with the piece (after a preset, a reset, or an undo). */
+    const refresh = (sliders = true): void => {
+      const id = lookPresetId(live().look)
+      for (const b of chips.querySelectorAll<HTMLElement>('.look')) b.classList.toggle('on', b.dataset.look === id)
+      if (!sliders) return
+      for (const [key, x] of inputs) {
+        x.input.value = String(cur()[key])
+        x.out.textContent = x.fmt(cur()[key])
+      }
+    }
+    refresh(false)
+    return h('div', { class: 'psec', id: 'look-section' },
+      h('h3', { text: 'Look' }),
+      chips,
+      ...sliders,
+      h('div', { class: 'look-foot' },
+        h('span', { class: 'tip', text: 'Colour and brightness of this piece. What you see here is what gets saved.' }),
+        button('Reset look', () => { s.patchClip(c.id, { look: undefined }, `lkp:${c.id}:${Date.now()}`); refresh() }, 'ghost small', { id: 'look-reset' })))
+  }
+
   /** Fade in or out: how long, and into what: black, white, a brand colour, or see-through (the track behind shows). */
   private fadeRow(label: string, current: () => Fade, pick: (f: Fade) => void, id: string): HTMLElement {
     const f = current()
@@ -369,6 +412,7 @@ export class Panels {
         h('div', { class: 'speed-presets' }, ...[0.5, 1, 1.5, 2, 3].map((v) => button(`${v}×`, () => this.actions.setSpeed(v), c.speed === v ? 'ghost small on' : 'ghost small', { 'data-speed': String(v) })))
       )
     }
+    if (!c.card) out.push(this.lookSection(c))
     if (c.kind !== 'image' && c.hasAudio) {
       out.push(section('Volume', range(c.volume, 0, 2, 0.05, (v) => patch({ volume: v }, `vol:${c.id}`), (v) => `${Math.round(v * 100)}%`, 'prop-volume')))
       const mine = (): Clip | undefined => s.project.clips.find((x) => x.id === c.id)

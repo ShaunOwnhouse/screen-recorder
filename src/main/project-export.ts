@@ -1,7 +1,7 @@
 import type { Quality, Rect, VideoFormat } from '../shared/types.ts'
 import {
-  clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFloating, isFullBox, paintOrder, soundOn, totalDuration,
-  zoomTarget, zoomWeight, type BlurOverlay, type Clip, type EnvPoint, type Fade, type Overlay, type Project, type ZoomOverlay
+  cleanLook, clipEnd, clipLength, clipPlaysOwnSound, clipVoiceParts, DISSOLVE, FADE_SECONDS, isFloating, isFullBox, isNeutralLook, paintOrder, soundOn,
+  totalDuration, WARMTH_LEVELS, zoomTarget, zoomWeight, type BlurOverlay, type Clip, type EnvPoint, type Fade, type Look, type Overlay, type Project, type ZoomOverlay
 } from '../shared/project.ts'
 import {
   audioEncodeArgs, AUDIO_RATE, COLOR_TAGS, effectiveEncoder, encoderArgs, even, GIF_MAX_FPS, GIF_MAX_WIDTH, is444, pixelFormatFor, SWS_FLAGS
@@ -202,12 +202,30 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       : `,fade=t=${dir}:st=${num(st)}:d=${num(d)}:color=${colourHex(f.color)}`
   }
 
+  /**
+   * Colour and brightness (a piece's `look`), done on the picture itself in its own colour format: `eq` changes the light and the
+   * colour amount, `lutyuv` moves the colour planes for warmth. The preview does the same maths (see `lookMatrix`).
+   */
+  const lookFilters = (look: Look | undefined): string[] => {
+    if (isNeutralLook(look)) return []
+    const l = cleanLook(look)
+    const out = [`format=${wf}`]
+    if (Math.abs(l.brightness) > 1e-3 || Math.abs(l.contrast - 1) > 1e-3 || Math.abs(l.saturation - 1) > 1e-3) {
+      out.push(`eq=brightness=${num(l.brightness)}:contrast=${num(l.contrast)}:saturation=${num(l.saturation)}`)
+    }
+    const k = Math.round(l.warmth * WARMTH_LEVELS)
+    if (k) out.push(`lutyuv=u='clip(val-${k},16,240)':v='clip(val+${k},16,240)'`)
+    return out
+  }
+
   // ---- video: a black canvas, then every piece from the back of the picture to the front ----
-  const scaleTo = (sw: number, sh: number, matrix = true): string => {
+  /** Scales a picture to the frame; `between` (the colour look) goes after the scaling and before any black bars are added, so the bars stay black. */
+  const scaleTo = (sw: number, sh: number, matrix = true, between: string[] = []): string => {
     const colour = matrix ? ':out_color_matrix=bt709:out_range=tv' : ''
-    if (sw === W && sh === H) return `scale=${SWS_FLAGS}${colour}`
+    const mid = between.length ? `,${between.join(',')}` : ''
+    if (sw === W && sh === H) return `scale=${SWS_FLAGS}${colour}${mid}`
     return (
-      `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2:${SWS_FLAGS}${colour},` +
+      `scale=${W}:${H}:force_original_aspect_ratio=decrease:force_divisible_by=2:${SWS_FLAGS}${colour}${mid},` +
       `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`
     )
   }
@@ -248,12 +266,13 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       let x = 0
       let y = 0
       const full = isFullBox(c.box) || !!c.card
-      if (full) filters.push(scaleTo(sw, sh))
+      const look = lookFilters(c.look)
+      if (full) filters.push(scaleTo(sw, sh, true, look))
       else {
         const pw = evenPx(c.box.w * W)
         const ph = evenPx((pw * (sh || 9)) / (sw || 16))
         const frame = c.border ? 4 : 0
-        filters.push(`scale=${pw}:${ph}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv`)
+        filters.push(`scale=${pw}:${ph}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv`, ...look)
         if (c.border) filters.push(`pad=${pw + 8}:${ph + 8}:4:4:color=white`)
         x = clamp(Math.round(c.box.x * W), 0, Math.max(0, W - pw - frame * 2))
         y = clamp(Math.round(c.box.y * H), 0, Math.max(0, H - ph - frame * 2))
@@ -385,7 +404,7 @@ export function buildProjectArgs(o: ProjectExportInput): ProjectExport {
       const fadeOut = d2 > 0.02 ? `,fade=t=out:st=${num(len - d2)}:d=${num(d2)}:alpha=1` : ''
       const pace = m ? [c.speed === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${num(c.speed)}`, `fps=${fps}`, 'tpad=stop_mode=clone:stop_duration=1'] : ['setpts=PTS-STARTPTS']
       g.add(
-        `[${idx}:v]${pace.join(',')},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,setsar=1,` +
+        `[${idx}:v]${pace.join(',')},crop='min(iw,ih)':'min(iw,ih)',scale=${full}:${full}:${SWS_FLAGS}:out_color_matrix=bt709:out_range=tv,${[...lookFilters(c.look), 'setsar=1'].join(',')},` +
           `format=${alphaFormat},${geq}${fadeIn}${fadeOut},trim=duration=${num(len)},setpts=PTS+${num(c.start)}/TB[${label}]`
       )
       const nv = g.label('vo')

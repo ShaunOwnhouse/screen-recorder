@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildProjectArgs, type ExportMedia, type ExportPicture, type ProjectExportInput } from '../src/main/project-export.ts'
-import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, patchTrack, removeSpan, type ClipShape, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
+import { activeClips, audioTracks, baseVideoTrack, clipLength, detachSound, envDip, addVideoTrack, LOOK_PRESETS, lookMatrix, patchTrack, removeSpan, type ClipShape, newClipBase, newId, newProject, DISSOLVE, type Clip, type Overlay, type Project, type Sound } from '../src/shared/project.ts'
 import type { VideoFormat } from '../src/shared/types.ts'
 
 const ffmpeg: string = createRequire(import.meta.url)('ffmpeg-static')
@@ -623,4 +623,65 @@ test('the face camera can fade away for a stretch and come back, and its voice c
   assert.ok(loud(voiced.file, 0.2, 1) > -28, 'heard at first')
   assert.ok(loud(voiced.file, 2.2, 0.8) < -40, 'then silent while the line is down')
   assert.ok(near(frame(voiced.file, 1.0).at(480, 276), [0xe0, 0x10, 0x10], 40), `the picture stays while only the voice dips: ${frame(voiced.file, 1.0).at(480, 276)}`)
+}))
+
+// ---------- colour look ----------
+
+/** What the preview's colour matrix does to an 8-bit RGB colour. */
+function throughMatrix(m: number[], rgb: [number, number, number]): [number, number, number] {
+  const v = rgb.map((x) => x / 255)
+  return [0, 1, 2].map((i) => Math.round(255 * Math.min(1, Math.max(0, m[i * 5] * v[0] + m[i * 5 + 1] * v[1] + m[i * 5 + 2] * v[2] + m[i * 5 + 4])))) as [number, number, number]
+}
+
+test('every look comes out the way the preview colour matrix says (so what you see is what is saved)', { timeout: 240000 }, inTemp((dir) => {
+  const colours: Array<[string]> = [['0x20a040'], ['0xc08040'], ['0x808080']]
+  for (const preset of LOOK_PRESETS.concat([{ id: 'bright', name: 'Brighter', look: { brightness: 0.2, contrast: 1, saturation: 1, warmth: 0 } }, { id: 'contrast', name: 'Contrast', look: { brightness: 0, contrast: 1.4, saturation: 1, warmth: 0 } }])) {
+    for (const [hex] of colours) {
+      // what the same colour looks like after the video's own rounding (4:2:0 colour, limited range), with no look at all
+      const plain = recordingSetup(dir, 1, { source: `color=c=${hex}`, tone: null })
+      const baseline = frame(exportIt(dir, plain).file, 0.5).at(300, 100)
+      const s = recordingSetup(dir, 1, { source: `color=c=${hex}`, tone: null })
+      s.project.clips[0].look = preset.look
+      const got = frame(exportIt(dir, s).file, 0.5).at(300, 100)
+      const want = throughMatrix(lookMatrix(preset.look), baseline)
+      assert.ok(near(got, want, 9), `${preset.id} on ${hex}: got ${got}, the preview says ${want} (from ${baseline})`)
+    }
+  }
+}))
+
+test('a look changes the picture but not the black bars round a smaller picture, and a neutral look changes nothing', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 1)
+  const pic = makePng(dir, 'pic.png', '0x808080', 300, 300)
+  const rec = s.project.clips[0]
+  const photo: Clip = { ...rec, id: newId('c'), kind: 'image', media: 'pic', name: 'pic.png', in: 0, out: 1, hasAudio: false, width: 300, height: 300, look: { brightness: 0.25, contrast: 1, saturation: 1, warmth: 0 } }
+  sequence(s.project, [photo])
+  s.media.pic = { path: pic, kind: 'image', hasAudio: false, duration: 0, width: 300, height: 300 }
+  const out = exportIt(dir, s)
+  const f = frame(out.file, 0.5)
+  assert.ok(f.at(320, 180)[0] > 0x80 + 30, `the picture is brighter: ${f.at(320, 180)}`)
+  assert.ok(near(f.at(10, 180), [0, 0, 0], 8), `the bars stay black: ${f.at(10, 180)}`)
+  const neutral = recordingSetup(dir, 1)
+  neutral.project.clips[0].look = { brightness: 0, contrast: 1, saturation: 1, warmth: 0 }
+  assert.ok(near(frame(exportIt(dir, neutral).file, 0.5).at(300, 100), [0x20, 0xa0, 0x40], 12))
+}))
+
+test('a look also colours a small window, and a round one', { timeout: 120000 }, inTemp((dir) => {
+  const s = recordingSetup(dir, 2)
+  const cam = makeVideo(dir, 'cam.mp4', 2, { source: 'color=c=0x808080', tone: null })
+  s.media.cam = { path: cam, kind: 'video', hasAudio: false, duration: 2, width: W, height: H }
+  const bw = { brightness: 0, contrast: 1, saturation: 0, warmth: 0 }
+  const small: Clip = { ...piece(s.project, 'cam', 2), box: { x: 0.05, y: 0.05, w: 0.3 }, border: false, look: { ...bw, brightness: 0.25 } }
+  const round: Clip = { ...piece(s.project, 'cam', 2), box: { x: 0.65, y: 0.5, w: 0.3 }, border: false, shape: 'circle' as ClipShape, look: { ...bw, brightness: 0.25 } }
+  const up = addVideoTrack(s.project)
+  s.project = up.project
+  small.track = up.track.id
+  const up2 = addVideoTrack(s.project)
+  s.project = up2.project
+  round.track = up2.track.id
+  s.project.clips.push(small, round)
+  const out = exportIt(dir, s)
+  const f = frame(out.file, 1)
+  assert.ok(f.at(Math.round(W * 0.2), Math.round(H * 0.2))[0] > 0x80 + 30, `the small window is brighter: ${f.at(Math.round(W * 0.2), Math.round(H * 0.2))}`)
+  assert.ok(f.at(Math.round(W * 0.8), Math.round(H * 0.5 + W * 0.15))[0] > 0x80 + 30, 'the round window is brighter')
+  assert.ok(near(f.at(300, 300), [0x20, 0xa0, 0x40], 16), 'the screen behind is untouched')
 }))

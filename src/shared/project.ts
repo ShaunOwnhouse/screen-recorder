@@ -150,6 +150,95 @@ export function envSplit(env: EnvPoint[] | undefined, t: number): [EnvPoint[] | 
   return [left, right]
 }
 
+/**
+ * How a piece's colours are adjusted. `brightness` is added to the light (−0.5 – 0.5), `contrast` stretches it around the middle
+ * (0.5 – 1.5), `saturation` scales the colour (0 = black and white, 1 = as recorded, 2 = twice as colourful) and `warmth` shifts
+ * the colour towards red and yellow (+1) or blue (−1). The export and the preview use the same maths (see `lookMatrix`).
+ */
+export interface Look {
+  brightness: number
+  contrast: number
+  saturation: number
+  warmth: number
+}
+
+export const NO_LOOK: Look = { brightness: 0, contrast: 1, saturation: 1, warmth: 0 }
+
+export const LOOK_PRESETS: Array<{ id: string; name: string; look: Look }> = [
+  { id: 'original', name: 'Original', look: NO_LOOK },
+  { id: 'bw', name: 'Black & white', look: { brightness: 0, contrast: 1.1, saturation: 0, warmth: 0 } },
+  { id: 'warm', name: 'Warm', look: { brightness: 0.02, contrast: 1.04, saturation: 1.1, warmth: 0.6 } },
+  { id: 'cool', name: 'Cool', look: { brightness: 0, contrast: 1.04, saturation: 0.95, warmth: -0.6 } },
+  { id: 'vivid', name: 'Vivid', look: { brightness: 0, contrast: 1.12, saturation: 1.7, warmth: 0 } },
+  { id: 'faded', name: 'Faded', look: { brightness: 0.06, contrast: 0.82, saturation: 0.6, warmth: 0.1 } }
+]
+
+/** The ranges the sliders cover. */
+export const LOOK_RANGE = { brightness: [-0.5, 0.5], contrast: [0.5, 1.5], saturation: [0, 2], warmth: [-1, 1] } as const
+
+export const isNeutralLook = (l: Look | undefined): boolean =>
+  !l || (Math.abs(l.brightness) < 1e-3 && Math.abs(l.contrast - 1) < 1e-3 && Math.abs(l.saturation - 1) < 1e-3 && Math.abs(l.warmth) < 1e-3)
+
+/** The look with every value held inside its range (a project from a newer or older version can't break the picture). */
+export function cleanLook(l: Partial<Look> | undefined): Look {
+  const c = (v: unknown, [lo, hi]: readonly [number, number], d: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d)
+  return {
+    brightness: c(l?.brightness, LOOK_RANGE.brightness, 0),
+    contrast: c(l?.contrast, LOOK_RANGE.contrast, 1),
+    saturation: c(l?.saturation, LOOK_RANGE.saturation, 1),
+    warmth: c(l?.warmth, LOOK_RANGE.warmth, 0)
+  }
+}
+
+/** Which preset the look is (or null when it was adjusted by hand). */
+export function lookPresetId(l: Look | undefined): string | null {
+  const x = l ?? NO_LOOK
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.005
+  return LOOK_PRESETS.find((q) => near(q.look.brightness, x.brightness) && near(q.look.contrast, x.contrast) && near(q.look.saturation, x.saturation) && near(q.look.warmth, x.warmth))?.id ?? null
+}
+
+/** How many levels (of 255) warmth 1 shifts the blue-difference and red-difference colour planes. */
+export const WARMTH_LEVELS = 10
+
+/**
+ * The look as a 4×5 colour matrix on red, green, blue, alpha in 0–1 units (what the preview feeds to an SVG feColorMatrix).
+ * It does what the export's `eq` and `lutyuv` filters do: brightness and contrast change only the light (luma, BT.709 weights),
+ * saturation scales the colour, and warmth moves the colour planes (red-difference up, blue-difference down).
+ */
+export function lookMatrix(l: Look): number[] {
+  const wr = 0.2126
+  const wg = 0.7152
+  const wb = 0.0722
+  // light: Y' = contrast·Y + offset, colour kept (R, G and B all move by the change in Y); the offset follows from how `eq` maps limited-range video
+  const k = l.contrast - 1
+  const off = 0.5091 * (1 - l.contrast) + 1.1644 * l.brightness
+  const luma: number[][] = [
+    [1 + k * wr, k * wg, k * wb, off],
+    [k * wr, 1 + k * wg, k * wb, off],
+    [k * wr, k * wg, 1 + k * wb, off]
+  ]
+  // colour: scale the difference from the light
+  const s = l.saturation
+  const sat: number[][] = [
+    [wr + (1 - wr) * s, wg * (1 - s), wb * (1 - s)],
+    [wr * (1 - s), wg + (1 - wg) * s, wb * (1 - s)],
+    [wr * (1 - s), wg * (1 - s), wb + (1 - wb) * s]
+  ]
+  // warmth: Cr + d, Cb − d  →  R += 1.5748d, G −= 0.2808d, B −= 1.8556d (BT.709)
+  const d = (l.warmth * WARMTH_LEVELS) / 255
+  const warm = [1.5748 * d, -0.2808 * d, -1.8556 * d]
+  const rows: number[] = []
+  for (let i = 0; i < 3; i++) {
+    // result = warm + sat · luma (applied to the input): rows of sat times rows of luma
+    const row = [0, 0, 0, 0]
+    for (let j = 0; j < 4; j++) for (let m = 0; m < 3; m++) row[j] += sat[i][m] * luma[m][j]
+    row[3] += warm[i]
+    rows.push(row[0], row[1], row[2], 0, row[3])
+  }
+  rows.push(0, 0, 0, 1, 0)
+  return rows
+}
+
 export type ClipShape = 'rect' | 'square' | 'rounded' | 'circle'
 
 /** A piece on a video track: the recording, a video or picture the person added, or a title card. */
@@ -195,6 +284,8 @@ export interface Clip {
   shape?: ClipShape
   /** A white frame round a piece that is smaller than the picture. */
   border: boolean
+  /** Colour and brightness adjustments (none = as recorded). */
+  look?: Look
 }
 
 /** Which sounds the screen recording itself holds. */

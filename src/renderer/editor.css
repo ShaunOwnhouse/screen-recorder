@@ -1882,3 +1882,69 @@ button.accent {
     gap: 6px;
   }
 }
+
+/* ---------- colour look ---------- */
+.looks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.look {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 9px;
+  padding: 5px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.look.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.look i {
+  display: block;
+  height: 30px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: linear-gradient(135deg, #3b82f6, #f59e0b 55%, #22c55e);
+}
+
+.look.bw i { filter: grayscale(1) contrast(1.1); }
+.look.warm i { filter: sepia(0.45) saturate(1.2) brightness(1.05); }
+.look.cool i { filter: hue-rotate(-18deg) saturate(0.9) brightness(1.02); }
+.look.vivid i { filter: saturate(1.8) contrast(1.1); }
+.look.faded i { filter: saturate(0.6) contrast(0.85) brightness(1.1); }
+
+.look-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.look-row .range {
+  flex: 1;
+  min-width: 0;
+}
+
+.look-label {
+  width: 74px;
+  flex: none;
+  font-size: 12px;
+}
+
+.look-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.look-foot .tip {
+  margin: 0;
+  flex: 1;
+}
