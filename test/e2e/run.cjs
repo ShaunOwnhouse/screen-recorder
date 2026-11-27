@@ -1162,7 +1162,9 @@ async function save(app, editor, name) {
       await main.waitForSelector('#projects:not([hidden])', { timeout: 10000 }).catch(() => undefined)
       const rows = await main.evaluate(() => [...document.querySelectorAll('#project-list .prow')].map((r) => r.querySelector('b').textContent + ' | ' + r.querySelector('span').textContent))
       check('Projects: the home panel lists it by name, with its date, length and size', rows.length === 1 && /My project/.test(rows[0]) && /MB|GB/.test(rows[0]) && /\d:\d\d/.test(rows[0]), rows.join(' / '))
-      check('Projects: the list has a small picture of the video', (await main.locator('#project-list img.thumb').count()) === 1)
+      // the list shows at once; the small picture is made a moment later and arrives by itself
+      await main.waitForSelector('#project-list img.thumb', { timeout: 20000 }).catch(() => undefined)
+      check('Projects: the list gets a small picture of the video a moment later', (await main.locator('#project-list img.thumb').count()) === 1)
       await shot(main, 'panel-projects')
       check('Projects: the card shows how many there are, and its list can be folded away to save room', (await main.textContent('#projects-count')).trim() === '1' && (await main.getAttribute('#projects-fold', 'aria-expanded')) === 'true')
       await main.click('#projects-fold')
