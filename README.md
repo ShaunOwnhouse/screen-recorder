@@ -96,17 +96,28 @@ The installed app **updates itself**. A few seconds after it starts (then every 
 - Every build gets a higher version number automatically (`1.1.<build number>`), which is what lets an installed copy recognise a build as newer.
 - A real Windows test runs on every build before it is published: it installs the previous build silently, lets it find the new one on a local feed, downloads it, restarts into it and checks the version, the settings and the "up to date" message.
 
-### Where updates come from
+### Where updates come from, and whether the repository can be private
 
-Installed copies read an update feed (`latest.yml` plus the installer) over the internet. **This repository is private, so installed copies can't read from it.** Pick one:
+Installed copies read an update feed (`latest.yml` plus the installer) over the internet, with no login. By default that feed is the **`updates` release of this repository**, so **while the repository is public, updates just work**. The builds you download from the `latest-build` release are served the same way.
+
+**If you make the repository private**, three things change:
+
+- **Installed copies stop finding updates.** A private repository's releases need a login that an installed app doesn't have. Nothing breaks: the app keeps working and Settings → Updates says it couldn't check. Everything below is a way to keep updates flowing.
+- **Download links stop working** for anyone who isn't signed in to GitHub (the `…/releases/download/latest-build/…` links in this project's messages and the README).
+- **The builds themselves keep running** (GitHub Actions works on private repositories; free accounts have a monthly allowance of minutes, and Windows and macOS minutes count for more than Linux).
+
+Ways to keep updates working with a private repository (pick one):
 
 1. **A public, releases-only repository (recommended; the code stays private).**
    1. Create a new public repository, for example `screen-snap-updates`, and add a README so it isn't empty.
    2. Create a fine-grained access token (GitHub → Settings → Developer settings → Fine-grained tokens) for *only that repository* with **Contents: Read and write**.
    3. In this repository → Settings → Secrets and variables → Actions: add the secret `UPDATE_FEED_TOKEN` (the token) and the variable `UPDATE_FEED_REPO` (`YourName/screen-snap-updates`).
    4. Push. From the next build, new versions are published there and installed copies find them.
-2. **Make this repository public.** Then the default feed (this repository's `updates` release) works with nothing else to set up.
-3. **Your own web server.** Set the variable `UPDATE_FEED_URL` to the folder that holds `latest.yml`, and upload the files from each build there.
+   5. **Do this before switching to private**, and let every installed copy update once first: a copy only reads the feed address it was built with, so copies installed from older builds keep looking at the old address.
+2. **Your own web server.** Set the variable `UPDATE_FEED_URL` to the folder that holds `latest.yml`, and upload the files from each build there.
+3. **Microsoft Store** (see *Removing the security warning*): the Store updates the app itself, so the feed isn't used.
+
+**Moving the code to another host (for example Bitbucket):** only the build setup is tied to GitHub: `.github/workflows/build.yml` would have to be rewritten as a Bitbucket pipeline. Bitbucket's hosted runners are Linux only, so the Windows build and the real-Windows tests (and the macOS build) need self-hosted runners there. The app itself and its tests (`npm test`) don't depend on GitHub. The update feed has to live somewhere public as described above.
 
 ## Removing the security warning
 
