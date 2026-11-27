@@ -214,8 +214,8 @@ export class EditorController {
         this.file = null
         this.savedOnce = false
         for (const p of this.previewJobs) p.kill()
-        if (this.deps.settings().keepProjects && existsSync(projectFileFor(f))) void this.keep(f)
-        else {
+        const kept = this.deps.settings().keepProjects && this.keep(f)
+        if (!kept) {
           try {
             removePending(f)
           } catch {
@@ -223,6 +223,7 @@ export class EditorController {
           }
         }
         this.deps.onFinished()
+        if (kept) void this.makeThumb(f)
         return
       }
       // a kept project that was opened and closed again is not "the recording being reviewed": it can be opened or deleted from the list
@@ -448,12 +449,12 @@ export class EditorController {
     const file = this.file
     if (!file || this.exportProc) return false
     await this.stopPreviewJobs()
-    const keepIt = this.deps.settings().keepProjects && existsSync(projectFileFor(file))
+    const keepIt = this.deps.settings().keepProjects && this.keep(file)
     if (!keepIt) removePending(file)
     this.savedOnce = false
     this.close()
-    if (keepIt) await this.keep(file)
     this.deps.onFinished()
+    if (keepIt) void this.makeThumb(file)
     return true
   }
 
@@ -608,8 +609,8 @@ export class EditorController {
     }
   }
 
-  /** Keeps the recording, its edit and its files as a project to open again from the home panel. */
-  private async keep(file: string): Promise<void> {
+  /** Keeps the recording, its edit and its files as a project to open again from the home panel. False when there is no edit to keep. */
+  private keep(file: string): boolean {
     let project: Project | null = null
     let fileName = ''
     try {
@@ -619,7 +620,7 @@ export class EditorController {
     } catch {
       // without a readable edit there is nothing to open again
     }
-    if (!project) return
+    if (!project) return false
     const before = readKept(file)
     writeKept(file, {
       name: fileName || before?.name || basename(file).replace(/\.mp4$/i, ''),
@@ -627,7 +628,12 @@ export class EditorController {
       duration: totalDuration(project),
       outputs: [...new Set([...(before?.outputs ?? []), ...this.savedPaths])]
     })
-    // a small picture for the list
+    this.deps.onProjectsChanged()
+    return true
+  }
+
+  /** A small picture for the project list (the list is shown first and gets its picture a moment later). */
+  private async makeThumb(file: string): Promise<void> {
     await runFfmpeg(['-hide_banner', '-loglevel', 'error', '-y', '-ss', '1', '-i', file, '-frames:v', '1', '-vf', 'scale=224:-2', '-q:v', '5', thumbFileFor(file)])
     this.deps.onProjectsChanged()
   }
