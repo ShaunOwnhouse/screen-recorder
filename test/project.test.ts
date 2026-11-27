@@ -311,6 +311,13 @@ test('the camera is a clip like any other: it can be split, sped up, trimmed and
   // deleting the camera leaves the screen
   const gone = deleteClip(r.project, camId, false)!.project
   assert.equal(gone.clips.some((c) => c.media === 'camera'), false)
+  // and its row goes with it (no empty "Face cam" track left behind), whichever way it is deleted
+  assert.equal(gone.tracks.some((t) => t.name === 'Face cam'), false)
+  assert.equal(deleteClip(r.project, camId, true)!.project.tracks.some((t) => t.name === 'Face cam'), false)
+  // a row the person made themselves stays, empty or not
+  const own = addVideoTrack(base()).project
+  const piece = addClip(own, { ...base().clips[0], id: 'extra' }, 0).project
+  assert.equal(deleteClip(piece, 'extra', false)!.project.tracks.length, own.tracks.length)
   // taking a stretch out of the whole timeline takes it out of both
   const cut = removeSpan(r.project, 4, 8)
   const lengths = cut.clips.map((c) => clipEnd(c))

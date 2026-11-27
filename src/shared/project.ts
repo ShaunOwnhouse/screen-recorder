@@ -700,9 +700,17 @@ export function insertClipPushing(p: Project, clip: Clip, at: number): Edit {
 export function deleteClip(p: Project, id: string, ripple = true): Edit | null {
   const c = p.clips.find((x) => x.id === id)
   if (!c || p.clips.length <= 1) return null
-  if (!ripple) return { project: { ...p, clips: p.clips.filter((x) => x.id !== id) } }
+  const done = (project: Project): Edit => ({ project: dropEmptyCameraTrack(project, c.track) })
+  if (!ripple) return done({ ...p, clips: p.clips.filter((x) => x.id !== id) })
   const next = removeSpan(p, c.start, clipEnd(c))
-  return { project: next.clips.length ? next : { ...p, clips: p.clips.filter((x) => x.id !== id) } }
+  return done(next.clips.length ? next : { ...p, clips: p.clips.filter((x) => x.id !== id) })
+}
+
+/** The "Face cam" row goes away with the last piece on it (a row the person made themselves stays, empty or not). */
+function dropEmptyCameraTrack(p: Project, trackId: string): Project {
+  const t = trackById(p, trackId)
+  if (!t || t.name !== CAMERA_TRACK_NAME) return p
+  return removeTrack(p, trackId) ?? p
 }
 
 /** The length of the whole video: where the last piece on any video track ends. */

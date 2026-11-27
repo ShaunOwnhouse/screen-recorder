@@ -156,6 +156,7 @@ export class Timeline {
     const n = document.createElement('span')
     n.className = 'tl-name'
     n.textContent = text
+    n.title = text
     l.append(n)
     return l
   }

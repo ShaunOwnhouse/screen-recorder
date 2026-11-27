@@ -1082,7 +1082,7 @@ kbd {
 .timeline {
   overflow-y: auto;
   display: grid;
-  grid-template-columns: 158px minmax(0, 1fr);
+  grid-template-columns: 186px minmax(0, 1fr);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
