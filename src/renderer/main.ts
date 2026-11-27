@@ -14,6 +14,10 @@ const el = {
   warning: $('warning'),
   pending: $('pending'),
   pendingName: $('pending-name'),
+  projects: $('projects'),
+  projectList: $('project-list'),
+  keepProjects: $<HTMLInputElement>('keep-projects'),
+  keepHint: $('keep-hint'),
   idleView: $('idle-view'),
   recView: $('rec-view'),
   quick: $('quick'),
@@ -415,6 +419,7 @@ function renderSettings(): void {
   el.micVolumeLabel.textContent = `${Math.round(settings.micVolume * 100)}%`
   el.noise.checked = settings.noiseSuppression
   el.updateAuto.checked = settings.autoUpdate
+  el.keepProjects.checked = settings.keepProjects
 
   if (caps) {
     el.encoder.replaceChildren(
@@ -649,6 +654,7 @@ function bind(): void {
   el.updateCheck.addEventListener('click', async () => renderUpdate(await api.checkForUpdates()))
   el.updateAction.addEventListener('click', () => void runUpdateAction())
   el.updateAuto.addEventListener('change', () => void save({ autoUpdate: el.updateAuto.checked }))
+  el.keepProjects.addEventListener('change', () => void save({ keepProjects: el.keepProjects.checked }))
   el.videoFormat.addEventListener('change', () => void save({ videoFormat: el.videoFormat.value as Settings['videoFormat'] }))
   el.shotFormat.addEventListener('change', () => void save({ shotFormat: el.shotFormat.value as Settings['shotFormat'] }))
   el.shotClipboard.addEventListener('change', () => void save({ shotClipboard: el.shotClipboard.checked }))
@@ -694,6 +700,65 @@ function bind(): void {
   }).observe(el.app)
 }
 
+// ---------- saved projects ----------
+
+const fmtSize = (bytes: number): string => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`)
+const fmtLength = (sec: number): string => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
+
+/** The recordings kept to edit again: a row each, with Open and delete. */
+async function loadProjects(): Promise<void> {
+  const list = await api.listProjects()
+  el.projects.hidden = list.length === 0
+  el.projectList.replaceChildren(
+    ...list.map((p) => {
+      const row = document.createElement('div')
+      row.className = 'prow'
+      row.dataset.id = p.id
+      const thumb = document.createElement(p.thumb ? 'img' : 'div')
+      thumb.className = 'thumb'
+      if (p.thumb) (thumb as HTMLImageElement).src = p.thumb
+      const meta = document.createElement('div')
+      meta.className = 'meta'
+      const name = document.createElement('b')
+      name.textContent = p.name
+      name.title = p.name
+      const info = document.createElement('span')
+      info.textContent = `${new Date(p.savedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} · ${fmtLength(p.duration)} · ${fmtSize(p.sizeBytes)}`
+      meta.append(name, info)
+      const open = document.createElement('button')
+      open.type = 'button'
+      open.className = 'open'
+      open.textContent = 'Open'
+      open.addEventListener('click', async () => {
+        const r = await api.openProject(p.id)
+        if (!r.ok) showHint(r.reason ?? 'Couldn’t open that project.')
+      })
+      const del = document.createElement('button')
+      del.type = 'button'
+      del.className = 'del'
+      del.title = 'Delete this project'
+      del.setAttribute('aria-label', `Delete ${p.name}`)
+      del.textContent = '🗑'
+      del.addEventListener('click', async () => {
+        if (await api.deleteProject(p.id)) void loadProjects()
+      })
+      row.append(thumb, meta, open, del)
+      return row
+    })
+  )
+  const total = list.reduce((n, p) => n + p.sizeBytes, 0)
+  el.keepHint.textContent = list.length ? `${fmtSize(total)} of disk for ${list.length} project${list.length === 1 ? '' : 's'}` : 'Uses disk space: a recording can be large. Delete any time from the list.'
+}
+
+/** A short note in the panel's warning strip. */
+function showHint(text: string): void {
+  el.warning.hidden = false
+  el.warning.textContent = text
+  window.setTimeout(() => {
+    if (el.warning.textContent === text) el.warning.hidden = true
+  }, 6000)
+}
+
 async function init(): Promise<void> {
   bind()
   setSettingsOpen(prefGet('settingsOpen') === '1')
@@ -705,6 +770,8 @@ async function init(): Promise<void> {
   renderUpdate(await api.getUpdateStatus())
   api.onLevels(renderLevels)
   api.onCapsChanged(() => void loadCapabilities(false))
+  api.onProjectsChanged(() => void loadProjects())
+  void loadProjects()
   renderStatus(await api.getStatus())
 
   el.footer.textContent = 'Detecting screens and encoders…'

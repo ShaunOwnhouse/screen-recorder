@@ -50,6 +50,8 @@ export interface Settings {
   brand: Brand
   /** Download and install new versions in the background (the app still asks before restarting). */
   autoUpdate: boolean
+  /** Keep a recording (with its edit) after the video is saved, so it can be opened and changed again later. */
+  keepProjects: boolean
 }
 
 export interface DisplayInfo {
@@ -188,6 +190,20 @@ export interface EditorSource {
   tracks: { pc: boolean; mic: boolean }
   /** The computer sound and microphone taken out of the recording as files of their own (only when it holds both). */
   trackFiles: MediaInfo[]
+  /** The edit saved earlier (a recording that is opened again), with the files added to it. */
+  saved?: { project: Project; media: MediaInfo[]; fileName: string }
+}
+
+/** A recording kept as a project, as listed on the home panel. */
+export interface ProjectEntry {
+  id: string
+  name: string
+  savedAt: number
+  /** Length of the edited video, seconds. */
+  duration: number
+  sizeBytes: number
+  /** A small picture (data URL), or ''. */
+  thumb: string
 }
 
 /** A picture the editor drew (a comment, an arrow, a title card…) for FFmpeg to lay over the video. */

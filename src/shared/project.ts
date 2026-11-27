@@ -788,6 +788,17 @@ export function freezeFrame(p: Project, clipId: string, at: number, still: Still
   return { project: { ...p, clips: [...clips, piece], sounds, overlays: openGap(p.overlays, at, len) }, select: piece.id }
 }
 
+/**
+ * A saved edit opened again: pieces and sounds that used a file which is no longer there are dropped (the rest still works).
+ * `available` holds the ids of the files that exist; the recording, title cards and the sounds taken out of the recording are always fine.
+ */
+export function pruneMissing(p: Project, available: Set<string>): Project {
+  const ok = (media: string, card?: unknown): boolean => !!card || media === 'recording' || media === 'card' || media === RECORDING_PC || media === RECORDING_MIC || available.has(media)
+  const clips = p.clips.filter((c) => ok(c.media, c.card))
+  const sounds = p.sounds.filter((x) => ok(x.media))
+  return { ...p, clips, sounds }
+}
+
 /** Takes the span [a, b) out of the whole timeline: everything inside it goes, everything after it slides earlier. */
 export function removeSpan(p: Project, a: number, b: number): Project {
   const cut = b - a

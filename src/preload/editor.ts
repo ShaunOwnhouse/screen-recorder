@@ -8,6 +8,7 @@ const editor: EditorApi = {
   pickMedia: (kind) => ipcRenderer.invoke('editor:pick-media', kind),
   addMedia: (paths, kind) => ipcRenderer.invoke('editor:add-media', paths, kind),
   saveAsset: (spec) => ipcRenderer.invoke('editor:save-asset', spec),
+  saveProject: (req) => ipcRenderer.invoke('editor:save-project', req),
   grabFrame: (spec) => ipcRenderer.invoke('editor:grab-frame', spec),
   pathFor: (file) => webUtils.getPathForFile(file),
   waveform: (id, buckets) => ipcRenderer.invoke('editor:waveform', id, buckets),

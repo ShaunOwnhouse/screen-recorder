@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { app } from 'electron'
 
@@ -20,6 +20,11 @@ export const cameraFileFor = (file: string): string => file.replace(/\.mp4$/i, '
 export const cameraInfoFor = (file: string): string => file.replace(/\.mp4$/i, '.camera.json')
 /** Pictures and other files that belong to one recording's edit (freeze-frame pictures, copies of files added to it). */
 export const mediaDirFor = (file: string): string => file.replace(/\.mp4$/i, '.media')
+/** The edit itself (every cut, comment, sound and effect), saved as the person works so it can be opened again. */
+export const projectFileFor = (file: string): string => file.replace(/\.mp4$/i, '.project.json')
+/** Present when the recording is kept as a project to reopen later (it is then no longer "waiting for review"). */
+export const keptFileFor = (file: string): string => file.replace(/\.mp4$/i, '.kept.json')
+export const thumbFileFor = (file: string): string => file.replace(/\.mp4$/i, '.thumb.jpg')
 /** The computer sound / microphone of a recording taken out as files of their own, for the editor. */
 export const trackFileFor = (file: string, kind: 'pc' | 'mic'): string => file.replace(/\.mp4$/i, `.${kind}.m4a`)
 
@@ -32,12 +37,68 @@ export function resolvePending(name: string): string | null {
   return existsSync(p) ? p : null
 }
 
+/** What is remembered about a recording that was kept as a project. */
+export interface KeptInfo {
+  /** The name the person gave the video. */
+  name: string
+  savedAt: number
+  /** Length of the edited video, seconds. */
+  duration: number
+  /** The videos that were saved from it. */
+  outputs: string[]
+}
+
+export const isKept = (file: string): boolean => existsSync(keptFileFor(file))
+
+export function readKept(file: string): KeptInfo | null {
+  try {
+    const j = JSON.parse(readFileSync(keptFileFor(file), 'utf8')) as Partial<KeptInfo>
+    return {
+      name: typeof j.name === 'string' && j.name ? j.name : basename(file).replace(/\.mp4$/i, ''),
+      savedAt: typeof j.savedAt === 'number' ? j.savedAt : statSync(file).mtimeMs,
+      duration: typeof j.duration === 'number' ? j.duration : 0,
+      outputs: Array.isArray(j.outputs) ? j.outputs.filter((x): x is string => typeof x === 'string') : []
+    }
+  } catch {
+    return null
+  }
+}
+
+export function writeKept(file: string, info: KeptInfo): void {
+  writeFileSync(keptFileFor(file), JSON.stringify(info))
+}
+
+/** Recordings waiting for review (the ones kept as projects are listed by `listKept`). */
 export function listPending(): string[] {
   const dir = pendingDir()
   return readdirSync(dir)
     .filter(isRecording)
     .map((n) => join(dir, n))
+    .filter((f) => !isKept(f))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+}
+
+/** Recordings kept as projects, the most recently saved first. */
+export function listKept(): string[] {
+  const dir = pendingDir()
+  return readdirSync(dir)
+    .filter(isRecording)
+    .map((n) => join(dir, n))
+    .filter(isKept)
+    .sort((a, b) => (readKept(b)?.savedAt ?? 0) - (readKept(a)?.savedAt ?? 0))
+}
+
+/** Everything a project takes up on disk: its recording, camera, sound files, pictures and added files. */
+export function projectSize(file: string): number {
+  const sum = (p: string): number => {
+    try {
+      const st = statSync(p)
+      return st.isDirectory() ? readdirSync(p).reduce((n, f) => n + sum(join(p, f)), 0) : st.size
+    } catch {
+      return 0
+    }
+  }
+  return [file, cameraFileFor(file), trackFileFor(file, 'pc'), trackFileFor(file, 'mic'), projectFileFor(file), mediaDirFor(file), ...segmentsOf(file)].reduce((n, f) => n + sum(f), 0)
 }
 
 const BUSY = new Set(['EBUSY', 'EPERM', 'EACCES'])
@@ -56,7 +117,7 @@ export function retryBusy<T>(run: () => T, tries = 12, pauseMs = 250): T {
 }
 
 export function removePending(file: string): void {
-  for (const p of [file, proxyPathFor(file), joinListFor(file), cameraRawFor(file), cameraFileFor(file), cameraInfoFor(file), trackFileFor(file, 'pc'), trackFileFor(file, 'mic'), ...segmentsOf(file)]) {
+  for (const p of [file, proxyPathFor(file), joinListFor(file), cameraRawFor(file), cameraFileFor(file), cameraInfoFor(file), trackFileFor(file, 'pc'), trackFileFor(file, 'mic'), projectFileFor(file), keptFileFor(file), thumbFileFor(file), ...segmentsOf(file)]) {
     retryBusy(() => rmSync(p, { force: true }))
   }
   retryBusy(() => rmSync(mediaDirFor(file), { recursive: true, force: true }))

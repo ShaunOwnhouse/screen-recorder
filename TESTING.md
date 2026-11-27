@@ -49,6 +49,13 @@ If anything fails, send a screenshot plus the newest file from the logs folder. 
 - [ ] **Save / Save as… / Discard** all work; Discard asks for confirmation first.
 - [ ] Nothing is saved to your folder until you click Save.
 
+## Freeze frame, colour look and saved projects
+
+- [ ] **Freeze frame:** click the timeline where a screen recording is moving, press **❄ Freeze frame**. The piece is cut, a still of that moment appears between the halves for 2 s (the length is in a piece's settings), the video is 2 s longer, comments after it moved later, and music (if any) plays straight through. Undo takes it away.
+- [ ] **Colour look:** click a piece → Look. *Black & white* turns the preview grey, *Warm* / *Cool* tint it, the sliders move it; *Reset look* puts it back. Save and play the video: the colours match the preview. A picture in a corner window and the round face camera can have a look too.
+- [ ] **Saved projects:** save a video and press Finish. The home panel shows **Saved projects** with your video's name, date, length, size and a small picture. **Open** shows every cut, comment, sound, effect and the file name as you left them. Save again: the same project is updated (no copy). Close the editor without saving: it is still listed. Trash → *Delete project* removes it and its files (the videos you saved stay). With *Settings → Saving → Keep my recordings* off, nothing is kept after you finish.
+- [ ] **A recording you never saved** still waits under *Waiting for review*: restart the app, press *Review & save*, and your edit is still there.
+
 ## Quality and playback
 
 - [ ] With **Maximum** quality, the saved MP4 plays in **Windows Media Player** / **QuickTime**, on a phone, and in a browser.

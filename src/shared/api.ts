@@ -1,6 +1,7 @@
+import type { Project } from './project.ts'
 import type { UpdateStatus } from './updates.ts'
 import type {
-  AudioLevels, Brand, BrandFont, CameraInfo, Capabilities, EditorSource, MediaInfo, MicInfo, PreviewRequest, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
+  AudioLevels, Brand, BrandFont, CameraInfo, Capabilities, EditorSource, MediaInfo, MicInfo, PreviewRequest, ProjectEntry, RecordingStatus, Rect, SaveRequest, Settings, ShotCopyRequest,
   ShotSaveRequest, ShotSource
 } from './types.ts'
 
@@ -25,6 +26,12 @@ export interface Api {
   showLastShot(): Promise<void>
   openLastShot(): Promise<void>
   openReview(): Promise<void>
+  /** Recordings kept as projects (newest first), to open again. */
+  listProjects(): Promise<ProjectEntry[]>
+  openProject(id: string): Promise<{ ok: boolean; reason?: string }>
+  /** Asks first; false when the person said no. */
+  deleteProject(id: string): Promise<boolean>
+  onProjectsChanged(cb: () => void): () => void
   testAudio(on: boolean): Promise<string[]>
   /** The cameras on this computer (opens the camera for a moment so they can be named). */
   listCameras(): Promise<CameraInfo[]>
@@ -62,6 +69,8 @@ export interface EditorApi {
   addMedia(paths: string[], kind: 'clip' | 'music' | 'any'): Promise<MediaInfo[]>
   /** Saves one piece (a stretch of a file: its picture alone or its sound alone) as a file of its own. */
   saveAsset(spec: AssetSave): Promise<{ path?: string; error?: string }>
+  /** Saves the edit so far next to the recording (called as the person works), so the recording can be opened again later. */
+  saveProject(req: { project: Project; fileName: string }): Promise<boolean>
   /** A picture of one moment of a video (`time` seconds into the file; the recording's crop is applied), registered like an added picture. */
   grabFrame(spec: { media: string; time: number; crop: Rect | null }): Promise<MediaInfo | { error: string }>
   /** The real location of a dropped file. */

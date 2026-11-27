@@ -38,6 +38,12 @@
         <button id="review" type="button" class="primary">Review &amp; save</button>
       </section>
 
+      <section id="projects" class="card projects" hidden>
+        <span class="label">Saved projects</span>
+        <div id="project-list" class="project-list"></div>
+        <p class="hint">Open one to carry on editing: every cut, comment, sound and effect is still there.</p>
+      </section>
+
 
       <div id="tabs" class="tabs" role="tablist" aria-label="What do you want to do?">
         <button id="tab-record" type="button" role="tab" class="rec" aria-selected="true">
@@ -293,6 +299,10 @@
             <span class="label">Default video format</span>
             <select id="video-format"></select>
             <span id="video-format-hint" class="hint"></span>
+          </label>
+          <label class="field row">
+            <span class="label">Keep my recordings so I can edit them again<span id="keep-hint" class="hint"></span></span>
+            <input id="keep-projects" type="checkbox" class="toggle" />
           </label>
 
           <h2 class="group-title" id="g-shots">Screenshots</h2>

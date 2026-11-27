@@ -1,4 +1,4 @@
-import { addCameraClip, isDrawn, isPlain, newProject, SPEEDS, type Clip, type Overlay } from '../shared/project.ts'
+import { addCameraClip, isDrawn, isPlain, newProject, pruneMissing, SPEEDS, type Clip, type Overlay } from '../shared/project.ts'
 import { videoFormat, VIDEO_FORMATS } from '../shared/formats.ts'
 import type { DrawnPicture, EditorSource, VideoFormat } from '../shared/types.ts'
 import { Actions } from './editor/actions.ts'
@@ -18,6 +18,8 @@ const stage = $('stage')
 const frame = $('frame')
 const stageMsg = $('stage-msg')
 const nameInput = $<HTMLInputElement>('name')
+/** Writes the edit to disk now (set once the editor has loaded). */
+let persistNow: () => Promise<void> = async () => undefined
 const compat = $<HTMLInputElement>('compat')
 const formatSel = $<HTMLSelectElement>('format')
 const speedSel = $<HTMLSelectElement>('speed')
@@ -140,6 +142,7 @@ async function previewFinal(): Promise<void> {
   if (!src || saving) return
   saving = true
   store.setPlaying(false)
+  await persistNow()
   showBusy('Making a preview…', 'Putting everything together at a small size so you can watch the finished video.', true)
   let res: { ok: boolean; url?: string; duration?: number; error?: string }
   try {
@@ -353,8 +356,12 @@ async function init(): Promise<void> {
   src = loaded.source
   const m = src.meta
   let initial = newProject({ duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, tracks: src.tracks })
+  // a recording opened again: the edit as it was left (pieces whose file has gone missing are dropped)
+  const have = new Set<string>([...(src.saved?.media ?? []).map((x) => x.id), ...(src.camera ? [src.camera.info.id] : []), ...src.trackFiles.map((x) => x.id)])
+  const reopened = src.saved ? pruneMissing(src.saved.project, have) : null
+  if (reopened && reopened.clips.length) initial = reopened
   // the camera recording is a piece of its own, on its own track in front of the screen
-  if (src.camera) {
+  else if (src.camera) {
     const c = src.camera.info
     const added = addCameraClip(initial, { media: c.id, name: 'Face camera', duration: c.duration, width: c.width, height: c.height, hasAudio: c.hasAudio }, src.camera.offset, m.width / m.height)
     if (added) initial = added.project
@@ -363,8 +370,25 @@ async function init(): Promise<void> {
   store.cameraOffset = src.camera?.offset ?? 0
   if (src.camera) store.media.set(src.camera.info.id, src.camera.info)
   for (const t of src.trackFiles) store.media.set(t.id, t)
+  for (const x of src.saved?.media ?? []) store.media.set(x.id, x)
   store.media.set('recording', { id: 'recording', name: 'Recording', kind: 'video', duration: m.duration, width: m.width, height: m.height, hasAudio: m.hasAudio, url: src.url })
   void loadBrandFonts(src.brand)
+
+  // The edit is written next to the recording as the person works, so the recording can be opened again later exactly as it was left.
+  let persistTimer = 0
+  persistNow = async (): Promise<void> => {
+    window.clearTimeout(persistTimer)
+    await api.saveProject({ project: store.project, fileName: nameInput.value }).catch(() => false)
+  }
+  const persistSoon = (): void => {
+    window.clearTimeout(persistTimer)
+    persistTimer = window.setTimeout(() => void persistNow(), 1200)
+  }
+  store.on((what) => {
+    if (what === 'project' || what === 'media') persistSoon()
+  })
+  nameInput.addEventListener('input', persistSoon)
+  void persistNow()
 
   player = new Player(store, { frame, layers: $('layers'), pips: $('pips'), canvas: $<HTMLCanvasElement>('overlay-canvas') })
   player.recordingUrl = src.url
@@ -447,7 +471,7 @@ async function init(): Promise<void> {
   })
   $('saved-show').addEventListener('click', () => void api.revealPath(lastSaved))
   $('saved-keep').addEventListener('click', () => ($('saved').hidden = true))
-  $('saved-finish').addEventListener('click', () => void api.finish())
+  $('saved-finish').addEventListener('click', () => void persistNow().then(() => api.finish()))
   $('save').addEventListener('click', () => {
     $('saved').hidden = true
     void save(false)
@@ -459,7 +483,7 @@ async function init(): Promise<void> {
   $('discard').addEventListener('click', () => void api.discard())
   bindDrops()
 
-  nameInput.value = src.defaultName
+  nameInput.value = src.saved?.fileName || src.defaultName
   formatSel.replaceChildren(
     ...VIDEO_FORMATS.filter((f) => src.formats.includes(f.id)).map((f) => {
       const o = document.createElement('option')

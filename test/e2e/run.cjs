@@ -262,6 +262,7 @@ const SETTINGS = (over) => ({
   shotCursor: false,
   shotDelay: 0,
   autoUpdate: true,
+  keepProjects: false, // the older parts expect a saved recording to be cleaned up; the 'projects' part turns this on
   videoFormat: 'mp4',
   systemAudio: isWin, // exercises the Windows loopback path; there's no sound device on CI so it may fail softly
   micEnabled: true,
@@ -1135,6 +1136,74 @@ async function save(app, editor, name) {
       await editor.click('#save-as')
       await finishSaved(app, editor, 120000)
       validate('Save as', target, { width: evenFloor(display.w), height: evenFloor(display.h), audio: true, minSeconds: 2 })
+    }
+
+    // 7b) A saved recording can be kept as a project, listed on the home panel, opened again exactly as it was left, and deleted
+    if (only('projects')) {
+      log('--- projects ---')
+      await setSettings(main, { keepProjects: true })
+      const pend = () => fs.readdirSync(path.join(userData, 'pending'))
+      const { editor } = await record(app, main, 'projects', { seconds: 4 })
+      // an edit worth coming back to: a comment, a colour look, and a name
+      await editor.click('#tool-comments')
+      await editor.click('#add-comment')
+      await editor.fill('#prop-text', 'Come back to this')
+      const clipId = await editor.evaluate(() => window.__editor.store.project.clips[0].id)
+      await editor.evaluate((id) => window.__editor.store.patchClip(id, { look: { brightness: 0.1, contrast: 1, saturation: 0, warmth: 0 } }, 'test'), clipId)
+      await editor.fill('#name', 'My project')
+      await sleep(1800) // the edit is written to disk a moment after the last change
+      check('Projects: the edit is saved next to the recording as the person works', pend().some((f) => /\.project\.json$/.test(f)))
+      await editor.click('#save')
+      await finishSaved(app, editor, 180000)
+      const left = pend()
+      check('Projects: after saving and finishing, the recording is kept (not deleted)', left.some((f) => /\.kept\.json$/.test(f)) && left.some((f) => /\.mp4$/i.test(f) && !/\.(recording|camera|proxy)/.test(f)), left.join(', '))
+      const st = await main.evaluate(() => window.api.getStatus())
+      check('Projects: a kept recording is no longer "waiting for review"', !st.pending, String(st.pending))
+      await main.waitForSelector('#projects:not([hidden])', { timeout: 10000 }).catch(() => undefined)
+      const rows = await main.evaluate(() => [...document.querySelectorAll('#project-list .prow')].map((r) => r.querySelector('b').textContent + ' | ' + r.querySelector('span').textContent))
+      check('Projects: the home panel lists it by name, with its date, length and size', rows.length === 1 && /My project/.test(rows[0]) && /MB|GB/.test(rows[0]) && /\d:\d\d/.test(rows[0]), rows.join(' / '))
+      check('Projects: the list has a small picture of the video', (await main.locator('#project-list img.thumb').count()) === 1)
+      await shot(main, 'panel-projects')
+      // reopen: everything as it was left
+      await main.click('#project-list .prow .open')
+      const again = await waitForWindow(app, 'editor.html', 30000)
+      await again.waitForFunction(() => window.__editor && window.__editor.store && window.__editor.store.project.overlays.length >= 1, null, { timeout: 30000 })
+      const reopened = await again.evaluate(() => ({
+        overlays: window.__editor.store.project.overlays.map((o) => o.text),
+        look: window.__editor.store.project.clips[0].look ?? null,
+        name: document.getElementById('name').value
+      }))
+      check('Projects: opening it again brings back the comment, the colour look and the file name', reopened.overlays.includes('Come back to this') && reopened.look?.saturation === 0 && reopened.name === 'My project', JSON.stringify(reopened))
+      // change something and save again: the project is updated, no second one appears
+      await again.fill('#name', 'My project v2')
+      await again.click('#save')
+      await finishSaved(app, again, 180000)
+      await sleep(500)
+      const rows2 = await main.evaluate(() => [...document.querySelectorAll('#project-list .prow b')].map((b) => b.textContent))
+      check('Projects: saving it again updates the same project (no copy)', rows2.length === 1 && rows2[0] === 'My project v2', rows2.join(' / '))
+      // opening and closing without saving leaves it as it was
+      await main.click('#project-list .prow .open')
+      const third = await waitForWindow(app, 'editor.html', 30000)
+      await third.waitForSelector('#save', { timeout: 20000 })
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('editor.html'))?.close())
+      await waitGone(app, 'editor.html', 30000)
+      check('Projects: closing it without saving keeps it', (await main.evaluate(() => document.querySelectorAll('#project-list .prow').length)) === 1)
+      // deleting asks first, then removes the recording and everything that goes with it
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+      await main.click('#project-list .prow .del')
+      await sleep(600)
+      check('Projects: saying "keep it" to the delete question keeps the project', (await main.evaluate(() => document.querySelectorAll('#project-list .prow').length)) === 1)
+      await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }) })
+      await main.click('#project-list .prow .del')
+      await main.waitForFunction(() => document.getElementById('projects').hidden, null, { timeout: 10000 }).catch(() => undefined)
+      check('Projects: deleting it removes it from the list and every file from the disk', (await main.evaluate(() => document.getElementById('projects').hidden)) && pend().filter((f) => !/^Recording 2020/.test(f)).length === 0, pend().join(', '))
+      // with the switch off, saving clears the recording as before
+      await setSettings(main, { keepProjects: false })
+      const { editor: ed2 } = await record(app, main, 'projects-off', { seconds: 3 })
+      await ed2.fill('#name', 'Not kept')
+      await ed2.click('#save')
+      await finishSaved(app, ed2, 180000)
+      check('Projects: with "keep my recordings" off, nothing is kept after saving', !pend().some((f) => /\.kept\.json$/.test(f)) && (await main.evaluate(() => document.getElementById('projects').hidden)), pend().join(', '))
     }
 
     // 8) Discard deletes the recording and leaves nothing to review

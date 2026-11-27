@@ -51,6 +51,7 @@ function defaults(): Settings {
     camera: false,
     cameraDevice: 'default',
     autoUpdate: true,
+    keepProjects: true,
     brand: { colors: [...DEFAULT_BRAND_COLORS], fonts: [] }
   }
 }
@@ -70,6 +71,7 @@ function sanitize(s: Settings): Settings {
     camera: typeof s.camera === 'boolean' ? s.camera : d.camera,
     cameraDevice: typeof s.cameraDevice === 'string' && s.cameraDevice ? s.cameraDevice : d.cameraDevice,
     autoUpdate: typeof s.autoUpdate === 'boolean' ? s.autoUpdate : d.autoUpdate,
+    keepProjects: typeof s.keepProjects === 'boolean' ? s.keepProjects : d.keepProjects,
     brand: cleanBrand(s.brand, d.brand)
   }
 }

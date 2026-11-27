@@ -1,15 +1,16 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFile } from 'node:fs/promises'
+import { basename, dirname, extname, join, sep } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import { buildCopyArgs, buildProxyArgs, TRACK_NAMES } from './args.ts'
 import { chooseEncoder, ffmpegPath, needsBasicTuning, runFfmpeg } from './ffmpeg.ts'
 import { mediaUrl, addedMediaUrl } from './media-protocol.ts'
 import { ProgressParser, parseMediaInfo } from './parse.ts'
-import { cameraFileFor, cameraInfoFor, mediaDirFor, proxyPathFor, removePending, sanitizeFileName, trackFileFor, uniquePath } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, isKept, mediaDirFor, projectFileFor, proxyPathFor, readKept, removePending, sanitizeFileName, thumbFileFor, trackFileFor, uniquePath, writeKept } from './pending.ts'
 import { buildProjectArgs, cropPixels, type ExportMedia, type ExportPicture } from './project-export.ts'
 import { probeMedia } from './verify.ts'
-import { isPlain, type Project } from '../shared/project.ts'
+import { isPlain, totalDuration, type Project } from '../shared/project.ts'
 import type { AssetSave, EditorLoad } from '../shared/api.ts'
 import { videoFormat } from '../shared/formats.ts'
 import type { Brand, BrandFont, DrawnPicture, EncoderInfo, MediaInfo, PreviewRequest, RecordingMeta, Rect, SaveRequest, Settings, VideoFormat } from '../shared/types.ts'
@@ -39,6 +40,8 @@ interface Deps {
   onDiscarded: () => void
   onClosed: () => void
   saveBrand: (brand: Brand) => Brand
+  /** A recording was kept as a project (or one was changed or deleted), so the list on the home panel is out of date. */
+  onProjectsChanged: () => void
 }
 
 export class EditorController {
@@ -108,6 +111,7 @@ export class EditorController {
     ipcMain.handle('editor:pick-media', (e, kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.pickMedia(kind) : []))
     ipcMain.handle('editor:add-media', (e, paths: string[], kind: 'clip' | 'music' | 'any') => (this.owns(e.sender) ? this.addMedia(paths, kind) : []))
     ipcMain.handle('editor:save-asset', (e, spec: AssetSave) => (this.owns(e.sender) ? this.saveAsset(spec) : { error: 'Not available.' }))
+    ipcMain.handle('editor:save-project', (e, req: { project: Project; fileName: string }) => (this.owns(e.sender) ? this.saveProject(req) : false))
     ipcMain.handle('editor:grab-frame', (e, spec: { media: string; time: number; crop: Rect | null }) => (this.owns(e.sender) ? this.grabFrame(spec) : { error: 'Not available.' }))
     ipcMain.handle('editor:waveform', (e, id: string, buckets: number) => (this.owns(e.sender) ? this.waveform(id, buckets) : []))
     ipcMain.handle('editor:strip', (e, id: string, count: number) => (this.owns(e.sender) ? this.strip(id, count) : ''))
@@ -203,20 +207,26 @@ export class EditorController {
     this.win.on('closed', () => clearInterval(watchTimer))
     this.win.on('closed', () => {
       this.win = null
-      // Closing the window after saving counts as finishing: the recording has been turned into a video, so it goes.
+      // Closing the window after saving counts as finishing: the recording has been turned into a video, so it goes
+      // (unless the person keeps recordings as projects, which can be opened and changed again later).
       if (this.savedOnce && this.file) {
         const f = this.file
         this.file = null
         this.savedOnce = false
         for (const p of this.previewJobs) p.kill()
-        try {
-          removePending(f)
-        } catch {
-          // a file that is still in use is cleaned up the next time the app starts
+        if (this.deps.settings().keepProjects && existsSync(projectFileFor(f))) void this.keep(f)
+        else {
+          try {
+            removePending(f)
+          } catch {
+            // a file that is still in use is cleaned up the next time the app starts
+          }
         }
         this.deps.onFinished()
         return
       }
+      // a kept project that was opened and closed again is not "the recording being reviewed": it can be opened or deleted from the list
+      if (this.file && isKept(this.file)) this.file = null
       this.deps.onClosed()
     })
     this.deps.load(this.win)
@@ -242,6 +252,7 @@ export class EditorController {
     const trackFiles = ['recording-pc', 'recording-mic'].map((id) => this.added.get(id)?.info).filter((x): x is MediaInfo => !!x)
     const formats = await this.deps.formats()
     const wanted = this.deps.settings().videoFormat
+    const saved = this.restore(file)
     return {
       source: {
         name,
@@ -255,7 +266,8 @@ export class EditorController {
         brand: this.deps.settings().brand,
         camera,
         tracks,
-        trackFiles
+        trackFiles,
+        ...(saved ? { saved } : {})
       }
     }
   }
@@ -436,9 +448,11 @@ export class EditorController {
     const file = this.file
     if (!file || this.exportProc) return false
     await this.stopPreviewJobs()
-    removePending(file)
+    const keepIt = this.deps.settings().keepProjects && existsSync(projectFileFor(file))
+    if (!keepIt) removePending(file)
     this.savedOnce = false
     this.close()
+    if (keepIt) await this.keep(file)
     this.deps.onFinished()
     return true
   }
@@ -531,6 +545,91 @@ export class EditorController {
       out.push(full)
     }
     return out
+  }
+
+  // ---------- projects: the edit is saved as the person works, so a recording can be opened again later ----------
+
+  /** A file that came from the person (an added video, picture or sound, or a freeze-frame picture), by its id. */
+  private static readonly OWN = /^m\d+$/
+
+  /** Writes the edit and the files it uses next to the recording (files added from elsewhere are copied in, so they can't go missing). */
+  private async saveProject(req: { project: Project; fileName: string }): Promise<boolean> {
+    const file = this.file
+    if (!file || !existsSync(file) || !req.project || !Array.isArray(req.project.clips)) return false
+    const dir = mediaDirFor(file)
+    const media: Array<{ info: MediaInfo; file: string }> = []
+    for (const [id, a] of this.added) {
+      if (!EditorController.OWN.test(id) || !existsSync(a.path)) continue
+      if (!a.path.startsWith(dir + sep)) {
+        mkdirSync(dir, { recursive: true })
+        const copy = join(dir, `${id}${extname(a.path)}`)
+        if (!existsSync(copy)) {
+          try {
+            await copyFile(a.path, copy)
+          } catch {
+            continue
+          }
+        }
+        a.path = copy
+      }
+      media.push({ info: a.info, file: basename(a.path) })
+    }
+    const target = projectFileFor(file)
+    const tmp = `${target}.tmp`
+    try {
+      writeFileSync(tmp, JSON.stringify({ version: 1, project: req.project, fileName: req.fileName, media }))
+      renameSync(tmp, target)
+      return true
+    } catch {
+      rmSync(tmp, { force: true })
+      return false
+    }
+  }
+
+  /** The edit saved earlier for this recording, with its added files brought back under the ids the edit uses. */
+  private restore(file: string): { project: Project; media: MediaInfo[]; fileName: string } | null {
+    const path = projectFileFor(file)
+    if (!existsSync(path)) return null
+    try {
+      const j = JSON.parse(readFileSync(path, 'utf8')) as { version: number; project: Project; fileName?: string; media?: Array<{ info: MediaInfo; file: string }> }
+      if (j.version !== 1 || !j.project || !Array.isArray(j.project.clips) || !j.project.clips.length) return null
+      const media: MediaInfo[] = []
+      for (const m of j.media ?? []) {
+        const p = join(mediaDirFor(file), basename(m.file))
+        if (!existsSync(p) || !EditorController.OWN.test(m.info.id)) continue
+        const info: MediaInfo = { ...m.info, url: addedMediaUrl(m.info.id) }
+        this.added.set(info.id, { info, path: p })
+        this.counter = Math.max(this.counter, Number(info.id.slice(1)))
+        media.push(info)
+      }
+      return { project: j.project, media, fileName: typeof j.fileName === 'string' ? j.fileName : '' }
+    } catch {
+      return null
+    }
+  }
+
+  /** Keeps the recording, its edit and its files as a project to open again from the home panel. */
+  private async keep(file: string): Promise<void> {
+    let project: Project | null = null
+    let fileName = ''
+    try {
+      const j = JSON.parse(readFileSync(projectFileFor(file), 'utf8')) as { project: Project; fileName?: string }
+      project = j.project
+      fileName = j.fileName ?? ''
+    } catch {
+      // without a readable edit there is nothing to open again
+    }
+    if (!project) return
+    const before = readKept(file)
+    writeKept(file, {
+      name: fileName || before?.name || basename(file).replace(/\.mp4$/i, ''),
+      savedAt: Date.now(),
+      duration: totalDuration(project),
+      outputs: [...new Set([...(before?.outputs ?? []), ...this.savedPaths])]
+    })
+    // a small picture for the list
+    await runFfmpeg(['-hide_banner', '-loglevel', 'error', '-y', '-ss', '1', '-i', file, '-frames:v', '1', '-vf', 'scale=224:-2', '-q:v', '5', thumbFileFor(file)])
+    this.deps.onProjectsChanged()
   }
 
   /**

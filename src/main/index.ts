@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, shell,
@@ -17,13 +17,13 @@ import { Updater } from './updater.ts'
 import { avfoundationScreens, chooseEncoder, detectFeatures, needsBasicTuning, runFfmpeg, runFfmpegBinary } from './ffmpeg.ts'
 import { macDisplayOrder } from './mac-helper.ts'
 import { handleMediaProtocol, registerMediaScheme, setAddedMediaResolver } from './media-protocol.ts'
-import { cameraFileFor, cameraInfoFor, cameraRawFor, joinListFor, listPending, pendingDir, recoverInterrupted, removePending, resolvePending } from './pending.ts'
+import { cameraFileFor, cameraInfoFor, cameraRawFor, joinListFor, listKept, listPending, pendingDir, projectSize, readKept, recoverInterrupted, removePending, resolvePending, thumbFileFor } from './pending.ts'
 import { alignCamera, convertCamera, writeCameraInfo } from './camera.ts'
 import { Recorder, type RecordedInfo } from './recorder.ts'
 import { checkStructure } from './verify.ts'
 import { getSettings, updateSettings } from './settings.ts'
 import type { OverlayResult } from '../shared/api.ts'
-import type { CaptureMode, Capabilities, DisplayInfo, Rect, Settings } from '../shared/types.ts'
+import type { CaptureMode, Capabilities, DisplayInfo, ProjectEntry, Rect, Settings } from '../shared/types.ts'
 import { acceleratorLabel } from '../shared/hotkeys.ts'
 import { awayPlacement, BAR_HEIGHT, BAR_WIDTH, barPlacement, overlaps } from './placement.ts'
 
@@ -95,7 +95,8 @@ const editor = new EditorController({
   onFinished: () => afterReview(),
   onDiscarded: () => afterReview(),
   onClosed: () => maybeQuit(),
-  saveBrand: (brand) => updateSettings({ brand }).brand
+  saveBrand: (brand) => updateSettings({ brand }).brand,
+  onProjectsChanged: () => mainWindow?.webContents.send('projects:changed')
 })
 setAddedMediaResolver((id) => editor.addedPath(id))
 
@@ -182,6 +183,51 @@ function afterReview(): void {
   const file = next && resolvePending(next)
   if (file) editor.open(file)
   maybeQuit()
+}
+
+/** The recordings kept as projects, newest first, for the home panel. */
+function listProjects(): ProjectEntry[] {
+  const out: ProjectEntry[] = []
+  for (const f of listKept()) {
+    const info = readKept(f)
+    if (!info) continue
+    let thumb = ''
+    try {
+      thumb = `data:image/jpeg;base64,${readFileSync(thumbFileFor(f)).toString('base64')}`
+    } catch {
+      // no picture (yet)
+    }
+    out.push({ id: basename(f), name: info.name, savedAt: info.savedAt, duration: info.duration, sizeBytes: projectSize(f), thumb })
+  }
+  return out
+}
+
+/** Opens a kept project in the editor, with everything as it was left. */
+function openProject(id: string): { ok: boolean; reason?: string } {
+  const file = resolvePending(id)
+  if (!file) return { ok: false, reason: 'That project is no longer there.' }
+  if (editor.isOpen() && editor.currentFile !== file) return { ok: false, reason: 'Finish or close the video you are editing first.' }
+  editor.open(file)
+  return { ok: true }
+}
+
+async function deleteProject(id: string): Promise<boolean> {
+  const file = resolvePending(id)
+  if (!file || editor.currentFile === file) return false
+  const name = readKept(file)?.name ?? id
+  const res = await dialog.showMessageBox(mainWindow ?? undefined!, {
+    type: 'warning',
+    buttons: ['Delete project', 'Keep it'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'Delete project',
+    message: `Delete “${name}”?`,
+    detail: 'The recording and everything you changed in it are removed from this computer. Videos you already saved stay where they are.'
+  })
+  if (res.response !== 0) return false
+  removePending(file)
+  mainWindow?.webContents.send('projects:changed')
+  return true
 }
 
 function openReview(): void {
@@ -1011,6 +1057,9 @@ function registerIpc(): void {
   ipcMain.handle('shot:take', () => toggleScreenshot())
   ipcMain.handle('rec:status', () => recorder.getStatus())
   ipcMain.handle('rec:review', () => openReview())
+  ipcMain.handle('projects:list', () => listProjects())
+  ipcMain.handle('projects:open', (_e, id: string) => openProject(id))
+  ipcMain.handle('projects:delete', (_e, id: string) => deleteProject(id))
   ipcMain.handle('window:fit', (e, height: number) => {
     if (!mainWindow || e.sender !== mainWindow.webContents || !Number.isFinite(height)) return
     // Grow/shrink with the content (e.g. when Settings opens), but never past the screen.
